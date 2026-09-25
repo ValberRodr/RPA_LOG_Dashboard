@@ -517,7 +517,7 @@
         }
 
         .grid-kpis {
-            grid-template-columns: repeat(5, minmax(0, 1fr));
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             margin-bottom: 14px;
         }
 
@@ -1116,6 +1116,13 @@
         .heat-2 { background: rgba(240, 125, 75, 0.24); color: #f08b5b; }
         .heat-3 { background: rgba(240, 100, 100, 0.34); color: #ff8585; }
         .heat-4 { background: rgba(240, 100, 100, 0.58); color: white; }
+
+        .heatmap-hour {
+            text-align: center;
+            color: var(--text-3);
+            font-size: 9px;
+            font-variant-numeric: tabular-nums;
+        }
 
         /* ---------------------------------------------------------------------
            Diagnóstico / step timeline
@@ -1718,6 +1725,44 @@
                             <div class="timeline-shell" id="timelineContainer"></div>
                         </div>
                     </article>
+
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h2>Padrão histórico por horário</h2>
+                                <p>Erros por RPA × hora do dia, somados em todo o período carregado — revela horários que concentram risco, não só o dia de hoje.</p>
+                            </div>
+                            <span class="badge neutral" id="historicalHeatmapBadge"></span>
+                        </div>
+                        <div class="card-body">
+                            <div class="heatmap-wrap" id="historicalHeatmap"></div>
+                        </div>
+                    </article>
+
+                    <div class="grid grid-main">
+                        <div class="grid" style="gap:14px">
+                            <article class="card">
+                                <div class="card-header">
+                                    <div>
+                                        <h2>Ociosidade das VMs ao longo do tempo</h2>
+                                        <p>Percentual médio de tempo sem nenhuma execução em andamento, por dia, na frota inteira.</p>
+                                    </div>
+                                </div>
+                                <div class="card-body" id="vmIdleTrendChart"></div>
+                            </article>
+                        </div>
+                        <div class="grid" style="gap:14px">
+                            <article class="card">
+                                <div class="card-header">
+                                    <div>
+                                        <h2>Utilização de VMs por RPA</h2>
+                                        <p>Ocupação inferida das execuções reais; quem mais consome cada VM.</p>
+                                    </div>
+                                </div>
+                                <div class="card-body" id="vmUtilizationList"></div>
+                            </article>
+                        </div>
+                    </div>
 
                     <div class="grid grid-main">
                         <div class="grid" style="gap:14px">
@@ -2441,6 +2486,12 @@
         /* =====================================================================
            RENDER — VISÃO OPERACIONAL
            ===================================================================== */
+        function fmtHoursMinutes(totalMinutes) {
+            const h = Math.floor(totalMinutes / 60);
+            const m = Math.round(totalMinutes % 60);
+            return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
+        }
+
         function renderOverviewKpis() {
             const s = DATA.summary;
             const kpis = [
@@ -2468,6 +2519,21 @@
                 {
                     icon: 'i-grid', iconClass: 'warning', label: 'Parque monitorado', value: s.totalRpas,
                     footer: 'RPAs em produção', trend: `${s.totalVms} VMs`, trendClass: ''
+                },
+                {
+                    icon: 'i-clock', iconClass: s.avgVmIdlePercent24h >= 70 ? 'success' : 'warning', label: 'Ociosidade média das VMs',
+                    value: `${s.avgVmIdlePercent24h}%`, footer: 'Últimas 24h, frota inteira',
+                    trend: s.avgVmIdlePercent24h >= 70 ? 'Capacidade de sobra' : 'Frota ocupada', trendClass: s.avgVmIdlePercent24h >= 70 ? 'trend-positive' : 'trend-warning'
+                },
+                {
+                    icon: 'i-activity', iconClass: 'info', label: 'Tempo total de execução', value: fmtHoursMinutes(s.totalExecutionMinutes24h),
+                    footer: 'Somado, todas as RPAs • 24h', trend: `${s.executions24h} execuções`, trendClass: ''
+                },
+                {
+                    icon: 'i-server', iconClass: s.maxConcurrencyVm?.value > 1 ? 'warning' : 'success',
+                    label: 'Maior concorrência de VM', value: s.maxConcurrencyVm?.value > 1 ? `${s.maxConcurrencyVm.value}×` : '—',
+                    footer: s.maxConcurrencyVm?.value > 1 ? `${s.maxConcurrencyVm.machine} · execuções simultâneas` : 'Nenhuma VM com execuções sobrepostas',
+                    trend: s.maxConcurrencyVm?.value > 1 ? 'Risco de contenção' : 'Sem contenção', trendClass: s.maxConcurrencyVm?.value > 1 ? 'trend-warning' : 'trend-positive'
                 }
             ];
 
@@ -2855,6 +2921,90 @@
             if (ratio <= .5) return 'heat-2';
             if (ratio <= .75) return 'heat-3';
             return 'heat-4';
+        }
+
+        /* =====================================================================
+           RENDER — PADRÃO HISTÓRICO POR HORÁRIO (Visão Geral)
+           Heatmap RPA × hora do dia, agregado em todo o período carregado —
+           não apenas o dia do snapshot. Responde "em que horário este parque
+           historicamente concentra erro", diferente da timeline (que mostra
+           só hoje).
+           ===================================================================== */
+        function renderHistoricalHeatmap() {
+            const executions = window.OBS_DATA?.executions || [];
+            const hours = Array.from({ length: 24 }, (_, i) => i);
+            const byRpaHour = new Map();
+            executions.forEach(e => {
+                const hour = new Date(e.start).getHours();
+                const key = `${e.rpaId}|${hour}`;
+                const cell = byRpaHour.get(key) || { total: 0, error: 0 };
+                cell.total++;
+                if (e.status === 'ERROR') cell.error++;
+                byRpaHour.set(key, cell);
+            });
+            const max = Math.max(1, ...[...byRpaHour.values()].map(c => c.error));
+            const hourLabels = hours.map(h => `<div class="heatmap-hour">${String(h).padStart(2, '0')}</div>`).join('');
+            const rows = DATA.rpas.map(rpa => `
+                <div class="heatmap-label" title="${escapeHtml(rpa.process)}">${escapeHtml(rpa.name)}</div>
+                ${hours.map(h => {
+                    const cell = byRpaHour.get(`${rpa.id}|${h}`) || { total: 0, error: 0 };
+                    const rate = cell.total ? Math.round(cell.error / cell.total * 100) : 0;
+                    const tip = `${escapeHtml(rpa.name)} • ${String(h).padStart(2, '0')}h<br>${cell.total} execuções no período • ${cell.error} erro(s) (${rate}%)`;
+                    return `<div class="heat-cell ${heatClass(cell.error, max)}" data-tip="${tip}">${cell.error || ''}</div>`;
+                }).join('')}
+            `).join('');
+            $('#historicalHeatmap').innerHTML = `
+                <div class="heatmap" style="grid-template-columns:190px repeat(24, minmax(26px, 1fr))">
+                    <div></div>
+                    ${hourLabels}
+                    ${rows}
+                </div>
+            `;
+            $('#historicalHeatmapBadge').textContent = `${executions.length} execuções no período`;
+            $$('#historicalHeatmap [data-tip]').forEach(el => {
+                el.addEventListener('mousemove', e => showTooltip(e, el.dataset.tip));
+                el.addEventListener('mouseleave', hideTooltip);
+            });
+        }
+
+        /* =====================================================================
+           RENDER — OCIOSIDADE E UTILIZAÇÃO DE VMs (Visão Geral)
+           ===================================================================== */
+        function renderVmIdleTrend() {
+            const rows = (DATA.vmIdleTrend || []).filter(d => d.idlePercent !== null && d.idlePercent !== undefined);
+            $('#vmIdleTrendChart').innerHTML = rows.length
+                ? lineChart(rows, 'idlePercent', { label: 'Ociosidade média das VMs' })
+                : '<div class="empty-state">Sem dados suficientes no período.</div>';
+            $$('#vmIdleTrendChart .interactive-svg [data-tip]').forEach(point => {
+                point.addEventListener('mousemove', e => showTooltip(e, point.dataset.tip));
+                point.addEventListener('mouseleave', hideTooltip);
+            });
+        }
+
+        function renderVmUtilizationList() {
+            const list = [...(DATA.vmUtilization || [])].sort((a, b) => a.idlePercent - b.idlePercent);
+            $('#vmUtilizationList').innerHTML = list.map(vm => {
+                const occupiedPct = Math.max(0, 100 - vm.idlePercent);
+                const topRpa = vm.byRpa[0];
+                const sharedNote = vm.byRpa.length > 1
+                    ? `${vm.byRpa.length} RPAs compartilham esta VM (principal: ${escapeHtml(topRpa.rpaName)}, ${topRpa.percent}%)`
+                    : (topRpa ? escapeHtml(topRpa.rpaName) : 'Sem execuções no período');
+                const tip = `${escapeHtml(vm.machine)}<br>${vm.byRpa.map(r => `${escapeHtml(r.rpaName)}: ${r.percent}%`).join('<br>') || 'Sem execuções'}${vm.maxConcurrency > 1 ? `<br>Pico de ${vm.maxConcurrency} execuções simultâneas` : ''}`;
+                return `
+                    <div style="margin:12px 0" data-tip="${tip}">
+                        <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:11px">
+                            <span class="mono">${escapeHtml(vm.machine)}</span>
+                            <strong>${occupiedPct.toFixed(1)}% ocupada</strong>
+                        </div>
+                        <div class="progress-track"><div class="progress-fill ${occupiedPct >= 30 ? 'warning' : 'success'}" style="width:${occupiedPct}%"></div></div>
+                        <div class="cell-subtitle" style="margin-top:4px">${sharedNote}</div>
+                    </div>
+                `;
+            }).join('') || '<div class="empty-state">Sem dados de utilização no período.</div>';
+            $$('#vmUtilizationList [data-tip]').forEach(el => {
+                el.addEventListener('mousemove', e => showTooltip(e, el.dataset.tip));
+                el.addEventListener('mouseleave', hideTooltip);
+            });
         }
 
         function renderFailureHeatmap() {
@@ -3306,6 +3456,9 @@
             populateRpaFilterOptions();
             renderRpaOpsTable();
             renderTimeline();
+            renderHistoricalHeatmap();
+            renderVmIdleTrend();
+            renderVmUtilizationList();
             renderIncidentQueue();
             renderVmCompactList();
             renderAlerts();

@@ -82,6 +82,46 @@ def median(values):
 
 
 # ---------------------------------------------------------------------------
+# Aritmética de intervalos: usada para inferir ocupação de VM a partir das
+# execuções reais atribuídas a cada machine_name (não há telemetria de
+# processo em nível de SO — a ocupação é derivada do próprio log).
+# ---------------------------------------------------------------------------
+def _merge_intervals(intervals):
+    if not intervals:
+        return []
+    ordered = sorted((s, e) for s, e in intervals if e > s)
+    merged = [list(ordered[0])] if ordered else []
+    for s, e in ordered[1:]:
+        if s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    return merged
+
+
+def _occupied_minutes(intervals, window_start, window_end):
+    total = 0.0
+    for s, e in _merge_intervals(intervals):
+        s = max(s, window_start); e = min(e, window_end)
+        if e > s:
+            total += (e - s).total_seconds() / 60
+    return total
+
+
+def _max_concurrency(intervals):
+    events = []
+    for s, e in intervals:
+        events.append((s, 1))
+        events.append((e, -1))
+    events.sort(key=lambda x: (x[0], x[1]))  # fim antes de início no mesmo instante
+    cur = best = 0
+    for _, delta in events:
+        cur += delta
+        best = max(best, cur)
+    return best
+
+
+# ---------------------------------------------------------------------------
 # Descoberta e filtragem de arquivos ANTES do parsing (Seção 24)
 # ---------------------------------------------------------------------------
 def _window_bounds(mode):
@@ -769,16 +809,82 @@ def build_index(obs, vm_history, expected_runs, exec_by_id):
     # 24-hour summary ending at VM snapshot
     snap_dt=dt(obs['snapshot']); window_start=snap_dt-timedelta(hours=24); recent=[e for e in executions if window_start<=dt(e['start'])<=snap_dt]
     succ=sum(x['status']=='SUCCESS' for x in recent); warn=sum(x['status']=='WARNING' for x in recent); err=sum(x['status']=='ERROR' for x in recent)
+
+    # ------------------------------------------------------------------
+    # Utilização de VMs: ociosidade e consumo por RPA. Ocupação é inferida
+    # das próprias execuções (machine_name + start/end), com merge de
+    # intervalos sobrepostos — duas RPAs rodando ao mesmo tempo na mesma VM
+    # contam uma vez como "ocupado", e o pico de sobreposição vira o sinal
+    # de concorrência (contenção de capacidade).
+    # ------------------------------------------------------------------
+    vm_names = [v['name'] for v in vms]
+    intervals_by_vm = defaultdict(list)
+    for e in executions:
+        intervals_by_vm[e['machine']].append((dt(e['start']), dt(e['end'])))
+
+    win_start_s = obs['loadStats'].get('windowStart') or obs['periodStart']
+    win_end_s = obs['loadStats'].get('windowEnd') or obs['periodEnd']
+    win_start_dt = datetime.strptime(win_start_s, '%Y-%m-%d') if win_start_s else (dt(min(e['start'] for e in executions)) if executions else now)
+    win_end_dt = min(now, datetime.strptime(win_end_s, '%Y-%m-%d') + timedelta(days=1)) if win_end_s else now
+    window_minutes = max(1.0, (win_end_dt - win_start_dt).total_seconds() / 60)
+
+    vm_utilization = []
+    max_concurrency_overall = {'machine': None, 'value': 0}
+    for name in vm_names:
+        ivs = intervals_by_vm.get(name, [])
+        occupied = _occupied_minutes(ivs, win_start_dt, win_end_dt)
+        idle_pct = round(max(0.0, 100 - occupied / window_minutes * 100), 1)
+        conc = _max_concurrency(ivs)
+        if conc > max_concurrency_overall['value']:
+            max_concurrency_overall = {'machine': name, 'value': conc}
+        by_rpa_minutes = defaultdict(float)
+        for e in executions:
+            if e['machine'] == name:
+                by_rpa_minutes[e['rpaId']] += e['durationMin']
+        total_rpa_minutes = sum(by_rpa_minutes.values()) or 1.0
+        by_rpa = sorted(
+            [{'rpaId': rid, 'rpaName': rid_map[rid]['name'], 'minutes': round(mins, 1),
+              'percent': round(mins / total_rpa_minutes * 100, 1)} for rid, mins in by_rpa_minutes.items()],
+            key=lambda x: -x['minutes']
+        )
+        vm_utilization.append({
+            'machine': name, 'occupiedMinutes': round(occupied, 1), 'idlePercent': idle_pct,
+            'executionCount': len(ivs), 'maxConcurrency': conc, 'byRpa': by_rpa,
+        })
+    vm_utilization.sort(key=lambda x: x['idlePercent'])
+
+    # Tendência de ociosidade média da frota, na mesma janela de 14 dias do
+    # trend de sucesso (facilita comparar os dois gráficos lado a lado).
+    vm_idle_trend = []
+    for offset in range(13, -1, -1):
+        day_start = (endd - timedelta(days=offset)).replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = min(now, day_start + timedelta(days=1))
+        label = day_start.strftime('%d/%m')
+        if day_end <= day_start:
+            vm_idle_trend.append({'date': label, 'idlePercent': None})
+            continue
+        day_minutes = (day_end - day_start).total_seconds() / 60
+        idle_values = [max(0.0, 100 - _occupied_minutes(intervals_by_vm.get(name, []), day_start, day_end) / day_minutes * 100) for name in vm_names]
+        vm_idle_trend.append({'date': label, 'idlePercent': round(sum(idle_values) / len(idle_values), 1) if idle_values else None})
+
+    total_exec_minutes_24h = round(sum(x['durationMin'] for x in recent), 1)
+    idle_24h_minutes = max(1.0, (snap_dt - window_start).total_seconds() / 60)
+    idle_24h_values = [max(0.0, 100 - _occupied_minutes(intervals_by_vm.get(name, []), window_start, snap_dt) / idle_24h_minutes * 100) for name in vm_names]
+    avg_vm_idle_24h = round(sum(idle_24h_values) / len(idle_24h_values), 1) if idle_24h_values else 0
+
     summary={'totalRpas':len(rpas),'totalVms':len(vms),'executions24h':len(recent),'success24h':succ,'warning24h':warn,'error24h':err,
              'successRate24h':round(100*succ/len(recent),1) if recent else 0,
              'criticalRpas':sum(r['attention']=='CRITICAL' for r in idx_rpas),'warningRpas':sum(r['attention']=='WARNING' for r in idx_rpas),
              'notStarted':sum(r['state']=='NAO_INICIOU' for r in idx_rpas),
              'slaAtRisk':sum(r['state']=='SLA_EM_RISCO' for r in idx_rpas),
              'delayed':sum(r['state']=='ATRASADA' for r in idx_rpas),
-             'vmDegraded':sum(r['vmDegraded'] for r in idx_rpas)}
+             'vmDegraded':sum(r['vmDegraded'] for r in idx_rpas),
+             'totalExecutionMinutes24h':total_exec_minutes_24h,'avgVmIdlePercent24h':avg_vm_idle_24h,
+             'maxConcurrencyVm':max_concurrency_overall}
     return {'snapshot':obs['snapshot'],'periodStart':obs['periodStart'],'periodEnd':obs['periodEnd'],'rpas':idx_rpas,'trend':trend,
             'timeline':timeline,'incidents':incidents,'errorPareto':error_pareto,'heatmapSteps':heat_steps,'heatmap':heat,
-            'vms':vms,'executionDetail':execution_detail,'summary':summary,'alerts':alerts,'loadStats':obs['loadStats']}
+            'vms':vms,'executionDetail':execution_detail,'summary':summary,'alerts':alerts,'loadStats':obs['loadStats'],
+            'vmUtilization':vm_utilization,'vmIdleTrend':vm_idle_trend}
 
 
 def get_data(mode=None):
