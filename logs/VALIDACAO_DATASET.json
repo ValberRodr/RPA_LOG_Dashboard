@@ -1,0 +1,36 @@
+{
+  "period_days": 92,
+  "rpa_count": 10,
+  "vm_count": 11,
+  "execution_count": 2982,
+  "event_count": 21858,
+  "vm_snapshot_count": 48576,
+  "execution_status_counts": {
+    "SUCCESS": 2685,
+    "WARNING": 192,
+    "ERROR": 105
+  },
+  "executions_by_process": {
+    "DOC_Arquivamento_Digital_SharePoint": 184,
+    "REP_Atualizacao_Dashboard_PowerBI": 198,
+    "FIN_Conciliacao_Bancaria_SAP": 66,
+    "SIN_Processamento_Sinistros_Mainframe": 462,
+    "FAT_Emissao_Faturas_SAP": 264,
+    "VND_Integracao_Pedidos_Salesforce": 726,
+    "RH_Admissao_Funcionarios_Oracle": 198,
+    "COB_Baixa_Pagamentos_Bancos": 660,
+    "CLI_Atualizacao_Cadastral_CRM": 132,
+    "TI_Backup_GDrive_GSuite": 92
+  },
+  "reconciliation_errors_count": 0,
+  "reconciliation_rule": "processed_items = success_items + warning_items + error_items",
+  "known_synthetic_scenarios": [
+    "VM03 apresenta picos de memoria às quartas-feiras entre 14:00 e 16:30.",
+    "VM04 apresenta carga elevada no periodo de backup noturno.",
+    "VM07 acumula uso de disco durante o periodo e passa por limpeza proxima ao fim da serie.",
+    "VM08 apresenta indisponibilidade RDP recorrente em janelas controladas.",
+    "VM10 apresenta picos de CPU nas segundas-feiras pela manha.",
+    "VM11 atua como contingencia e recebe parte das execucoes quando uma VM principal esta degradada.",
+    "Probabilidades de WARNING/ERROR aumentam durante degradacao de CPU, memoria, disco ou RDP."
+  ]
+}

@@ -1,0 +1,405 @@
+{
+  "dataset": "Logs ficticios de RPA e VMs para testes de monitoramento",
+  "synthetic_data": true,
+  "seed": 20260925,
+  "period_start": "2026-06-25",
+  "period_end": "2026-09-24",
+  "days": 92,
+  "rpas": [
+    {
+      "process_name": "VND_Integracao_Pedidos_Salesforce",
+      "robot_name": "BOT_PRD_VND_01",
+      "orchestrator": "AA360_VND_PRD",
+      "primary_vm": "GBS02I356857N01",
+      "backup_vm": "GBS02I356857N11",
+      "application": "Salesforce",
+      "calendar": "weekdays",
+      "scheduled_times": [
+        "08:00",
+        "09:00",
+        "10:00",
+        "11:00",
+        "12:00",
+        "13:00",
+        "14:00",
+        "15:00",
+        "16:00",
+        "17:00",
+        "18:00"
+      ],
+      "typical_items_range": [
+        60,
+        140
+      ],
+      "typical_duration_minutes": [
+        12,
+        26
+      ],
+      "steps": [
+        "Preparar_Execucao",
+        "Autenticar_Salesforce",
+        "Consultar_Pedidos",
+        "Validar_Pedidos",
+        "Integrar_ERP",
+        "Atualizar_Status",
+        "Finalizar_Execucao"
+      ]
+    },
+    {
+      "process_name": "FIN_Conciliacao_Bancaria_SAP",
+      "robot_name": "BOT_PRD_FIN_01",
+      "orchestrator": "AA360_FIN_PRD",
+      "primary_vm": "GBS02I356857N02",
+      "backup_vm": "GBS02I356857N11",
+      "application": "SAP",
+      "calendar": "weekdays",
+      "scheduled_times": [
+        "06:30"
+      ],
+      "typical_items_range": [
+        450,
+        1200
+      ],
+      "typical_duration_minutes": [
+        42,
+        75
+      ],
+      "steps": [
+        "Abrir_SAP",
+        "Autenticar_SAP",
+        "Extrair_Extrato",
+        "Importar_Arquivo_Bancario",
+        "Conciliar_Lancamentos",
+        "Tratar_Divergencias",
+        "Gerar_Relatorio",
+        "Encerrar_SAP"
+      ]
+    },
+    {
+      "process_name": "RH_Admissao_Funcionarios_Oracle",
+      "robot_name": "BOT_PRD_RH_01",
+      "orchestrator": "AA360_RH_PRD",
+      "primary_vm": "GBS02I356857N03",
+      "backup_vm": "GBS02I356857N11",
+      "application": "Oracle",
+      "calendar": "weekdays",
+      "scheduled_times": [
+        "08:00",
+        "12:00",
+        "16:00"
+      ],
+      "typical_items_range": [
+        8,
+        35
+      ],
+      "typical_duration_minutes": [
+        7,
+        18
+      ],
+      "steps": [
+        "Carregar_Fila_Admissoes",
+        "Validar_Documentos",
+        "Conectar_Oracle",
+        "Inserir_Colaborador",
+        "Criar_Acessos",
+        "Atualizar_Status_RH",
+        "Finalizar"
+      ]
+    },
+    {
+      "process_name": "TI_Backup_GDrive_GSuite",
+      "robot_name": "BOT_PRD_TI_01",
+      "orchestrator": "AA360_TI_PRD",
+      "primary_vm": "GBS02I356857N04",
+      "backup_vm": "GBS02I356857N11",
+      "application": "Google Workspace",
+      "calendar": "daily",
+      "scheduled_times": [
+        "23:00"
+      ],
+      "typical_items_range": [
+        800,
+        2600
+      ],
+      "typical_duration_minutes": [
+        55,
+        115
+      ],
+      "steps": [
+        "Validar_Espaco_Destino",
+        "Autenticar_GSuite",
+        "Listar_Arquivos",
+        "Compactar_Arquivos",
+        "Enviar_Backup",
+        "Validar_Checksum",
+        "Registrar_Backup"
+      ]
+    },
+    {
+      "process_name": "SIN_Processamento_Sinistros_Mainframe",
+      "robot_name": "BOT_PRD_SIN_01",
+      "orchestrator": "AA360_SIN_PRD",
+      "primary_vm": "GBS02I356857N05",
+      "backup_vm": "GBS02I356857N11",
+      "application": "Mainframe",
+      "calendar": "weekdays",
+      "scheduled_times": [
+        "07:00",
+        "09:00",
+        "11:00",
+        "13:00",
+        "15:00",
+        "17:00",
+        "19:00"
+      ],
+      "typical_items_range": [
+        90,
+        320
+      ],
+      "typical_duration_minutes": [
+        20,
+        43
+      ],
+      "steps": [
+        "Conectar_Mainframe",
+        "Consultar_Fila_Sinistros",
+        "Validar_Apolice",
+        "Processar_Sinistro",
+        "Calcular_Reserva",
+        "Atualizar_Mainframe",
+        "Notificar_Resultados",
+        "Encerrar_Sessao"
+      ]
+    },
+    {
+      "process_name": "CLI_Atualizacao_Cadastral_CRM",
+      "robot_name": "BOT_PRD_CLI_01",
+      "orchestrator": "AA360_CLI_PRD",
+      "primary_vm": "GBS02I356857N06",
+      "backup_vm": "GBS02I356857N11",
+      "application": "CRM",
+      "calendar": "weekdays",
+      "scheduled_times": [
+        "09:15",
+        "15:15"
+      ],
+      "typical_items_range": [
+        120,
+        420
+      ],
+      "typical_duration_minutes": [
+        11,
+        24
+      ],
+      "steps": [
+        "Autenticar_CRM",
+        "Ler_Arquivo_Entrada",
+        "Validar_Cadastros",
+        "Consultar_Cliente",
+        "Atualizar_CRM",
+        "Registrar_Auditoria",
+        "Finalizar"
+      ]
+    },
+    {
+      "process_name": "FAT_Emissao_Faturas_SAP",
+      "robot_name": "BOT_PRD_FAT_01",
+      "orchestrator": "AA360_FAT_PRD",
+      "primary_vm": "GBS02I356857N07",
+      "backup_vm": "GBS02I356857N11",
+      "application": "SAP",
+      "calendar": "weekdays",
+      "scheduled_times": [
+        "07:00",
+        "11:00",
+        "15:00",
+        "19:00"
+      ],
+      "typical_items_range": [
+        180,
+        700
+      ],
+      "typical_duration_minutes": [
+        16,
+        34
+      ],
+      "steps": [
+        "Abrir_SAP",
+        "Consultar_Faturamento",
+        "Validar_Contratos",
+        "Gerar_Faturas",
+        "Emitir_PDF",
+        "Registrar_Documentos",
+        "Enviar_Faturas",
+        "Encerrar_SAP"
+      ]
+    },
+    {
+      "process_name": "COB_Baixa_Pagamentos_Bancos",
+      "robot_name": "BOT_PRD_COB_01",
+      "orchestrator": "AA360_COB_PRD",
+      "primary_vm": "GBS02I356857N08",
+      "backup_vm": "GBS02I356857N11",
+      "application": "Portal Bancario",
+      "calendar": "weekdays",
+      "scheduled_times": [
+        "08:30",
+        "09:30",
+        "10:30",
+        "11:30",
+        "12:30",
+        "13:30",
+        "14:30",
+        "15:30",
+        "16:30",
+        "17:30"
+      ],
+      "typical_items_range": [
+        70,
+        260
+      ],
+      "typical_duration_minutes": [
+        5,
+        14
+      ],
+      "steps": [
+        "Carregar_Retornos",
+        "Validar_CNAB",
+        "Consultar_Titulos",
+        "Aplicar_Baixas",
+        "Tratar_Rejeicoes",
+        "Atualizar_Cobranca",
+        "Gerar_Resumo"
+      ]
+    },
+    {
+      "process_name": "DOC_Arquivamento_Digital_SharePoint",
+      "robot_name": "BOT_PRD_DOC_01",
+      "orchestrator": "AA360_DOC_PRD",
+      "primary_vm": "GBS02I356857N09",
+      "backup_vm": "GBS02I356857N11",
+      "application": "SharePoint",
+      "calendar": "daily",
+      "scheduled_times": [
+        "01:00",
+        "13:00"
+      ],
+      "typical_items_range": [
+        200,
+        900
+      ],
+      "typical_duration_minutes": [
+        24,
+        48
+      ],
+      "steps": [
+        "Autenticar_SharePoint",
+        "Localizar_Documentos",
+        "Validar_Metadados",
+        "Converter_PDF",
+        "Enviar_SharePoint",
+        "Validar_Upload",
+        "Atualizar_Indice"
+      ]
+    },
+    {
+      "process_name": "REP_Atualizacao_Dashboard_PowerBI",
+      "robot_name": "BOT_PRD_REP_01",
+      "orchestrator": "AA360_REP_PRD",
+      "primary_vm": "GBS02I356857N10",
+      "backup_vm": "GBS02I356857N11",
+      "application": "Power BI",
+      "calendar": "weekdays",
+      "scheduled_times": [
+        "06:00",
+        "12:00",
+        "18:00"
+      ],
+      "typical_items_range": [
+        12,
+        45
+      ],
+      "typical_duration_minutes": [
+        8,
+        21
+      ],
+      "steps": [
+        "Validar_Fontes",
+        "Autenticar_PowerBI",
+        "Disparar_Refresh",
+        "Aguardar_Atualizacao",
+        "Validar_Datasets",
+        "Publicar_Indicadores",
+        "Notificar_Conclusao"
+      ]
+    }
+  ],
+  "vms": [
+    {
+      "machine_name": "GBS02I356857N01",
+      "role": "execucao_principal",
+      "ram_gb": 16,
+      "disk_gb": 500
+    },
+    {
+      "machine_name": "GBS02I356857N02",
+      "role": "execucao_principal",
+      "ram_gb": 32,
+      "disk_gb": 500
+    },
+    {
+      "machine_name": "GBS02I356857N03",
+      "role": "execucao_principal",
+      "ram_gb": 16,
+      "disk_gb": 500
+    },
+    {
+      "machine_name": "GBS02I356857N04",
+      "role": "execucao_principal",
+      "ram_gb": 32,
+      "disk_gb": 1000
+    },
+    {
+      "machine_name": "GBS02I356857N05",
+      "role": "execucao_principal",
+      "ram_gb": 32,
+      "disk_gb": 1000
+    },
+    {
+      "machine_name": "GBS02I356857N06",
+      "role": "execucao_principal",
+      "ram_gb": 16,
+      "disk_gb": 500
+    },
+    {
+      "machine_name": "GBS02I356857N07",
+      "role": "execucao_principal",
+      "ram_gb": 32,
+      "disk_gb": 500
+    },
+    {
+      "machine_name": "GBS02I356857N08",
+      "role": "execucao_principal",
+      "ram_gb": 16,
+      "disk_gb": 500
+    },
+    {
+      "machine_name": "GBS02I356857N09",
+      "role": "execucao_principal",
+      "ram_gb": 16,
+      "disk_gb": 500
+    },
+    {
+      "machine_name": "GBS02I356857N10",
+      "role": "execucao_principal",
+      "ram_gb": 32,
+      "disk_gb": 1000
+    },
+    {
+      "machine_name": "GBS02I356857N11",
+      "role": "contingencia",
+      "ram_gb": 16,
+      "disk_gb": 500
+    }
+  ]
+}

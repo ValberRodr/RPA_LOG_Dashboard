@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <link rel="stylesheet" href="assets/observability.css">
+    <title>Investigação · RPA Ops Monitor</title>
+</head>
+<body>
+<div class="toolbar no-print">
+    <div class="toolbar-inner">
+        <button class="btn" id="btnBack">Fechar janela</button>
+        <div class="title" id="toolbarTitle">RPA Ops Monitor</div>
+        <span class="muted" id="snapshot"></span>
+        <button class="btn" id="btnCounterpart">Abrir diagnóstico ↗</button>
+        <button class="btn primary" id="btnPdf">Exportar PDF</button>
+    </div>
+</div>
+<main class="page">
+    <!-- Cabeçalho operacional da execução selecionada -->
+    <div id="hero"></div>
+
+    <div class="grid g4" id="kpis"></div>
+
+    <div class="grid g2">
+        <section class="panel">
+            <div class="panel-head"><h2>Linha de auditoria por etapa</h2><span class="section-note">Registro cronológico do LOG_EVENTO</span></div>
+            <div class="panel-body"><div class="steps" id="steps"></div></div>
+        </section>
+        <section class="panel">
+            <div class="panel-head"><h2>Conformidade e agenda</h2><span class="section-note">Planejado × realizado</span></div>
+            <div class="panel-body" id="schedule"></div>
+        </section>
+    </div>
+
+    <div class="grid g2">
+        <section class="panel">
+            <div class="panel-head"><h2>Reconciliação dos itens</h2><span class="section-note">Controle de completude da execução</span></div>
+            <div class="panel-body" id="reconciliation"></div>
+        </section>
+        <section class="panel">
+            <div class="panel-head"><h2>Contexto da VM</h2><span class="section-note">Janela de ±90 min</span></div>
+            <div class="panel-body" id="vmSummary"></div>
+        </section>
+    </div>
+
+    <section class="panel">
+        <div class="panel-head"><h2>Telemetria durante a janela da execução</h2><span class="section-note">CPU, memória e disco</span></div>
+        <div class="panel-body" id="vmChart"></div>
+    </section>
+
+    <div class="grid g2 report-break">
+        <section class="panel">
+            <div class="panel-head"><h2>Evidências técnicas</h2><span class="section-note">Campos usados para rastreabilidade</span></div>
+            <div class="panel-body" id="evidence"></div>
+        </section>
+        <section class="panel">
+            <div class="panel-head"><h2>Ocorrências relacionadas</h2><span class="section-note">Mesmo erro no processo nos últimos 30 dias</span></div>
+            <div class="panel-body" id="related"></div>
+        </section>
+    </div>
+</main>
+    <script src="assets/observability-data.js"></script>
+    <script src="assets/observability-core.js"></script>
+    <script src="assets/auto-refresh.js"></script>
+<script>
+/* ============================================================================
+   INVESTIGAÇÃO
+   Objetivo: reproduzir exatamente o que ocorreu em uma execução e manter
+   evidências suficientes para auditoria operacional, reprocessamento e análise.
+   ============================================================================ */
+const U = window.RPAUI;
+const executionId = U.q.get('execution_id') || U.D.executions.at(-1)?.executionId;
+document.querySelector('#btnCounterpart')?.addEventListener('click',()=>U.openDiagnostic(executionId));
+const ex = U.getExecution(executionId);
+if (!ex) {
+    document.body.innerHTML = '<main class="page"><div class="empty">Execução não encontrada.</div></main>';
+} else {
+    U.initToolbar(`Investigação ${executionId}`);
+    const rpa = U.getRpa(ex.rpaId);
+    const events = U.getEvents(executionId);
+    const vm = U.getVmContext(executionId);
+
+    document.querySelector('#hero').innerHTML = `<section class="hero">
+        <div class="hero-main">${U.statusBadge(ex.status)}<h1>${U.esc(rpa.name)}</h1><p><span class="mono">${U.esc(ex.executionId)}</span> · ${U.esc(ex.process)}</p></div>
+        <div class="stat"><span>Início</span><strong>${U.fmtDateTime(ex.start)}</strong></div>
+        <div class="stat"><span>Fim</span><strong>${U.fmtDateTime(ex.end)}</strong></div>
+        <div class="stat"><span>Duração</span><strong>${ex.durationMin.toFixed(2)} min</strong></div>
+        <div class="stat"><span>VM</span><strong class="mono">${U.esc(ex.machine)}</strong></div>
+    </section>`;
+
+    const errorSteps = events.filter(e=>e.status==='ERROR').length;
+    const warningSteps = events.filter(e=>e.status==='WARNING').length;
+    document.querySelector('#kpis').innerHTML = [
+        ['Etapas registradas',events.length,`${events.filter(e=>e.status==='SUCCESS').length} com sucesso`],
+        ['Erros de etapa',errorSteps,errorSteps?'requer evidência':'sem erro técnico'],
+        ['Warnings de etapa',warningSteps,`retries: ${ex.retryCount}`],
+        ['Itens processados',`${ex.processedItems}/${ex.totalItems}`,`${ex.errorItems} erro(s) de item`]
+    ].map(x=>`<div class="kpi"><span>${x[0]}</span><strong>${x[1]}</strong><small>${x[2]}</small></div>`).join('');
+
+    document.querySelector('#steps').innerHTML = events.map((s,i)=>`<div class="step">
+        <div class="step-icon ${s.status}">${s.status==='SUCCESS'?'✓':s.status==='ERROR'?'×':'!'}</div>
+        <div><div class="step-title">${String(s.order).padStart(2,'0')}. ${U.esc(s.step)}</div><div class="step-meta">${U.fmtTime(s.timestamp)} → ${U.fmtTime(s.endTimestamp)} · tentativa ${s.loopNumber}</div>${s.errorMessage?`<div class="error-box"><strong>${U.esc(s.errorCode||'ERRO')}</strong> · ${U.esc(s.errorType||'')}<br>${U.esc(s.errorMessage)}</div>`:`<div class="step-meta">${U.esc(s.message||'')}</div>`}</div>
+        <div>${U.statusBadge(s.status)}<div class="step-meta">${U.esc(s.severity)}</div></div>
+        <div><strong>${U.duration(s.durationSec)}</strong><div class="step-meta">tempo da etapa</div></div>
+        <div><div class="step-meta">Aplicação</div><strong>${U.esc(s.application||rpa.application)}</strong><div class="step-meta mono">${U.esc(s.transactionId||'')}</div></div>
+    </div>`).join('') || '<div class="empty">Sem eventos detalhados.</div>';
+
+    const scheduleRows = [
+        ['Horário previsto', U.fmtDateTime(ex.scheduledDatetime)],
+        ['Limite para início', U.fmtDateTime(ex.latestStartDatetime)],
+        ['Início real', U.fmtDateTime(ex.start)],
+        ['Atraso de início', `${ex.startDelaySec}s`],
+        ['Limite de conclusão', U.fmtDateTime(ex.deadlineDatetime)],
+        ['Término real', U.fmtDateTime(ex.end)],
+        ['Conformidade de início', U.statusBadge(ex.startCompliance==='NO_PRAZO'?'SUCCESS':'WARNING')+' '+U.esc(ex.startCompliance)],
+        ['Conformidade do deadline', U.statusBadge(ex.deadlineCompliance==='NO_PRAZO'?'SUCCESS':'ERROR')+' '+U.esc(ex.deadlineCompliance)],
+        ['Classificação da duração', U.statusBadge(ex.durationCompliance==='NORMAL'?'SUCCESS':ex.durationCompliance==='DEGRADADA'?'WARNING':'ERROR')+' '+U.esc(ex.durationCompliance)],
+    ];
+    document.querySelector('#schedule').innerHTML = scheduleRows.map(x=>`<div class="evidence"><span>${x[0]}</span><span>${x[1]}</span></div>`).join('');
+
+    const reconciled = ex.processedItems === ex.successItems + ex.warningItems + ex.errorItems;
+    document.querySelector('#reconciliation').innerHTML = `
+        <div class="callout ${reconciled?'':'danger'}">${reconciled?'Reconciliação consistente: processed_items = success + warning + error.':'Há divergência na reconciliação dos itens.'}</div>
+        <div class="grid g4" style="margin-top:12px">
+            <div class="stat"><span>Total previsto</span><strong>${ex.totalItems}</strong></div>
+            <div class="stat"><span>Processados</span><strong>${ex.processedItems}</strong></div>
+            <div class="stat"><span>Sucesso</span><strong>${ex.successItems}</strong></div>
+            <div class="stat"><span>Warning / erro</span><strong>${ex.warningItems} / ${ex.errorItems}</strong></div>
+        </div>`;
+
+    if(vm.length){
+        const avg=k=>vm.reduce((a,r)=>a+Number(r[k]||0),0)/vm.length;
+        const max=k=>Math.max(...vm.map(r=>Number(r[k]||0)));
+        document.querySelector('#vmSummary').innerHTML = `<div class="grid g3">
+            <div class="stat"><span>CPU média / pico</span><strong>${avg('cpu_percent').toFixed(1)}% / ${max('cpu_percent').toFixed(1)}%</strong></div>
+            <div class="stat"><span>RAM média / pico</span><strong>${avg('memory_percent').toFixed(1)}% / ${max('memory_percent').toFixed(1)}%</strong></div>
+            <div class="stat"><span>Disco máximo</span><strong>${max('disk_percent').toFixed(1)}%</strong></div>
+        </div><div style="margin-top:10px" class="callout">RDP observado: ${[...new Set(vm.map(r=>r.rdp_status))].join(', ')}.</div>`;
+        const vmSeries=vm.map(r=>({date:r.data.slice(11,16),cpu:r.cpu_percent,memory:r.memory_percent,disk:r.disk_percent}));
+        document.querySelector('#vmChart').innerHTML=U.lineSvg(vmSeries,[{key:'cpu',label:'CPU %'},{key:'memory',label:'RAM %'},{key:'disk',label:'Disco %'}],{min:0,max:100,labelX:r=>r.date,formatY:v=>`${Math.round(v)}%`});
+    } else {
+        document.querySelector('#vmSummary').innerHTML='<div class="empty">Sem telemetria para a VM.</div>';
+        document.querySelector('#vmChart').innerHTML='<div class="empty">Sem telemetria para a VM.</div>';
+    }
+
+    const firstTx=events.find(e=>e.transactionId)?.transactionId || '—';
+    const evidence = [
+        ['execution_id',ex.executionId],['transaction_id',firstTx],['rpa_id',ex.rpaId],['process_name',ex.process],
+        ['robot_name',ex.robotName],['orchestrator',ex.orchestrator],['environment',ex.environment],['version',ex.version],
+        ['machine_name',ex.machine],['application',rpa.application],['support_team',rpa.supportTeam],['runbook',rpa.runbook]
+    ];
+    document.querySelector('#evidence').innerHTML=evidence.map(x=>`<div class="evidence"><span>${U.esc(x[0])}</span><span class="mono">${U.esc(x[1])}</span></div>`).join('');
+
+    const related=U.D.recurrenceByExecution[executionId]||[];
+    document.querySelector('#related').innerHTML=related.length?`<div class="mini-list">${related.map(x=>`<div class="mini-item clickable" onclick="RPAUI.openInvestigation('${x.executionId}')"><strong class="mono">${x.executionId}</strong><span class="muted">${U.fmtDateTime(x.start)} · ${U.esc(x.step)} · ${x.durationMin} min · ${U.esc(x.machine)}</span></div>`).join('')}</div>`:'<div class="empty">Não há recorrências equivalentes na janela analisada.</div>';
+}
+</script>\n</body>\n</html>
