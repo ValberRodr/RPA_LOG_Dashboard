@@ -45,7 +45,13 @@
         "Atualizar_Status",
         "Finalizar_Execucao"
       ],
-      "runbook": "COE_RPA/Runbooks/RPA001_VND_Integracao_Pedidos_Salesforce.pdf"
+      "runbook": "COE_RPA/Runbooks/RPA001_VND_Integracao_Pedidos_Salesforce.pdf",
+      "dependencyFiles": [
+        {
+          "path": "config/dependencies/RPA001/mapeamento_campos_pedidos_salesforce.json",
+          "label": "Mapeamento de campos Pedido → Salesforce"
+        }
+      ]
     },
     {
       "rpaId": "RPA002",
@@ -83,7 +89,13 @@
         "Gerar_Relatorio",
         "Encerrar_SAP"
       ],
-      "runbook": "COE_RPA/Runbooks/RPA002_FIN_Conciliacao_Bancaria_SAP.pdf"
+      "runbook": "COE_RPA/Runbooks/RPA002_FIN_Conciliacao_Bancaria_SAP.pdf",
+      "dependencyFiles": [
+        {
+          "path": "config/dependencies/RPA002/regras_conciliacao_bancaria.xlsx",
+          "label": "Planilha de regras de conciliação bancária"
+        }
+      ]
     },
     {
       "rpaId": "RPA003",
@@ -122,7 +134,13 @@
         "Atualizar_Status_RH",
         "Finalizar"
       ],
-      "runbook": "COE_RPA/Runbooks/RPA003_RH_Admissao_Funcionarios_Oracle.pdf"
+      "runbook": "COE_RPA/Runbooks/RPA003_RH_Admissao_Funcionarios_Oracle.pdf",
+      "dependencyFiles": [
+        {
+          "path": "config/dependencies/RPA003/regras_validacao_documentos_admissao.json",
+          "label": "Regras de validação de documentos de admissão"
+        }
+      ]
     },
     {
       "rpaId": "RPA004",
@@ -159,7 +177,13 @@
         "Validar_Checksum",
         "Registrar_Backup"
       ],
-      "runbook": "COE_RPA/Runbooks/RPA004_TI_Backup_GDrive_GSuite.pdf"
+      "runbook": "COE_RPA/Runbooks/RPA004_TI_Backup_GDrive_GSuite.pdf",
+      "dependencyFiles": [
+        {
+          "path": "config/dependencies/RPA004/lista_pastas_backup_gsuite.json",
+          "label": "Lista de pastas incluídas no backup"
+        }
+      ]
     },
     {
       "rpaId": "RPA005",
@@ -203,7 +227,13 @@
         "Notificar_Resultados",
         "Encerrar_Sessao"
       ],
-      "runbook": "COE_RPA/Runbooks/RPA005_SIN_Processamento_Sinistros_Mainframe.pdf"
+      "runbook": "COE_RPA/Runbooks/RPA005_SIN_Processamento_Sinistros_Mainframe.pdf",
+      "dependencyFiles": [
+        {
+          "path": "config/dependencies/RPA005/parametros_sessao_mainframe.cfg",
+          "label": "Parâmetros de sessão do mainframe"
+        }
+      ]
     },
     {
       "rpaId": "RPA006",
@@ -241,7 +271,13 @@
         "Registrar_Auditoria",
         "Finalizar"
       ],
-      "runbook": "COE_RPA/Runbooks/RPA006_CLI_Atualizacao_Cadastral_CRM.pdf"
+      "runbook": "COE_RPA/Runbooks/RPA006_CLI_Atualizacao_Cadastral_CRM.pdf",
+      "dependencyFiles": [
+        {
+          "path": "config/dependencies/RPA006/credenciais_conexao_crm.json",
+          "label": "Credenciais e configuração de conexão com o CRM"
+        }
+      ]
     },
     {
       "rpaId": "RPA007",
@@ -282,7 +318,13 @@
         "Enviar_Faturas",
         "Encerrar_SAP"
       ],
-      "runbook": "COE_RPA/Runbooks/RPA007_FAT_Emissao_Faturas_SAP.pdf"
+      "runbook": "COE_RPA/Runbooks/RPA007_FAT_Emissao_Faturas_SAP.pdf",
+      "dependencyFiles": [
+        {
+          "path": "config/dependencies/RPA007/janela_concorrencia_faturamento.json",
+          "label": "Regra de janela de concorrência de faturamento"
+        }
+      ]
     },
     {
       "rpaId": "RPA008",
@@ -328,7 +370,13 @@
         "Atualizar_Cobranca",
         "Gerar_Resumo"
       ],
-      "runbook": "COE_RPA/Runbooks/RPA008_COB_Baixa_Pagamentos_Bancos.pdf"
+      "runbook": "COE_RPA/Runbooks/RPA008_COB_Baixa_Pagamentos_Bancos.pdf",
+      "dependencyFiles": [
+        {
+          "path": "config/dependencies/RPA008/endpoints_portal_bancario.json",
+          "label": "Endpoints do portal bancário homologados"
+        }
+      ]
     },
     {
       "rpaId": "RPA009",
@@ -366,7 +414,13 @@
         "Validar_Upload",
         "Atualizar_Indice"
       ],
-      "runbook": "COE_RPA/Runbooks/RPA009_DOC_Arquivamento_Digital_SharePoint.pdf"
+      "runbook": "COE_RPA/Runbooks/RPA009_DOC_Arquivamento_Digital_SharePoint.pdf",
+      "dependencyFiles": [
+        {
+          "path": "config/dependencies/RPA009/regras_lote_arquivamento_sharepoint.json",
+          "label": "Regra de tamanho de lote no arquivamento"
+        }
+      ]
     },
     {
       "rpaId": "RPA010",
@@ -405,7 +459,13 @@
         "Publicar_Indicadores",
         "Notificar_Conclusao"
       ],
-      "runbook": "COE_RPA/Runbooks/RPA010_REP_Atualizacao_Dashboard_PowerBI.pdf"
+      "runbook": "COE_RPA/Runbooks/RPA010_REP_Atualizacao_Dashboard_PowerBI.pdf",
+      "dependencyFiles": [
+        {
+          "path": "config/dependencies/RPA010/template_dataset_powerbi_dashboard.json",
+          "label": "Template do dataset do dashboard"
+        }
+      ]
     }
   ],
   "schedules": [

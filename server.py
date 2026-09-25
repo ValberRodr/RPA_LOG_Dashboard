@@ -305,6 +305,61 @@ def _run_state(run, exec_by_id, now):
     return 'ATRASADA'
 
 
+# ---------------------------------------------------------------------------
+# Arquivos de dependência da RPA (base cadastral, não logs): cada RPA pode
+# registrar caminhos de arquivos dos quais depende (planilha de regras,
+# arquivo de credenciais, template etc.). Aqui cruzamos a data da última
+# alteração de cada arquivo com a linha do tempo de erros da própria RPA —
+# sempre como CORRELAÇÃO candidata, nunca como causa confirmada.
+# ---------------------------------------------------------------------------
+def _dependency_file_status(dep, exs, now, period_start_dt):
+    entry = {
+        'path': dep['path'], 'label': dep['label'], 'exists': False, 'lastModified': None,
+        'daysSinceModification': None, 'errorsBefore30d': 0, 'errorsAfter30d': 0,
+        'firstErrorAfter': None, 'signal': 'SEM_DADOS',
+    }
+    try:
+        st = (ROOT / dep['path']).stat()
+    except OSError:
+        return entry
+
+    mtime = datetime.fromtimestamp(st.st_mtime)
+    entry['exists'] = True
+    entry['lastModified'] = mtime.isoformat(timespec='seconds')
+    days_since = (now - mtime).days
+    entry['daysSinceModification'] = days_since
+
+    errors = sorted((e for e in exs if e['status'] == 'ERROR'), key=lambda x: x['start'])
+    before = [e for e in errors if mtime - timedelta(days=30) <= dt(e['start']) < mtime]
+    after_cutoff = min(now, mtime + timedelta(days=30))
+    after = [e for e in errors if mtime <= dt(e['start']) <= after_cutoff]
+    entry['errorsBefore30d'] = len(before)
+    entry['errorsAfter30d'] = len(after)
+
+    first_after = next((e for e in errors if dt(e['start']) >= mtime), None)
+    if first_after:
+        hours = round((dt(first_after['start']) - mtime).total_seconds() / 3600, 1)
+        entry['firstErrorAfter'] = {'executionId': first_after['executionId'], 'start': first_after['start'], 'hoursAfter': hours}
+
+    # Quantos dos 30 dias "antes" realmente caem dentro do período com logs
+    # monitorados: sem isso, um arquivo alterado antes do início do dataset
+    # teria "0 erros antes" apenas por falta de dado, não por estabilidade —
+    # e qualquer erro depois pareceria um aumento sem ser.
+    before_coverage_start = max(mtime - timedelta(days=30), period_start_dt) if period_start_dt else mtime
+    covered_days_before = max(0, (mtime - before_coverage_start).days)
+
+    if days_since < 2:
+        entry['signal'] = 'DADOS_INSUFICIENTES'
+    elif covered_days_before < 10:
+        entry['signal'] = 'SEM_BASELINE'
+    else:
+        days_after = max(1, (after_cutoff - mtime).days)
+        rate_before = len(before) / 30
+        rate_after = len(after) / days_after
+        entry['signal'] = 'AUMENTOU' if (len(after) >= 2 and rate_after > rate_before * 1.5) else 'SEM_MUDANCA'
+    return entry
+
+
 def _alert_message(state, run):
     when = dt(run['scheduledDatetime']).strftime('%d/%m %H:%M')
     return {
@@ -327,6 +382,7 @@ def build_dataset(mode='90d'):
                           executions=0, events=0, vmSnapshots=0, error=None,
                           startedAt=datetime.now().isoformat(timespec='seconds'), finishedAt=None)
     issues = []
+    now = datetime.now()
     window_start, window_end = _window_bounds(mode)
     _build_status.update(windowStart=window_start.isoformat() if window_start else None,
                           windowEnd=window_end.isoformat())
@@ -441,8 +497,12 @@ def build_dataset(mode='90d'):
     # ------------------------------------------------------------------
     _build_status.update(phase='calculando indicadores', percent=82)
     aggregates={}
+    dependency_status={}
+    period_start_dt = dt(min(e['start'] for e in executions)) if executions else None
     for rpa in rpas:
         rid=rpa['rpaId']; exs=[e for e in executions if e['rpaId']==rid]
+        if rpa.get('dependencyFiles'):
+            dependency_status[rid] = [_dependency_file_status(d, exs, now, period_start_dt) for d in rpa['dependencyFiles']]
         durations=[e['durationMin'] for e in exs]
         by_day=defaultdict(list)
         for e in exs: by_day[e['start'][:10]].append(e)
@@ -517,6 +577,7 @@ def build_dataset(mode='90d'):
         'rpas':rpas,'schedules':schedules,'executions':executions,
         'eventsByExecution':dict(events_by_exec),'vmContextByExecution':vm_context,
         'rpaAggregates':aggregates,'recurrenceByExecution':recurrence,'vmLatest':vm_latest,
+        'dependencyStatus':dependency_status,
         'loadIssues': issues[:200],
         'loadStats': {
             'mode': mode,

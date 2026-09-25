@@ -60,6 +60,11 @@
             <div class="panel-body" id="related"></div>
         </section>
     </div>
+
+    <section class="panel">
+        <div class="panel-head"><h2>Arquivos e dependências</h2><span class="section-note">Última alteração × início dos erros — correlação, nunca causa confirmada</span></div>
+        <div class="panel-body" id="dependencies"></div>
+    </section>
 </main>
     <script src="assets/observability-data.js"></script>
     <script src="assets/observability-core.js"></script>
@@ -155,5 +160,37 @@ if (!ex) {
 
     const related=U.D.recurrenceByExecution[executionId]||[];
     document.querySelector('#related').innerHTML=related.length?`<div class="mini-list">${related.map(x=>`<div class="mini-item clickable" onclick="RPAUI.openInvestigation('${x.executionId}')"><strong class="mono">${x.executionId}</strong><span class="muted">${U.fmtDateTime(x.start)} · ${U.esc(x.step)} · ${x.durationMin} min · ${U.esc(x.machine)}</span></div>`).join('')}</div>`:'<div class="empty">Não há recorrências equivalentes na janela analisada.</div>';
+
+    // Arquivos de dependência da RPA (base cadastral, não log): cruza a data
+    // de última alteração com a linha do tempo de erros da própria RPA.
+    // Sempre rotulado como correlação candidata — nunca como causa confirmada.
+    const deps = U.D.dependencyStatus?.[ex.rpaId] || [];
+    const signalNote = {
+        AUMENTOU: null, // renderizado como destaque abaixo
+        SEM_MUDANCA: 'Sem indício de mudança no padrão de erros após esta alteração.',
+        SEM_BASELINE: 'Arquivo alterado antes do início do período monitorado — não há histórico suficiente antes da alteração para comparar.',
+        DADOS_INSUFICIENTES: 'Alterado há menos de 2 dias — ainda não há execuções suficientes desde então para avaliar impacto.',
+        SEM_DADOS: 'Sem dados suficientes para avaliar.',
+    };
+    document.querySelector('#dependencies').innerHTML = deps.length ? `<div class="mini-list">${deps.map(d => {
+        if (!d.exists) {
+            return `<div class="mini-item"><strong>${U.esc(d.label)}</strong><div class="step-meta mono">${U.esc(d.path)}</div><div class="step-meta">Arquivo não encontrado no caminho cadastrado.</div></div>`;
+        }
+        const head = `<strong>${U.esc(d.label)}</strong><div class="step-meta mono">${U.esc(d.path)}</div><div class="step-meta">Última alteração: ${U.fmtDateTime(d.lastModified)} · há ${d.daysSinceModification} dia(s)</div>`;
+        if (d.signal === 'AUMENTOU') {
+            const first = d.firstErrorAfter;
+            return `<div class="mini-item">${head}
+                <div class="callout warning" style="margin-top:8px">
+                    <strong>Correlação candidata</strong><br>
+                    ${d.errorsBefore30d} erro(s) nos 30 dias anteriores à alteração · ${d.errorsAfter30d} erro(s) nos dias seguintes.
+                    ${first ? ` Primeiro erro após a alteração: <span class="mono clickable" onclick="RPAUI.openInvestigation('${first.executionId}')">${first.executionId}</span>, ${first.hoursAfter}h depois.` : ''}
+                    Correlação temporal — confirme se a alteração é a causa antes de agir.
+                </div>
+            </div>`;
+        }
+        return `<div class="mini-item">${head}<div class="step-meta" style="margin-top:6px">${signalNote[d.signal] || ''}</div></div>`;
+    }).join('')}</div>` : '<div class="empty">Nenhum arquivo de dependência cadastrado para esta RPA.</div>';
 }
-</script>\n</body>\n</html>
+</script>
+</body>
+</html>

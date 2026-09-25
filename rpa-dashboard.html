@@ -72,4 +72,6 @@ if(!rpa){document.body.innerHTML='<main class="page"><div class="empty">RPA não
     function renderTable(){const n=Number(period.value);const cutoff=new Date(U.D.periodEnd+'T23:59:59');cutoff.setDate(cutoff.getDate()-n+1);let rows=U.D.executions.filter(x=>x.rpaId===rpaId && new Date(x.start)>=cutoff);if(status.value!=='ALL')rows=rows.filter(x=>x.status===status.value);const q=search.value.trim().toLowerCase();if(q)rows=rows.filter(x=>(x.executionId+' '+x.machine).toLowerCase().includes(q));rows.sort((a,b)=>b.start.localeCompare(a.start));document.querySelector('#tableCount').textContent=`${rows.length} execução(ões)`;document.querySelector('#executions').innerHTML=rows.map(x=>`<tr><td class="mono">${x.executionId}</td><td class="nowrap">${U.fmtDateTime(x.start)}</td><td>${U.statusBadge(x.status)}</td><td>${x.durationMin.toFixed(1)} min</td><td>${x.processedItems}/${x.totalItems}</td><td>${x.retryCount}</td><td>${x.deadlineCompliance}</td><td class="mono">${U.esc(x.machine)}</td><td class="nowrap"><button class="btn" onclick="RPAUI.openInvestigation('${x.executionId}')">Investigar</button> <button class="btn" onclick="RPAUI.openDiagnostic('${x.executionId}')">Diagnóstico</button></td></tr>`).join('')||'<tr><td colspan="9" class="empty">Sem execuções para o filtro.</td></tr>';}
     period.addEventListener('change',()=>{renderCharts();renderTable()});status.addEventListener('change',renderTable);search.addEventListener('input',renderTable);renderCharts();renderTable();
 }
-</script>\n</body>\n</html>
+</script>
+</body>
+</html>

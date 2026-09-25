@@ -120,4 +120,6 @@ if(!ex){document.body.innerHTML='<main class="page"><div class="empty">Execuçã
     const same=U.D.executions.filter(x=>x.rpaId===ex.rpaId).sort((a,b)=>a.start.localeCompare(b.start)); const idx=same.findIndex(x=>x.executionId===executionId); const neighbors=same.slice(Math.max(0,idx-4),Math.min(same.length,idx+5));
     document.querySelector('#neighbors').innerHTML=neighbors.map(x=>`<tr class="${x.executionId===executionId?'WARNING':''}"><td class="mono">${x.executionId}</td><td>${U.fmtDateTime(x.start)}</td><td>${U.statusBadge(x.status)}</td><td>${x.durationMin.toFixed(1)} min</td><td>${x.retryCount}</td><td class="mono">${U.esc(x.machine)}</td><td><button class="btn" onclick="RPAUI.openInvestigation('${x.executionId}')">Investigar</button></td></tr>`).join('');
 }
-</script>\n</body>\n</html>
+</script>
+</body>
+</html>
