@@ -521,9 +521,19 @@
             margin-bottom: 14px;
         }
 
+        /* Cada grade de KPIs tem uma contagem fixa de cards conhecida —
+           coluna por coluna sem sobrar linha incompleta (que deixaria vão
+           vazio, o mesmo problema já corrigido no .grid-main). */
+        #alertKpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        #vmKpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+
         .grid-main {
             grid-template-columns: minmax(0, 1.65fr) minmax(320px, 0.8fr);
-            align-items: start;
+            /* stretch (não start): quando as duas colunas têm alturas de
+               conteúdo bem diferentes, a coluna mais curta cresce dentro do
+               próprio card (com padding sobrando) em vez de deixar um vão de
+               fundo de página abaixo dela. */
+            align-items: stretch;
         }
 
         .grid-2 {
@@ -1124,6 +1134,15 @@
             font-variant-numeric: tabular-nums;
         }
 
+        /* 11 VMs em lista única ficariam altas e desproporcionais ao lado de
+           qualquer outro card — em grade, ocupam a largura toda com poucas
+           linhas, sem sobra de espaço vazio. */
+        .vm-utilization-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 18px 28px;
+        }
+
         /* ---------------------------------------------------------------------
            Diagnóstico / step timeline
            ------------------------------------------------------------------ */
@@ -1547,7 +1566,7 @@
             .topbar { padding: 0 16px; }
             .snapshot-pill { display: none; }
             .search-box { flex: 1; width: auto; }
-            .grid-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .grid-kpis, #alertKpis, #vmKpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .vm-grid { grid-template-columns: 1fr; }
             .page-heading { flex-direction: column; }
             .step-row { grid-template-columns: 28px 1fr 80px; }
@@ -1556,7 +1575,7 @@
         }
 
         @media (max-width: 480px) {
-            .grid-kpis { grid-template-columns: 1fr; }
+            .grid-kpis, #alertKpis, #vmKpis { grid-template-columns: 1fr; }
             .detail-hero { grid-template-columns: 1fr; }
         }
     </style>
@@ -1739,30 +1758,25 @@
                         </div>
                     </article>
 
-                    <div class="grid grid-main">
-                        <div class="grid" style="gap:14px">
-                            <article class="card">
-                                <div class="card-header">
-                                    <div>
-                                        <h2>Ociosidade das VMs ao longo do tempo</h2>
-                                        <p>Percentual médio de tempo sem nenhuma execução em andamento, por dia, na frota inteira.</p>
-                                    </div>
-                                </div>
-                                <div class="card-body" id="vmIdleTrendChart"></div>
-                            </article>
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h2>Ociosidade das VMs ao longo do tempo</h2>
+                                <p>Percentual médio de tempo sem nenhuma execução em andamento, por dia, na frota inteira.</p>
+                            </div>
                         </div>
-                        <div class="grid" style="gap:14px">
-                            <article class="card">
-                                <div class="card-header">
-                                    <div>
-                                        <h2>Utilização de VMs por RPA</h2>
-                                        <p>Ocupação inferida das execuções reais; quem mais consome cada VM.</p>
-                                    </div>
-                                </div>
-                                <div class="card-body" id="vmUtilizationList"></div>
-                            </article>
+                        <div class="card-body" id="vmIdleTrendChart"></div>
+                    </article>
+
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h2>Utilização de VMs por RPA</h2>
+                                <p>Ocupação inferida das execuções reais; quem mais consome cada VM.</p>
+                            </div>
                         </div>
-                    </div>
+                        <div class="card-body vm-utilization-grid" id="vmUtilizationList"></div>
+                    </article>
 
                     <div class="grid grid-main">
                         <div class="grid" style="gap:14px">
@@ -2991,7 +3005,7 @@
                     : (topRpa ? escapeHtml(topRpa.rpaName) : 'Sem execuções no período');
                 const tip = `${escapeHtml(vm.machine)}<br>${vm.byRpa.map(r => `${escapeHtml(r.rpaName)}: ${r.percent}%`).join('<br>') || 'Sem execuções'}${vm.maxConcurrency > 1 ? `<br>Pico de ${vm.maxConcurrency} execuções simultâneas` : ''}`;
                 return `
-                    <div style="margin:12px 0" data-tip="${tip}">
+                    <div data-tip="${tip}">
                         <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:11px">
                             <span class="mono">${escapeHtml(vm.machine)}</span>
                             <strong>${occupiedPct.toFixed(1)}% ocupada</strong>
