@@ -1732,117 +1732,115 @@
 
                     <div class="grid grid-kpis" id="overviewKpis"></div>
 
-                    <article class="card">
-                        <div class="card-header">
-                            <div>
-                                <h2>Timeline das execuções</h2>
-                                <p>Execuções do dia do snapshot, agrupadas por hora; clique em uma célula para abrir a auditoria das etapas.</p>
+                    <div class="grid" style="gap:14px">
+                        <article class="card">
+                            <div class="card-header">
+                                <div>
+                                    <h2>Timeline das execuções</h2>
+                                    <p>Execuções do dia do snapshot, agrupadas por hora; clique em uma célula para abrir a auditoria das etapas.</p>
+                                </div>
+                                <span class="badge primary" id="timelineCountBadge"></span>
                             </div>
-                            <span class="badge primary" id="timelineCountBadge"></span>
-                        </div>
-                        <div class="card-body">
-                            <div class="timeline-shell" id="timelineContainer"></div>
-                        </div>
-                    </article>
-
-                    <article class="card">
-                        <div class="card-header">
-                            <div>
-                                <h2>Padrão histórico por horário</h2>
-                                <p>Erros por RPA × hora do dia, somados em todo o período carregado — revela horários que concentram risco, não só o dia de hoje.</p>
+                            <div class="card-body">
+                                <div class="timeline-shell" id="timelineContainer"></div>
                             </div>
-                            <span class="badge neutral" id="historicalHeatmapBadge"></span>
-                        </div>
-                        <div class="card-body">
-                            <div class="heatmap-wrap" id="historicalHeatmap"></div>
-                        </div>
-                    </article>
+                        </article>
 
-                    <article class="card">
-                        <div class="card-header">
-                            <div>
-                                <h2>Ociosidade das VMs ao longo do tempo</h2>
-                                <p>Percentual médio de tempo sem nenhuma execução em andamento, por dia, na frota inteira.</p>
+                        <article class="card">
+                            <div class="card-header">
+                                <div>
+                                    <h2>Padrão histórico por horário</h2>
+                                    <p>Erros por RPA × hora do dia, somados em todo o período carregado — revela horários que concentram risco, não só o dia de hoje.</p>
+                                </div>
+                                <span class="badge neutral" id="historicalHeatmapBadge"></span>
                             </div>
-                        </div>
-                        <div class="card-body" id="vmIdleTrendChart"></div>
-                    </article>
-
-                    <article class="card">
-                        <div class="card-header">
-                            <div>
-                                <h2>Utilização de VMs por RPA</h2>
-                                <p>Ocupação inferida das execuções reais; quem mais consome cada VM.</p>
+                            <div class="card-body">
+                                <div class="heatmap-wrap" id="historicalHeatmap"></div>
                             </div>
-                        </div>
-                        <div class="card-body vm-utilization-grid" id="vmUtilizationList"></div>
-                    </article>
+                        </article>
 
-                    <div class="grid grid-main">
-                        <div class="grid" style="gap:14px">
-                            <article class="card">
-                                <div class="card-header">
-                                    <div>
-                                        <h2>Estado operacional das RPAs</h2>
-                                        <p>Última execução, último sucesso, duração, retries e VM.</p>
-                                    </div>
-                                    <span class="badge neutral">Clique para diagnosticar</span>
+                        <article class="card">
+                            <div class="card-header">
+                                <div>
+                                    <h2>Ociosidade das VMs ao longo do tempo</h2>
+                                    <p>Percentual médio de tempo sem nenhuma execução em andamento, por dia, na frota inteira.</p>
                                 </div>
-                                <div class="table-wrap">
-                                    <table>
-                                        <thead>
-                                            <tr>
-                                                <th>RPA</th>
-                                                <th>Estado</th>
-                                                <th>Última execução</th>
-                                                <th>Último sucesso</th>
-                                                <th>Duração</th>
-                                                <th>Retry</th>
-                                                <th>VM</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="rpaOpsTable"></tbody>
-                                    </table>
-                                </div>
-                            </article>
-                        </div>
+                            </div>
+                            <div class="card-body" id="vmIdleTrendChart"></div>
+                        </article>
 
-                        <div class="grid" style="gap:14px">
-                            <article class="card">
-                                <div class="card-header">
-                                    <div>
-                                        <h2>Fila de incidentes</h2>
-                                        <p>Falhas recentes ordenadas por recência.</p>
-                                    </div>
-                                    <span class="badge danger" id="openIncidentBadge">0 abertas</span>
+                        <article class="card">
+                            <div class="card-header">
+                                <div>
+                                    <h2>Utilização de VMs por RPA</h2>
+                                    <p>Ocupação inferida das execuções reais; quem mais consome cada VM.</p>
                                 </div>
-                                <div class="card-body">
-                                    <div class="incident-list" id="incidentQueue"></div>
-                                </div>
-                            </article>
+                            </div>
+                            <div class="card-body vm-utilization-grid" id="vmUtilizationList"></div>
+                        </article>
 
-                            <article class="card">
-                                <div class="card-header">
-                                    <div>
-                                        <h2>Saúde das VMs</h2>
-                                        <p>Snapshot atual de CPU, memória, disco e RDP.</p>
-                                    </div>
-                                    <button class="action-button" data-go-page="vms">Ver todas</button>
+                        <article class="card">
+                            <div class="card-header">
+                                <div>
+                                    <h2>Estado operacional das RPAs</h2>
+                                    <p>Última execução, último sucesso, duração, retries e VM.</p>
                                 </div>
-                                <div class="card-body" id="vmCompactList"></div>
-                            </article>
+                                <span class="badge neutral">Clique para diagnosticar</span>
+                            </div>
+                            <div class="table-wrap">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>RPA</th>
+                                            <th>Estado</th>
+                                            <th>Última execução</th>
+                                            <th>Último sucesso</th>
+                                            <th>Duração</th>
+                                            <th>Retry</th>
+                                            <th>VM</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="rpaOpsTable"></tbody>
+                                </table>
+                            </div>
+                        </article>
+                    </div>
 
-                            <article class="card">
-                                <div class="card-header">
-                                    <div>
-                                        <h2>Qualidade dos dados</h2>
-                                        <p>Arquivos de log ignorados ou parcialmente inválidos na carga atual.</p>
-                                    </div>
-                                    <span class="badge neutral" id="qualityBadge">0 problemas</span>
+                    <div class="grid grid-3" style="margin-top:14px">
+                        <article class="card">
+                            <div class="card-header">
+                                <div>
+                                    <h2>Fila de incidentes</h2>
+                                    <p>Falhas recentes ordenadas por recência.</p>
                                 </div>
-                                <div class="card-body" id="dataQualityList"></div>
-                            </article>
-                        </div>
+                                <span class="badge danger" id="openIncidentBadge">0 abertas</span>
+                            </div>
+                            <div class="card-body">
+                                <div class="incident-list" id="incidentQueue"></div>
+                            </div>
+                        </article>
+
+                        <article class="card">
+                            <div class="card-header">
+                                <div>
+                                    <h2>Saúde das VMs</h2>
+                                    <p>Snapshot atual de CPU, memória, disco e RDP.</p>
+                                </div>
+                                <button class="action-button" data-go-page="vms">Ver todas</button>
+                            </div>
+                            <div class="card-body" id="vmCompactList"></div>
+                        </article>
+
+                        <article class="card">
+                            <div class="card-header">
+                                <div>
+                                    <h2>Qualidade dos dados</h2>
+                                    <p>Arquivos de log ignorados ou parcialmente inválidos na carga atual.</p>
+                                </div>
+                                <span class="badge neutral" id="qualityBadge">0 problemas</span>
+                            </div>
+                            <div class="card-body" id="dataQualityList"></div>
+                        </article>
                     </div>
                 </section>
 
