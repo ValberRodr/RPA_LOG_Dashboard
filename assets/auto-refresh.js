@@ -28,9 +28,23 @@
         if(badge) badge.textContent = `Dados dos logs • atualização em ${min}:${String(sec).padStart(2,'0')}`;
     }
 
+    function doRefresh(){
+        // index.html expõe um caminho de refresh incremental (fetch + re-render,
+        // sem reload de página, preservando filtros/scroll/aba ativa). As demais
+        // telas (auditoria/investigação/diagnóstico/dashboard da RPA) ainda não
+        // implementam esse pipeline e caem no reload tradicional.
+        if (typeof window.RPA_INCREMENTAL_REFRESH === 'function') {
+            window.RPA_INCREMENTAL_REFRESH();
+            loadedAt.setTime(Date.now());
+            setTimeout(doRefresh, REFRESH_MS);
+        } else {
+            location.reload();
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', ()=>{
         tick();
         setInterval(tick, 1000);
-        setTimeout(()=>location.reload(), REFRESH_MS);
+        setTimeout(doRefresh, REFRESH_MS);
     });
 })();

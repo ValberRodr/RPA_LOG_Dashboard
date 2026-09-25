@@ -341,6 +341,92 @@
             background: var(--panel-2);
         }
 
+        .load-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 8px 6px 12px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--panel);
+        }
+
+        .load-toggle {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 12px;
+            color: var(--text-2);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .load-toggle input {
+            accent-color: var(--primary);
+            width: 14px;
+            height: 14px;
+        }
+
+        .btn-reload {
+            border: 1px solid var(--border-strong);
+            background: var(--panel-2);
+            color: var(--text);
+            font: 600 12px/1 inherit;
+            padding: 8px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background var(--transition), border-color var(--transition);
+        }
+
+        .btn-reload:hover { background: var(--panel-3); border-color: var(--primary); }
+        .btn-reload:disabled { opacity: .55; cursor: progress; }
+
+        .load-progress {
+            position: absolute;
+            left: 0; right: 0; bottom: -1px;
+            height: 3px;
+            background: transparent;
+            display: none;
+        }
+
+        .load-progress.active { display: block; }
+
+        .load-progress-fill {
+            height: 100%;
+            width: 0%;
+            background: var(--primary);
+            transition: width .25s ease;
+        }
+
+        .load-progress-label {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 28px;
+            font-size: 11.5px;
+            color: var(--text-2);
+            background: var(--bg-soft);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .load-progress-label.active { display: flex; }
+
+        .quality-row {
+            display: grid;
+            grid-template-columns: 1.4fr 1fr 1fr 1fr;
+            gap: 10px;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 12.5px;
+        }
+
+        .quality-row:last-child { border-bottom: none; }
+        .quality-row .q-file { color: var(--text); font-weight: 600; word-break: break-word; }
+        .quality-row .q-meta { color: var(--text-3); font-size: 11px; }
+        .quality-row .q-error { color: var(--danger); }
+        .quality-row .q-action { color: var(--text-2); }
+
         .content {
             padding: 24px;
         }
@@ -1447,6 +1533,11 @@
                     <svg class="icon"><use href="#i-grid"></use></svg>
                     <span>Visão operacional</span>
                 </button>
+                <button class="nav-link" data-page="alerts">
+                    <svg class="icon"><use href="#i-triangle"></use></svg>
+                    <span>Alertas</span>
+                    <span class="count" id="navAlertCount">0</span>
+                </button>
                 <button class="nav-link" data-page="executions">
                     <svg class="icon"><use href="#i-activity"></use></svg>
                     <span>Execuções</span>
@@ -1497,7 +1588,15 @@
 
                 <div class="topbar-spacer"></div>
 
-                <div class="snapshot-pill" title="Os dados exibidos são o último snapshot do conjunto fictício">
+                <div class="load-control">
+                    <label class="load-toggle" title="Só entra em vigor ao clicar em Recarregar dados">
+                        <input type="checkbox" id="fullHistoryToggle">
+                        <span>Histórico completo</span>
+                    </label>
+                    <button class="btn-reload" id="reloadButton" type="button">Recarregar dados</button>
+                </div>
+
+                <div class="snapshot-pill" id="periodPill" title="Período de logs efetivamente carregado">
                     <svg class="icon"><use href="#i-clock"></use></svg>
                     <span id="snapshotLabel">Snapshot</span>
                 </div>
@@ -1509,7 +1608,12 @@
                 <button class="icon-button" id="themeButton" aria-label="Alternar tema" title="Alternar tema">
                     <svg class="icon" id="themeIcon"><use href="#i-sun"></use></svg>
                 </button>
+
+                <div class="load-progress" id="loadProgress" aria-hidden="true">
+                    <div class="load-progress-fill" id="loadProgressFill"></div>
+                </div>
             </header>
+            <div class="load-progress-label" id="loadProgressLabel"></div>
 
             <main class="content">
                 <!-- =========================================================
@@ -1603,8 +1707,68 @@
                                 </div>
                                 <div class="card-body" id="vmCompactList"></div>
                             </article>
+
+                            <article class="card">
+                                <div class="card-header">
+                                    <div>
+                                        <h2>Qualidade dos dados</h2>
+                                        <p>Arquivos de log ignorados ou parcialmente inválidos na carga atual.</p>
+                                    </div>
+                                    <span class="badge neutral" id="qualityBadge">0 problemas</span>
+                                </div>
+                                <div class="card-body" id="dataQualityList"></div>
+                            </article>
                         </div>
                     </div>
+                </section>
+
+                <!-- =========================================================
+                     PÁGINA — CENTRAL DE ALERTAS
+                     ======================================================= -->
+                <section class="page" id="page-alerts">
+                    <div class="page-heading">
+                        <div>
+                            <div class="eyebrow">CENTRAL DE ALERTAS</div>
+                            <h1>Alertas priorizados do parque</h1>
+                            <p>Agenda esperada × execuções reais, SLA, retries e saúde de VM — deduplicado por RPA e regra, não uma lista crua de eventos.</p>
+                        </div>
+                        <div class="filter-bar">
+                            <select class="select-control" id="alertSeverityFilter" aria-label="Filtrar severidade">
+                                <option value="ALL">Todas as severidades</option>
+                                <option value="CRITICO">Crítico</option>
+                                <option value="ALTO">Alto</option>
+                                <option value="ATENCAO">Atenção</option>
+                                <option value="INFORMATIVO">Informativo</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-kpis" id="alertKpis"></div>
+
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h2>Fila de alertas</h2>
+                                <p>Ordenada por severidade; cada linha já é deduplicada, com contagem de ocorrências no período carregado.</p>
+                            </div>
+                        </div>
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Severidade</th>
+                                        <th>RPA / origem</th>
+                                        <th>Regra</th>
+                                        <th>Mensagem</th>
+                                        <th>Ocorrências</th>
+                                        <th>Última ocorrência</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="alertsTable"></tbody>
+                            </table>
+                        </div>
+                    </article>
                 </section>
 
                 <!-- =========================================================
@@ -1941,8 +2105,8 @@
     <div class="tooltip" id="tooltip"></div>
     <div class="toast" id="toast"></div>
 
-    <script src="assets/observability-data.js"></script>
-    <script src="assets/index-data.js"></script>
+    <script src="assets/observability-data.js?mode=90d"></script>
+    <script src="assets/index-data.js?mode=90d"></script>
     <script src="assets/auto-refresh.js"></script>
     <script>
         /* =====================================================================
@@ -2008,9 +2172,30 @@
                 CRITICAL: ['danger', 'CRÍTICO'],
                 CONNECTED: ['success', 'CONECTADO'],
                 DISCONNECTED: ['danger', 'DESCONECTADO'],
-                UNKNOWN: ['warning', 'DESCONHECIDO']
+                UNKNOWN: ['warning', 'DESCONHECIDO'],
+                // Vocabulário de 11 estados operacionais (Seção 12 do briefing enterprise).
+                AGUARDANDO: ['neutral', 'AGUARDANDO'],
+                EXECUTANDO: ['info', 'EXECUTANDO'],
+                SUCESSO: ['success', 'SUCESSO'],
+                ATRASADA: ['warning', 'ATRASADA'],
+                NAO_INICIOU: ['danger', 'NÃO INICIOU'],
+                DURACAO_ANORMAL: ['warning', 'DURAÇÃO ANORMAL'],
+                SLA_EM_RISCO: ['warning', 'SLA EM RISCO'],
+                SLA_ESTOURADO: ['danger', 'SLA ESTOURADO'],
+                VM_DEGRADADA: ['danger', 'VM DEGRADADA']
             };
             const [cls, label] = map[status] || ['neutral', status];
+            return `<span class="badge ${cls}"><span class="dot"></span>${label}</span>`;
+        };
+
+        const severityBadge = (sev) => {
+            const map = {
+                CRITICO: ['danger', 'CRÍTICO'],
+                ALTO: ['warning', 'ALTO'],
+                ATENCAO: ['warning', 'ATENÇÃO'],
+                INFORMATIVO: ['info', 'INFORMATIVO']
+            };
+            const [cls, label] = map[sev] || ['neutral', sev];
             return `<span class="badge ${cls}"><span class="dot"></span>${label}</span>`;
         };
 
@@ -2099,7 +2284,7 @@
         $('#refreshButton').addEventListener('click', () => {
             const icon = $('#refreshButton .icon');
             icon.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }], { duration: 480 });
-            showToast('Visualizações atualizadas com o snapshot carregado.');
+            reloadData(DATA.loadStats?.mode || '90d');
         });
 
         /* =====================================================================
@@ -2188,6 +2373,11 @@
                     footer: `${s.warningRpas} com atenção`, trend: s.criticalRpas ? 'Requer sustentação' : 'Sem bloqueios', trendClass: s.criticalRpas ? 'trend-negative' : 'trend-positive'
                 },
                 {
+                    icon: 'i-triangle', iconClass: 'danger', label: 'Não iniciou / SLA em risco', value: (s.notStarted || 0) + (s.slaAtRisk || 0),
+                    footer: `${s.notStarted || 0} não iniciou • ${s.slaAtRisk || 0} SLA em risco`,
+                    trend: (s.notStarted || 0) ? 'Verifique a agenda' : 'Agenda em dia', trendClass: (s.notStarted || 0) ? 'trend-negative' : 'trend-positive'
+                },
+                {
                     icon: 'i-server', iconClass: 'info', label: 'VMs disponíveis', value: `${DATA.vms.filter(v => v.rdp === 'CONNECTED').length}/${s.totalVms}`,
                     footer: 'Conectividade RDP', trend: `${DATA.vms.filter(v => v.health !== 'HEALTHY').length} degradadas`, trendClass: 'trend-warning'
                 },
@@ -2216,11 +2406,18 @@
             `).join('');
         }
 
-        function populateRpaFilter() {
+        function populateRpaFilterOptions() {
             const select = $('#overviewRpaFilter');
-            select.innerHTML += DATA.rpas.map(r => `<option value="${escapeHtml(r.process)}">${escapeHtml(r.name)}</option>`).join('');
-            select.addEventListener('change', renderRpaOpsTable);
+            const current = select.value;
+            select.innerHTML = `<option value="ALL">Todas as RPAs</option>` +
+                DATA.rpas.map(r => `<option value="${escapeHtml(r.process)}">${escapeHtml(r.name)}</option>`).join('');
+            if ([...select.options].some(o => o.value === current)) select.value = current;
+        }
+
+        function bindFilterListeners() {
+            $('#overviewRpaFilter').addEventListener('change', renderRpaOpsTable);
             $('#overviewStatusFilter').addEventListener('change', renderRpaOpsTable);
+            $('#alertSeverityFilter')?.addEventListener('change', renderAlerts);
         }
 
         function renderRpaOpsTable() {
@@ -2228,22 +2425,25 @@
             const statusFilter = $('#overviewStatusFilter').value;
             const tbody = $('#rpaOpsTable');
 
-            const rank = { ERROR: 0, WARNING: 1, SUCCESS: 2 };
+            const stateRank = {
+                NAO_INICIOU: 0, SLA_ESTOURADO: 1, ERROR: 2, VM_DEGRADADA: 3, SLA_EM_RISCO: 4,
+                DURACAO_ANORMAL: 5, ATRASADA: 6, WARNING: 7, AGUARDANDO: 8, EXECUTANDO: 9, SUCESSO: 10
+            };
             const rows = [...DATA.rpas]
                 .filter(r => processFilter === 'ALL' || r.process === processFilter)
                 .filter(r => statusFilter === 'ALL' || r.lastStatus === statusFilter)
-                .sort((a, b) => rank[a.lastStatus] - rank[b.lastStatus] || a.name.localeCompare(b.name));
+                .sort((a, b) => (stateRank[a.state] ?? 9) - (stateRank[b.state] ?? 9) || a.name.localeCompare(b.name));
 
             tbody.innerHTML = rows.map(r => {
                 const durationRatio = r.lastDurationMin / Math.max(1, r.expectedDurationMin);
                 const durationClass = durationRatio > 1.4 ? 'trend-negative' : durationRatio > 1.15 ? 'trend-warning' : '';
                 return `
-                    <tr class="clickable-row" data-process="${escapeHtml(r.process)}" data-search-text="${escapeHtml((r.name + ' ' + r.process + ' ' + r.machine + ' ' + r.lastStatus).toLowerCase())}">
+                    <tr class="clickable-row" data-process="${escapeHtml(r.process)}" data-search-text="${escapeHtml((r.name + ' ' + r.process + ' ' + r.machine + ' ' + r.lastStatus + ' ' + r.state).toLowerCase())}">
                         <td>
                             <span class="cell-title">${escapeHtml(r.name)}</span>
                             <span class="cell-subtitle">${escapeHtml(r.process)}</span>
                         </td>
-                        <td>${statusBadge(r.lastStatus)}</td>
+                        <td>${statusBadge(r.state || r.lastStatus)}</td>
                         <td>${fmtDateTime(r.lastExecution)}</td>
                         <td>${fmtDateTime(r.lastSuccess)}</td>
                         <td class="${durationClass}"><strong>${r.lastDurationMin} min</strong><span class="cell-subtitle">esperado ~ ${r.expectedDurationMin} min</span></td>
@@ -2346,6 +2546,99 @@
                     <div style="text-align:right;font-size:11px">${vm.memory}% RAM</div>
                 </div>
             `).join('');
+        }
+
+        /* =====================================================================
+           RENDER — QUALIDADE DOS DADOS (Seção 25/49/50)
+           Torna visível na UI o que antes só existia no stderr do processo
+           Python: arquivos ignorados ou parcialmente inválidos na carga atual.
+           ===================================================================== */
+        function renderDataQuality() {
+            const issues = window.OBS_DATA?.loadIssues || [];
+            const badge = $('#qualityBadge');
+            if (badge) {
+                badge.textContent = issues.length ? `${issues.length} problema${issues.length === 1 ? '' : 's'}` : '0 problemas';
+                badge.className = `badge ${issues.length ? 'warning' : 'neutral'}`;
+            }
+            const target = $('#dataQualityList');
+            if (!target) return;
+            if (!issues.length) {
+                target.innerHTML = `<div class="empty-state">Nenhum arquivo inválido ou ignorado na carga atual.</div>`;
+                return;
+            }
+            target.innerHTML = issues.slice(0, 20).map(i => `
+                <div class="quality-row">
+                    <div class="q-file mono">${escapeHtml(i.file)}<div class="q-meta">${escapeHtml(i.path)}</div></div>
+                    <div class="q-meta">${escapeHtml(i.type)} • fase: ${escapeHtml(i.phase)}</div>
+                    <div class="q-error">${escapeHtml(i.error)}</div>
+                    <div class="q-action">${escapeHtml(i.action)}</div>
+                </div>
+            `).join('');
+        }
+
+        /* =====================================================================
+           RENDER — PERÍODO CARREGADO (Seção 20/21)
+           ===================================================================== */
+        function renderLoadPeriodLabel() {
+            const stats = DATA.loadStats;
+            const label = $('#snapshotLabel');
+            if (!label) return;
+            if (!stats) { label.textContent = `Snapshot ${fmtDateTime(DATA.snapshot)}`; return; }
+            if (stats.mode === 'full') {
+                label.textContent = 'Período carregado: histórico completo';
+            } else {
+                const start = stats.windowStart ? new Date(stats.windowStart + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
+                const end = stats.windowEnd ? new Date(stats.windowEnd + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
+                label.textContent = `Período carregado: últimos 90 dias (${start} → ${end})`;
+            }
+        }
+
+        /* =====================================================================
+           RENDER — CENTRAL DE ALERTAS (Seção 17)
+           ===================================================================== */
+        function renderAlerts() {
+            const all = DATA.alerts || [];
+            $('#navAlertCount').textContent = all.filter(a => a.severity === 'CRITICO' || a.severity === 'ALTO').length;
+
+            const counts = { CRITICO: 0, ALTO: 0, ATENCAO: 0, INFORMATIVO: 0 };
+            all.forEach(a => { counts[a.severity] = (counts[a.severity] || 0) + 1; });
+
+            const kpiTarget = $('#alertKpis');
+            if (kpiTarget) {
+                const kpis = [
+                    { icon: 'i-alert', iconClass: 'danger', label: 'Crítico', value: counts.CRITICO, footer: 'Requer ação imediata' },
+                    { icon: 'i-triangle', iconClass: 'warning', label: 'Alto', value: counts.ALTO, footer: 'Priorizar hoje' },
+                    { icon: 'i-clock', iconClass: 'warning', label: 'Atenção', value: counts.ATENCAO, footer: 'Monitorar' },
+                    { icon: 'i-grid', iconClass: 'info', label: 'Total deduplicado', value: all.length, footer: 'Agrupado por RPA + regra' }
+                ];
+                kpiTarget.innerHTML = kpis.map(k => `
+                    <article class="card kpi-card">
+                        <div class="kpi-top">
+                            <div><div class="kpi-label">${k.label}</div><div class="kpi-value">${k.value}</div></div>
+                            <div class="kpi-icon ${k.iconClass}"><svg class="icon"><use href="#${k.icon}"></use></svg></div>
+                        </div>
+                        <div class="kpi-footer"><span>${k.footer}</span><span></span></div>
+                    </article>
+                `).join('');
+            }
+
+            const filter = $('#alertSeverityFilter')?.value || 'ALL';
+            const rows = all.filter(a => filter === 'ALL' || a.severity === filter);
+            const tbody = $('#alertsTable');
+            if (!tbody) return;
+            tbody.innerHTML = rows.map(a => `
+                <tr data-search-text="${escapeHtml((a.rpaName || a.machine || '') + ' ' + a.rule + ' ' + a.message).toLowerCase()}">
+                    <td>${severityBadge(a.severity)}</td>
+                    <td><span class="cell-title">${escapeHtml(a.rpaName || 'Infraestrutura')}</span><span class="cell-subtitle mono">${escapeHtml(a.process || a.machine || '')}</span></td>
+                    <td><span class="mono">${escapeHtml(a.rule)}</span></td>
+                    <td>${escapeHtml(a.message)}</td>
+                    <td>${a.count}×</td>
+                    <td>${fmtDateTime(a.lastSeen)}</td>
+                    <td style="white-space:nowrap">${a.executionId ? `<button class="audit-action js-alert-audit" data-execution-id="${escapeHtml(a.executionId)}" type="button">Auditar</button>` : ''}</td>
+                </tr>
+            `).join('') || `<tr><td colspan="7"><div class="empty-state">Nenhum alerta nesta severidade, no período carregado.</div></td></tr>`;
+
+            $$('.js-alert-audit', tbody).forEach(btn => btn.addEventListener('click', () => openAuditExecution(btn.dataset.executionId)));
         }
 
         /* =====================================================================
@@ -2891,16 +3184,18 @@
         }
 
         /* =====================================================================
-           INICIALIZAÇÃO
+           RENDER — TUDO (idempotente; chamado no boot e a cada refresh)
            ===================================================================== */
-        function init() {
-            $('#snapshotLabel').textContent = `Snapshot ${fmtDateTime(DATA.snapshot)}`;
+        function renderAll() {
+            renderLoadPeriodLabel();
+            renderDataQuality();
             renderOverviewKpis();
-            populateRpaFilter();
+            populateRpaFilterOptions();
             renderRpaOpsTable();
             renderTimeline();
             renderIncidentQueue();
             renderVmCompactList();
+            renderAlerts();
 
             renderSuccessTrend();
             renderStatusComposition();
@@ -2920,12 +3215,123 @@
 
             renderDiagnostic(DATA.executionDetail);
             renderCatalog();
+        }
+
+        /* =====================================================================
+           CARREGAMENTO INCREMENTAL — 90 dias / histórico completo (Seções 20-23)
+           O botão "Recarregar dados" e o refresh automático de 20 minutos usam
+           este mesmo caminho: dispara /api/reload em segundo plano no servidor,
+           acompanha o progresso real por fase via /api/load-status, e só então
+           rebusca os dois arquivos de dados — sem jamais recarregar a página
+           (preserva página ativa, filtros e scroll).
+           ===================================================================== */
+        const PHASE_LABELS = {
+            'localizando arquivos': 'Localizando arquivos',
+            'filtrando período': 'Filtrando período',
+            'lendo logs de execução': 'Lendo logs de execução',
+            'lendo logs de etapas': 'Lendo logs de etapas',
+            'lendo telemetria das VMs': 'Lendo telemetria das VMs',
+            'vinculando execuções e agenda': 'Vinculando execuções e agenda',
+            'calculando indicadores': 'Calculando indicadores',
+            'atualizando visualizações': 'Atualizando visualizações',
+            'concluido': 'Concluído'
+        };
+
+        function setLoadProgress(status) {
+            const bar = $('#loadProgress');
+            const fill = $('#loadProgressFill');
+            const label = $('#loadProgressLabel');
+            if (!bar || !status) return;
+            bar.classList.add('active');
+            label.classList.add('active');
+            fill.style.width = `${status.percent || 0}%`;
+            const phaseText = PHASE_LABELS[status.phase] || status.phase;
+            label.textContent = `Atualizando dados — ${phaseText}… ${status.percent || 0}% · ${status.filesProcessed || 0}/${status.filesFound || 0} arquivos`;
+        }
+
+        function hideLoadProgress() {
+            $('#loadProgress')?.classList.remove('active');
+            $('#loadProgressLabel')?.classList.remove('active');
+        }
+
+        async function pollLoadStatus() {
+            const started = Date.now();
+            while (Date.now() - started < 60000) {
+                let status;
+                try {
+                    status = await fetch('/api/load-status', { cache: 'no-store' }).then(r => r.json());
+                } catch {
+                    return null; // servidor não disponível (aberto via file://, por exemplo)
+                }
+                setLoadProgress(status);
+                if (status.phase === 'concluido' || status.phase === 'erro') return status;
+                await new Promise(r => setTimeout(r, 350));
+            }
+            return null;
+        }
+
+        function fetchScript(src) {
+            return new Promise((resolve, reject) => {
+                const el = document.createElement('script');
+                el.src = `${src}?t=${Date.now()}`;
+                el.onload = () => { el.remove(); resolve(); };
+                el.onerror = () => { el.remove(); reject(new Error(`Falha ao carregar ${src}`)); };
+                document.head.appendChild(el);
+            });
+        }
+
+        let reloadInFlight = false;
+        async function reloadData(mode) {
+            if (reloadInFlight) return;
+            if (location.protocol !== 'http:' && location.protocol !== 'https:') {
+                showToast('Recarregar dados exige o servidor local (server.py). Abra via http://127.0.0.1:8765/.');
+                return;
+            }
+            reloadInFlight = true;
+            const reloadButton = $('#reloadButton');
+            if (reloadButton) reloadButton.disabled = true;
+            try {
+                await fetch(`/api/reload?mode=${mode}`, { cache: 'no-store' });
+                const finalStatus = await pollLoadStatus();
+                if (finalStatus && finalStatus.phase === 'erro') {
+                    showToast(`Falha ao atualizar dados: ${finalStatus.error || 'erro desconhecido'}.`);
+                    return;
+                }
+                await fetchScript('/assets/observability-data.js');
+                await fetchScript('/assets/index-data.js');
+                DATA = window.INDEX_DATA;
+                DATA.auditExecutions = buildAuditExecutions(window.OBS_DATA);
+                window.ACTIVE_EXECUTION_ID = DATA.executionDetail?.executionId || DATA.timeline?.[0]?.executionId || window.ACTIVE_EXECUTION_ID;
+                renderAll();
+                showToast(mode === 'full' ? 'Histórico completo carregado.' : 'Dados atualizados (últimos 90 dias).');
+            } catch (exc) {
+                showToast('Não foi possível atualizar os dados agora.');
+            } finally {
+                reloadInFlight = false;
+                if (reloadButton) reloadButton.disabled = false;
+                setTimeout(hideLoadProgress, 900);
+            }
+        }
+        // Ponto de integração usado pelo refresh automático de 20 minutos
+        // (assets/auto-refresh.js) para evitar um location.reload() cego.
+        window.RPA_INCREMENTAL_REFRESH = () => reloadData(DATA.loadStats?.mode || '90d');
+
+        /* =====================================================================
+           INICIALIZAÇÃO (uma única vez)
+           ===================================================================== */
+        function init() {
+            bindFilterListeners();
+            renderAll();
 
             const savedPage = sessionStorage.getItem('rpaOpsActivePage');
             if (savedPage && document.getElementById(`page-${savedPage}`)) goToPage(savedPage);
 
             $('#executionPeriod').addEventListener('change', () => {
                 showToast('No mock, o gráfico permanece nos 14 dias embutidos. Em produção, o filtro deve recarregar a série correspondente.');
+            });
+
+            $('#reloadButton').addEventListener('click', () => {
+                reloadData($('#fullHistoryToggle').checked ? 'full' : '90d');
             });
         }
 
