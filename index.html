@@ -1137,6 +1137,13 @@
         /* 11 VMs em lista única ficariam altas e desproporcionais ao lado de
            qualquer outro card — em grade, ocupam a largura toda com poucas
            linhas, sem sobra de espaço vazio. */
+        /* Chart.js precisa de um pai com altura definida — sem isso o canvas
+           cresce indefinidamente a cada redraw. */
+        .chart-canvas-wrap {
+            position: relative;
+            height: 260px;
+        }
+
         .vm-utilization-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -1946,7 +1953,7 @@
                                     <p>Percentual médio de tempo sem nenhuma execução em andamento, por dia, na frota inteira.</p>
                                 </div>
                             </div>
-                            <div class="card-body" id="vmIdleTrendChart"></div>
+                            <div class="card-body chart-canvas-wrap"><canvas id="vmIdleTrendChart"></canvas></div>
                         </article>
 
                         <article class="card">
@@ -2126,7 +2133,7 @@
                                 </div>
                                 <span class="badge success">Meta operacional ≥ 95%</span>
                             </div>
-                            <div class="card-body" id="successTrendChart"></div>
+                            <div class="card-body chart-canvas-wrap"><canvas id="successTrendChart"></canvas></div>
                         </article>
 
                         <article class="card">
@@ -2158,7 +2165,7 @@
                                     <p>Concentração diária e possíveis janelas de concorrência.</p>
                                 </div>
                             </div>
-                            <div class="card-body" id="hourlyLoad"></div>
+                            <div class="card-body chart-canvas-wrap"><canvas id="hourlyLoad"></canvas></div>
                         </article>
                     </div>
 
@@ -2432,6 +2439,7 @@
     <div class="tooltip" id="tooltip"></div>
     <div class="toast" id="toast"></div>
 
+    <script src="assets/chart.umd.min.js"></script>
     <script src="assets/observability-data.js?mode=90d"></script>
     <script src="assets/index-data.js?mode=90d"></script>
     <script src="assets/auto-refresh.js"></script>
@@ -2540,6 +2548,50 @@
 
         const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
+        /* =====================================================================
+           CHART.JS — paleta lida das variáveis CSS atuais (acompanha o tema
+           claro/escuro) e registro de instâncias (evita "Canvas is already in
+           use" ao rerenderizar depois de um refresh incremental).
+           ===================================================================== */
+        const chartRegistry = {};
+        function themeColor(varName, fallback) {
+            const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+            return v || fallback;
+        }
+        function chartPalette() {
+            return {
+                primary: themeColor('--primary', '#6c68e7'),
+                success: themeColor('--success', '#35c58b'),
+                warning: themeColor('--warning', '#f2b84b'),
+                danger: themeColor('--danger', '#f06464'),
+                info: themeColor('--info', '#63a4ff'),
+                text: themeColor('--text-2', '#a8adbd'),
+                textMuted: themeColor('--text-3', '#747a8e'),
+                grid: themeColor('--border', 'rgba(255,255,255,.08)'),
+                panel: themeColor('--panel', '#1c1e25'),
+            };
+        }
+        function drawChart(canvasId, config) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return null;
+            if (chartRegistry[canvasId]) chartRegistry[canvasId].destroy();
+            const chart = new Chart(canvas, config);
+            chartRegistry[canvasId] = chart;
+            return chart;
+        }
+        function tooltipBase(p) {
+            return {
+                backgroundColor: 'rgba(15,17,23,.96)', borderColor: p.grid, borderWidth: 1,
+                padding: 10, titleColor: '#fff', bodyColor: p.text, displayColors: false,
+                titleFont: { weight: '700', size: 11.5 }, bodyFont: { size: 11 }, boxPadding: 4,
+            };
+        }
+        if (window.Chart) {
+            Chart.defaults.font.family = "Inter, system-ui, -apple-system, sans-serif";
+            Chart.defaults.font.size = 11;
+            Chart.defaults.plugins.legend.display = false;
+        }
+
         function showToast(message) {
             const toast = $('#toast');
             toast.textContent = message;
@@ -2619,7 +2671,17 @@
             root.dataset.theme = next;
             $('#themeIcon use').setAttribute('href', next === 'dark' ? '#i-sun' : '#i-moon');
             localStorage.setItem('rpa-monitor-theme', next);
+            // Cores do Chart.js são fixadas na criação — sem isso os gráficos
+            // ficariam com a paleta do tema anterior até o próximo reload.
+            redrawThemedCharts();
         });
+
+        function redrawThemedCharts() {
+            if (!window.Chart) return;
+            renderSuccessTrend();
+            renderHourlyLoad();
+            renderVmIdleTrend();
+        }
 
         const savedTheme = localStorage.getItem('rpa-monitor-theme');
         if (savedTheme) {
@@ -3041,14 +3103,51 @@
            RENDER — EXECUÇÕES
            ===================================================================== */
         function renderSuccessTrend() {
-            $('#successTrendChart').innerHTML = lineChart(DATA.trend, 'successRate', {
-                min: 75,
-                max: 100,
-                label: 'Taxa diária de sucesso'
-            });
-            $$('.interactive-svg [data-tip]').forEach(point => {
-                point.addEventListener('mousemove', e => showTooltip(e, point.dataset.tip));
-                point.addEventListener('mouseleave', hideTooltip);
+            const p = chartPalette();
+            const rows = DATA.trend;
+            drawChart('successTrendChart', {
+                type: 'line',
+                data: {
+                    labels: rows.map(r => r.date),
+                    datasets: [
+                        {
+                            label: 'Taxa de sucesso',
+                            data: rows.map(r => r.successRate),
+                            borderColor: p.primary, backgroundColor: p.primary + '26',
+                            fill: true, tension: .3, pointRadius: 3, pointHoverRadius: 5,
+                            pointBackgroundColor: p.primary, pointBorderColor: p.panel, pointBorderWidth: 1.5,
+                        },
+                        {
+                            label: 'Meta (95%)',
+                            data: rows.map(() => 95),
+                            borderColor: p.success, borderDash: [6, 4], borderWidth: 1.5,
+                            pointRadius: 0, pointHoverRadius: 0, fill: false,
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { display: true, position: 'top', align: 'end', labels: { boxWidth: 10, usePointStyle: true, color: p.textMuted, font: { size: 10.5 } } },
+                        tooltip: {
+                            ...tooltipBase(p), filter: item => item.datasetIndex === 0,
+                            callbacks: {
+                                title: items => items[0]?.label,
+                                label: ctx => {
+                                    const row = rows[ctx.dataIndex];
+                                    return [`Taxa de sucesso: ${row.successRate}%`, `${row.success} sucesso · ${row.warning} atenção · ${row.error} erro`];
+                                },
+                            },
+                        },
+                    },
+                    // 0-100 é o teto/piso real de uma taxa percentual — nunca clipa
+                    // um dia ruim para fora do gráfico (era o bug: min:75 fixo).
+                    scales: {
+                        y: { min: 0, max: 100, ticks: { callback: v => v + '%', color: p.textMuted }, grid: { color: p.grid } },
+                        x: { ticks: { color: p.textMuted, maxRotation: 0 }, grid: { display: false } },
+                    },
+                },
             });
         }
 
@@ -3098,22 +3197,31 @@
         }
 
         function renderHourlyLoad() {
+            const p = chartPalette();
             const buckets = Array.from({ length: 24 }, (_, h) => ({ hour: h, count: 0 }));
             DATA.timeline.forEach(run => buckets[Math.floor(run.startMinute / 60)].count++);
             const max = Math.max(...buckets.map(b => b.count), 1);
-            $('#hourlyLoad').innerHTML = `
-                <div style="height:230px;display:flex;align-items:flex-end;gap:5px;padding-top:15px">
-                    ${buckets.map(b => `
-                        <div style="flex:1;min-width:5px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:7px" data-tip="${String(b.hour).padStart(2,'0')}:00 • ${b.count} execuções">
-                            <div style="width:100%;max-width:20px;height:${Math.max(2, b.count/max*175)}px;border-radius:5px 5px 2px 2px;background:${b.count >= max*0.75 ? 'var(--warning)' : 'var(--primary)'}"></div>
-                            <span style="font-size:8px;color:var(--text-3)">${b.hour % 3 === 0 ? String(b.hour).padStart(2,'0') : ''}</span>
-                        </div>
-                    `).join('')}
-                </div>
-            `;
-            $$('#hourlyLoad [data-tip]').forEach(el => {
-                el.addEventListener('mousemove', e => showTooltip(e, el.dataset.tip));
-                el.addEventListener('mouseleave', hideTooltip);
+            drawChart('hourlyLoad', {
+                type: 'bar',
+                data: {
+                    labels: buckets.map(b => `${String(b.hour).padStart(2, '0')}h`),
+                    datasets: [{
+                        label: 'Execuções',
+                        data: buckets.map(b => b.count),
+                        backgroundColor: buckets.map(b => b.count >= max * .75 ? p.warning : p.primary),
+                        borderRadius: 4, maxBarThickness: 22,
+                    }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {
+                        tooltip: { ...tooltipBase(p), callbacks: { title: items => `${items[0].label}00`, label: ctx => `${ctx.parsed.y} execução${ctx.parsed.y === 1 ? '' : 'ões'}` } },
+                    },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { precision: 0, color: p.textMuted }, grid: { color: p.grid } },
+                        x: { ticks: { color: p.textMuted, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid: { display: false } },
+                    },
+                },
             });
         }
 
@@ -3188,13 +3296,30 @@
            RENDER — OCIOSIDADE E UTILIZAÇÃO DE VMs (Visão Geral)
            ===================================================================== */
         function renderVmIdleTrend() {
+            const p = chartPalette();
             const rows = (DATA.vmIdleTrend || []).filter(d => d.idlePercent !== null && d.idlePercent !== undefined);
-            $('#vmIdleTrendChart').innerHTML = rows.length
-                ? lineChart(rows, 'idlePercent', { label: 'Ociosidade média das VMs' })
-                : '<div class="empty-state">Sem dados suficientes no período.</div>';
-            $$('#vmIdleTrendChart .interactive-svg [data-tip]').forEach(point => {
-                point.addEventListener('mousemove', e => showTooltip(e, point.dataset.tip));
-                point.addEventListener('mouseleave', hideTooltip);
+            drawChart('vmIdleTrendChart', {
+                type: 'line',
+                data: {
+                    labels: rows.map(r => r.date),
+                    datasets: [{
+                        label: 'Ociosidade média',
+                        data: rows.map(r => r.idlePercent),
+                        borderColor: p.primary, backgroundColor: p.primary + '26',
+                        fill: true, tension: .3, pointRadius: 3, pointHoverRadius: 5,
+                        pointBackgroundColor: p.primary, pointBorderColor: p.panel, pointBorderWidth: 1.5,
+                    }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {
+                        tooltip: { ...tooltipBase(p), callbacks: { title: items => items[0]?.label, label: ctx => `Ociosidade: ${ctx.parsed.y}%` } },
+                    },
+                    scales: {
+                        y: { min: 0, max: 100, ticks: { callback: v => v + '%', color: p.textMuted }, grid: { color: p.grid } },
+                        x: { ticks: { color: p.textMuted, maxRotation: 0 }, grid: { display: false } },
+                    },
+                },
             });
         }
 
