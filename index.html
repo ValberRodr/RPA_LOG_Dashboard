@@ -662,6 +662,38 @@
             overflow: auto;
         }
 
+        /* Scrollbars do macOS ficam invisíveis até o hover/gesto — sem isso,
+           qualquer conteúdo mais largo que o card (tabelas densas, heatmap)
+           parece cortado/quebrado, não "role para o lado". Torna a barra
+           sempre visível, fina e discreta, em todo container rolável. */
+        .table-wrap, .heatmap-wrap, .timeline-shell, .load-progress {
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-strong) transparent;
+        }
+        .table-wrap::-webkit-scrollbar, .heatmap-wrap::-webkit-scrollbar, .timeline-shell::-webkit-scrollbar {
+            height: 8px;
+        }
+        .table-wrap::-webkit-scrollbar-track, .heatmap-wrap::-webkit-scrollbar-track, .timeline-shell::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .table-wrap::-webkit-scrollbar-thumb, .heatmap-wrap::-webkit-scrollbar-thumb, .timeline-shell::-webkit-scrollbar-thumb {
+            background: var(--border-strong);
+            border-radius: 999px;
+        }
+        .table-wrap::-webkit-scrollbar-thumb:hover, .heatmap-wrap::-webkit-scrollbar-thumb:hover, .timeline-shell::-webkit-scrollbar-thumb:hover {
+            background: var(--text-3);
+        }
+
+        /* Em navegadores/SOs com scrollbar overlay (some macOS + Chrome), a
+           barra acima nunca aparece de fato — este aviso de texto é a garantia
+           independente de plataforma de que "role para o lado" fica visível. */
+        .scroll-hint {
+            display: none;
+            margin-top: 6px;
+            font-size: 10.5px;
+            color: var(--text-3);
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
@@ -766,82 +798,115 @@
         .progress-fill.danger { background: var(--danger); }
 
         /* ---------------------------------------------------------------------
-           Timeline diária de execuções
+           Timeline diária de execuções — grade hora a hora, caixas de
+           tamanho fixo com farol de status (substitui as barras de largura
+           variável por duração: aqui o que importa é "quando e com que
+           estado", não a duração de cada execução).
            ------------------------------------------------------------------ */
         .timeline-shell {
             overflow-x: auto;
             padding-bottom: 6px;
         }
 
-        .timeline {
-            min-width: 850px;
-        }
-
-        .timeline-axis,
-        .timeline-row {
-            display: grid;
-            grid-template-columns: 180px 1fr;
-            min-height: 38px;
-        }
-
-        .timeline-axis {
-            min-height: 28px;
-            color: var(--text-3);
-            font-size: 10px;
-        }
-
-        .timeline-label {
+        .timeline-grid {
             display: flex;
+            flex-direction: column;
+            gap: 5px;
+            min-width: min-content;
+        }
+
+        .timeline-grid-row {
+            display: grid;
+            grid-template-columns: 196px 1fr;
             align-items: center;
-            padding-right: 12px;
+            gap: 10px;
+        }
+
+        .timeline-row-label {
+            padding-right: 8px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            font-size: 12.5px;
+            font-weight: 600;
         }
 
-        .timeline-track {
-            position: relative;
-            border-left: 1px solid var(--border);
-            background-image: linear-gradient(to right, var(--border) 1px, transparent 1px);
-            background-size: calc(100% / 6) 100%;
-        }
-
-        .timeline-ticks {
+        .timeline-row-cells,
+        .timeline-hour-row {
             display: grid;
-            grid-template-columns: repeat(7, 1fr);
-            align-items: center;
+            grid-template-columns: repeat(24, minmax(30px, 1fr));
+            gap: 3px;
         }
 
-        .timeline-ticks span:last-child {
-            text-align: right;
+        .timeline-hour-row {
+            color: var(--text-3);
+            font-size: 9.5px;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
         }
 
-        .timeline-bar {
-            position: absolute;
-            top: 9px;
-            height: 20px;
-            min-width: 5px;
-            border-radius: 5px;
+        .timeline-cell {
+            position: relative;
+            height: 30px;
+            border-radius: 7px;
+            background: var(--panel-3);
+            border: 1px solid transparent;
             display: flex;
             align-items: center;
-            padding: 0 5px;
-            overflow: hidden;
-            font-size: 9px;
-            font-weight: 750;
-            color: white;
+            justify-content: center;
+            transition: transform var(--transition), border-color var(--transition);
+        }
+
+        .timeline-cell.has-run {
             cursor: pointer;
-            transition: filter var(--transition), transform var(--transition);
         }
 
-        .timeline-bar:hover {
-            filter: brightness(1.1);
+        .timeline-cell.has-run:hover {
             transform: translateY(-1px);
-            z-index: 3;
+            border-color: var(--border-strong);
+            z-index: 2;
         }
 
-        .timeline-bar.SUCCESS { background: #2fac7b; }
-        .timeline-bar.WARNING { background: #c89437; }
-        .timeline-bar.ERROR { background: #d85252; }
+        .timeline-farol {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--border);
+        }
+
+        .timeline-cell.SUCCESS .timeline-farol { background: #2fac7b; box-shadow: 0 0 0 3px rgba(47, 172, 123, .18); }
+        .timeline-cell.WARNING .timeline-farol { background: #c89437; box-shadow: 0 0 0 3px rgba(200, 148, 55, .18); }
+        .timeline-cell.ERROR .timeline-farol { background: #d85252; box-shadow: 0 0 0 3px rgba(216, 82, 82, .18); }
+
+        .timeline-cell-count {
+            position: absolute;
+            bottom: 1px;
+            right: 3px;
+            font-size: 8px;
+            font-weight: 800;
+            color: var(--text-3);
+        }
+
+        .timeline-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-top: 14px;
+            font-size: 11px;
+            color: var(--text-2);
+        }
+
+        .timeline-legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .timeline-legend .timeline-farol {
+            width: 9px;
+            height: 9px;
+            box-shadow: none;
+        }
 
         /* ---------------------------------------------------------------------
            Fila de incidentes
@@ -1011,7 +1076,7 @@
 
         .heatmap {
             display: grid;
-            min-width: 800px;
+            min-width: min-content;
             gap: 4px;
             align-items: center;
         }
@@ -1641,6 +1706,19 @@
 
                     <div class="grid grid-kpis" id="overviewKpis"></div>
 
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h2>Timeline das execuções</h2>
+                                <p>Execuções do dia do snapshot, agrupadas por hora; clique em uma célula para abrir a auditoria das etapas.</p>
+                            </div>
+                            <span class="badge primary" id="timelineCountBadge"></span>
+                        </div>
+                        <div class="card-body">
+                            <div class="timeline-shell" id="timelineContainer"></div>
+                        </div>
+                    </article>
+
                     <div class="grid grid-main">
                         <div class="grid" style="gap:14px">
                             <article class="card">
@@ -1666,19 +1744,6 @@
                                         </thead>
                                         <tbody id="rpaOpsTable"></tbody>
                                     </table>
-                                </div>
-                            </article>
-
-                            <article class="card">
-                                <div class="card-header">
-                                    <div>
-                                        <h2>Timeline das execuções</h2>
-                                        <p>Execuções do dia do snapshot; clique em uma barra para abrir a auditoria das etapas.</p>
-                                    </div>
-                                    <span class="badge primary" id="timelineCountBadge"></span>
-                                </div>
-                                <div class="card-body">
-                                    <div class="timeline-shell" id="timelineContainer"></div>
                                 </div>
                             </article>
                         </div>
@@ -2242,6 +2307,25 @@
             $$('.page').forEach(page => page.classList.toggle('active', page.id === `page-${pageName}`));
             document.body.classList.remove('sidebar-open');
             window.scrollTo({ top: 0, behavior: 'smooth' });
+            // Larguras só ficam mensuráveis depois que a página vira visível.
+            refreshOverflowHints();
+        }
+
+        /* macOS (e outros) esconde a barra de rolagem até o hover/gesto — sem
+           aviso, tabela ou heatmap mais largo que o card parece cortado, não
+           "role para o lado". Mostra uma dica de texto sempre que o conteúdo
+           realmente ultrapassa a largura visível. */
+        function refreshOverflowHints(scope = document) {
+            $$('.table-wrap, .heatmap-wrap', scope).forEach(el => {
+                let hint = el.nextElementSibling;
+                if (!hint || !hint.classList.contains('scroll-hint')) {
+                    hint = document.createElement('div');
+                    hint.className = 'scroll-hint';
+                    hint.textContent = '↔ role para o lado para ver mais colunas';
+                    el.after(hint);
+                }
+                hint.style.display = (el.scrollWidth - el.clientWidth > 2) ? 'block' : 'none';
+            });
         }
 
         window.ACTIVE_EXECUTION_ID = DATA.executionDetail?.executionId || DATA.timeline?.[0]?.executionId || null;
@@ -2461,48 +2545,77 @@
         }
 
         function renderTimeline() {
+            // Agrupa por RPA e por hora do dia (0-23h). O farol de cada
+            // célula mostra o pior status ocorrido naquela hora
+            // (ERROR > WARNING > SUCCESS); o tamanho da caixa nunca muda —
+            // quem varia é só a cor do farol e, se houver mais de uma
+            // execução na mesma hora, um contador discreto no canto.
+            const rank = { ERROR: 0, WARNING: 1, SUCCESS: 2 };
             const byProcess = new Map();
             DATA.timeline.forEach(run => {
                 if (!byProcess.has(run.process)) byProcess.set(run.process, []);
                 byProcess.get(run.process).push(run);
             });
+            const hours = Array.from({ length: 24 }, (_, i) => i);
 
-            const minMinute = 0;
-            const maxMinute = 24 * 60;
-            const scale = maxMinute - minMinute;
+            const hourHeader = hours.map(h => `<div>${String(h).padStart(2, '0')}</div>`).join('');
+
             const rows = DATA.rpas.map(rpa => {
                 const runs = byProcess.get(rpa.process) || [];
-                const bars = runs.map(run => {
-                    const left = (run.startMinute / scale) * 100;
-                    const width = Math.max(0.55, run.durationMin / scale * 100);
-                    const tip = `${escapeHtml(run.rpa)}<br>${run.start} • ${run.durationMin} min • ${run.status}<br>${run.executionId} • ${run.machine}`;
-                    return `<div class="timeline-bar ${run.status}" style="left:${left}%;width:${width}%" data-tip="${tip}" data-execution-id="${run.executionId}"></div>`;
+                const byHour = new Map();
+                runs.forEach(run => {
+                    const h = Math.min(23, Math.floor(run.startMinute / 60));
+                    if (!byHour.has(h)) byHour.set(h, []);
+                    byHour.get(h).push(run);
+                });
+
+                const cells = hours.map(h => {
+                    const runsInHour = (byHour.get(h) || []).slice().sort((a, b) => rank[a.status] - rank[b.status]);
+                    if (!runsInHour.length) {
+                        return `<div class="timeline-cell" data-tip="${escapeHtml(rpa.name)}<br>${String(h).padStart(2, '0')}h • sem execução"><span class="timeline-farol"></span></div>`;
+                    }
+                    const worst = runsInHour[0];
+                    const tip = [`${escapeHtml(rpa.name)} • ${String(h).padStart(2, '0')}h`, ...runsInHour.map(r =>
+                        `${r.start} • ${escapeHtml(r.status)} • ${r.durationMin} min • ${escapeHtml(r.executionId)}`
+                    )].join('<br>');
+                    const count = runsInHour.length > 1 ? `<span class="timeline-cell-count">${runsInHour.length}×</span>` : '';
+                    return `<div class="timeline-cell has-run ${worst.status}" data-tip="${tip}" data-execution-id="${worst.executionId}"><span class="timeline-farol"></span>${count}</div>`;
                 }).join('');
+
                 return `
-                    <div class="timeline-row">
-                        <div class="timeline-label" title="${escapeHtml(rpa.process)}">${escapeHtml(rpa.name)}</div>
-                        <div class="timeline-track">${bars}</div>
+                    <div class="timeline-grid-row">
+                        <div class="timeline-row-label" title="${escapeHtml(rpa.process)}">${escapeHtml(rpa.name)}</div>
+                        <div class="timeline-row-cells">${cells}</div>
                     </div>
                 `;
             }).join('');
 
             $('#timelineContainer').innerHTML = `
-                <div class="timeline">
-                    <div class="timeline-axis">
+                <div class="timeline-grid">
+                    <div class="timeline-grid-row">
                         <div></div>
-                        <div class="timeline-ticks">
-                            <span>00h</span><span>04h</span><span>08h</span><span>12h</span><span>16h</span><span>20h</span><span>24h</span>
-                        </div>
+                        <div class="timeline-hour-row">${hourHeader}</div>
                     </div>
                     ${rows}
+                </div>
+                <div class="timeline-legend">
+                    <span><span class="timeline-farol" style="background:#2fac7b"></span>Sucesso</span>
+                    <span><span class="timeline-farol" style="background:#c89437"></span>Atenção</span>
+                    <span><span class="timeline-farol" style="background:#d85252"></span>Erro</span>
+                    <span><span class="timeline-farol"></span>Sem execução</span>
+                    <span>2× — mais de uma execução na mesma hora, farol mostra o pior status</span>
                 </div>
             `;
             $('#timelineCountBadge').textContent = `${DATA.timeline.length} execuções no dia`;
 
-            $$('.timeline-bar').forEach(bar => {
-                bar.addEventListener('mousemove', e => showTooltip(e, bar.dataset.tip));
-                bar.addEventListener('mouseleave', hideTooltip);
-                bar.addEventListener('click', () => openAuditExecution(bar.dataset.executionId));
+            $$('.timeline-cell.has-run').forEach(cell => {
+                cell.addEventListener('mousemove', e => showTooltip(e, cell.dataset.tip));
+                cell.addEventListener('mouseleave', hideTooltip);
+                cell.addEventListener('click', () => openAuditExecution(cell.dataset.executionId));
+            });
+            $$('.timeline-cell:not(.has-run)').forEach(cell => {
+                cell.addEventListener('mousemove', e => showTooltip(e, cell.dataset.tip));
+                cell.addEventListener('mouseleave', hideTooltip);
             });
         }
 
@@ -3215,6 +3328,8 @@
 
             renderDiagnostic(DATA.executionDetail);
             renderCatalog();
+
+            refreshOverflowHints();
         }
 
         /* =====================================================================
@@ -3332,6 +3447,12 @@
 
             $('#reloadButton').addEventListener('click', () => {
                 reloadData($('#fullHistoryToggle').checked ? 'full' : '90d');
+            });
+
+            let resizeTimer;
+            window.addEventListener('resize', () => {
+                clearTimeout(resizeTimer);
+                resizeTimer = setTimeout(() => refreshOverflowHints(), 150);
             });
         }
 
