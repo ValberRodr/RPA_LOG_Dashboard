@@ -122,6 +122,112 @@ def _max_concurrency(intervals):
 
 
 # ---------------------------------------------------------------------------
+# Classifica se uma VM parece ter problema geral de infraestrutura (afeta
+# todas as RPAs que rodam nela, taxas parecidas) ou um problema concentrado
+# numa única RPA/aplicação (a VM provavelmente não é a causa). Só é possível
+# distinguir de verdade quando a VM é compartilhada por mais de uma RPA —
+# para os casos comuns de 1 RPA por VM, o sinal fica em "ATENCAO", sem
+# atribuir culpa à máquina.
+# ---------------------------------------------------------------------------
+def _classify_vm_reliability(rpa_breakdown, min_samples=3, elevated=15.0, spread_threshold=15.0):
+    total_exec = sum(r['executions'] for r in rpa_breakdown)
+    total_err = sum(r['errors'] for r in rpa_breakdown)
+    overall_rate = round(100 * total_err / total_exec, 1) if total_exec else 0.0
+    if total_exec < 5:
+        return 'DADOS_INSUFICIENTES', overall_rate, None
+    reliable = [r for r in rpa_breakdown if r['executions'] >= min_samples]
+    if len(reliable) <= 1:
+        return ('ATENCAO' if overall_rate >= elevated else 'SAUDAVEL'), overall_rate, None
+    rates = [r['errorRate'] for r in reliable]
+    worst = max(reliable, key=lambda r: r['errorRate'])
+    spread = max(rates) - min(rates)
+    if overall_rate >= elevated and spread < spread_threshold:
+        return 'PROBLEMA_GERAL', overall_rate, None
+    if spread >= spread_threshold and worst['errorRate'] >= elevated:
+        return 'PROBLEMA_ESPECIFICO', overall_rate, worst
+    return 'SAUDAVEL', overall_rate, None
+
+
+# ---------------------------------------------------------------------------
+# Sugestão de consolidação de VMs: dado que os HORÁRIOS de agenda não podem
+# mudar, quantas VMs seriam realmente necessárias se as RPAs fossem
+# encaixadas por coloração gulosa de grafo de conflito (Welsh-Powell)? Usa a
+# duração P95 histórica de cada RPA (não a duração nominal) + margem de
+# segurança, e considera conflito em qualquer par de horários que possa
+# cair no mesmo dia (o calendário "weekdays" está contido em "daily", então
+# qualquer par pode coincidir num dia útil).
+# ---------------------------------------------------------------------------
+def _rpa_time_windows(rpa, agg, buffer_min=5):
+    duration = (agg or {}).get('p95Duration') or rpa.get('expectedDurationMin', 15)
+    if duration <= 0:
+        duration = rpa.get('expectedDurationMin', 15)
+    duration = int(math.ceil(duration))
+    windows = []
+    for t in rpa.get('schedule', []):
+        h, m = map(int, t.split(':'))
+        start = h * 60 + m
+        windows.append((start, start + duration + buffer_min))
+    return windows
+
+
+def _windows_conflict(w1, w2):
+    for s1, e1 in w1:
+        for s2, e2 in w2:
+            for shift in (-1440, 0, 1440):
+                if s1 < e2 + shift and s2 + shift < e1:
+                    return True
+    return False
+
+
+def _suggest_vm_consolidation(rpas, aggregates):
+    ids = [r['rpaId'] for r in rpas]
+    by_id = {r['rpaId']: r for r in rpas}
+    windows = {rid: _rpa_time_windows(by_id[rid], aggregates.get(rid)) for rid in ids}
+
+    conflicts = defaultdict(set)
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            a, b = ids[i], ids[j]
+            if _windows_conflict(windows[a], windows[b]):
+                conflicts[a].add(b)
+                conflicts[b].add(a)
+
+    order = sorted(ids, key=lambda rid: (-len(conflicts[rid]), rid))
+    color_of = {}
+    groups = defaultdict(list)
+    for rid in order:
+        used = {color_of[n] for n in conflicts[rid] if n in color_of}
+        c = 0
+        while c in used:
+            c += 1
+        color_of[rid] = c
+        groups[c].append(rid)
+
+    def fmt_windows(rid):
+        return [f"{s // 60:02d}:{s % 60:02d}–{(e - 5) // 60:02d}:{(e - 5) % 60:02d}" for s, e in windows[rid]]
+
+    group_list = []
+    for c in sorted(groups):
+        members = groups[c]
+        group_list.append({
+            'vmLabel': f'VM sugerida {c + 1}',
+            'rpas': [{
+                'rpaId': rid, 'rpaName': by_id[rid]['name'], 'criticality': by_id[rid]['criticality'],
+                'currentVm': by_id[rid]['primaryVm'], 'windows': fmt_windows(rid),
+            } for rid in members],
+        })
+
+    return {
+        'currentVmCount': len(ids),
+        'suggestedVmCount': len(groups),
+        'potentialSavings': max(0, len(ids) - len(groups)),
+        'groups': group_list,
+        'method': 'Coloração gulosa de grafo de conflito (Welsh-Powell), sem alterar nenhum horário agendado.',
+        'caveat': 'Baseado na duração histórica P95 de cada RPA + 5 min de margem — não considera picos acima do P95, aplicações/licenças específicas de cada máquina, nem janelas de manutenção. Sugestão para avaliação da sustentação, não uma ação automática.',
+    }
+
+
+# ---------------------------------------------------------------------------
 # Descoberta e filtragem de arquivos ANTES do parsing (Seção 24)
 # ---------------------------------------------------------------------------
 def _window_bounds(mode):
@@ -829,6 +935,7 @@ def build_index(obs, vm_history, expected_runs, exec_by_id):
     window_minutes = max(1.0, (win_end_dt - win_start_dt).total_seconds() / 60)
 
     vm_utilization = []
+    vm_reliability = []
     max_concurrency_overall = {'machine': None, 'value': 0}
     for name in vm_names:
         ivs = intervals_by_vm.get(name, [])
@@ -838,9 +945,19 @@ def build_index(obs, vm_history, expected_runs, exec_by_id):
         if conc > max_concurrency_overall['value']:
             max_concurrency_overall = {'machine': name, 'value': conc}
         by_rpa_minutes = defaultdict(float)
+        by_rpa_stats = defaultdict(lambda: {'executions': 0, 'errors': 0})
+        error_codes_on_vm = Counter()
         for e in executions:
-            if e['machine'] == name:
-                by_rpa_minutes[e['rpaId']] += e['durationMin']
+            if e['machine'] != name:
+                continue
+            by_rpa_minutes[e['rpaId']] += e['durationMin']
+            s = by_rpa_stats[e['rpaId']]
+            s['executions'] += 1
+            if e['status'] == 'ERROR':
+                s['errors'] += 1
+                for ev in evs.get(e['executionId'], []):
+                    if ev['status'] == 'ERROR' and ev.get('errorCode'):
+                        error_codes_on_vm[ev['errorCode']] += 1
         total_rpa_minutes = sum(by_rpa_minutes.values()) or 1.0
         by_rpa = sorted(
             [{'rpaId': rid, 'rpaName': rid_map[rid]['name'], 'minutes': round(mins, 1),
@@ -851,7 +968,23 @@ def build_index(obs, vm_history, expected_runs, exec_by_id):
             'machine': name, 'occupiedMinutes': round(occupied, 1), 'idlePercent': idle_pct,
             'executionCount': len(ivs), 'maxConcurrency': conc, 'byRpa': by_rpa,
         })
+
+        rpa_breakdown = [{
+            'rpaId': rid, 'rpaName': rid_map[rid]['name'],
+            'executions': s['executions'], 'errors': s['errors'],
+            'errorRate': round(100 * s['errors'] / s['executions'], 1) if s['executions'] else 0.0,
+        } for rid, s in by_rpa_stats.items()]
+        rpa_breakdown.sort(key=lambda x: -x['errorRate'])
+        classification, overall_rate, worst = _classify_vm_reliability(rpa_breakdown)
+        vm_reliability.append({
+            'machine': name, 'overallErrorRate': overall_rate, 'classification': classification,
+            'worstRpa': {'rpaId': worst['rpaId'], 'rpaName': worst['rpaName'], 'errorRate': worst['errorRate']} if worst else None,
+            'byRpa': rpa_breakdown,
+            'topErrorCodes': [{'code': k, 'count': v} for k, v in error_codes_on_vm.most_common(3)],
+        })
     vm_utilization.sort(key=lambda x: x['idlePercent'])
+    class_rank = {'PROBLEMA_GERAL': 0, 'PROBLEMA_ESPECIFICO': 1, 'ATENCAO': 2, 'SAUDAVEL': 3, 'DADOS_INSUFICIENTES': 4}
+    vm_reliability.sort(key=lambda x: (class_rank.get(x['classification'], 9), -x['overallErrorRate']))
 
     # Tendência de ociosidade média da frota, na mesma janela de 14 dias do
     # trend de sucesso (facilita comparar os dois gráficos lado a lado).
@@ -872,6 +1005,8 @@ def build_index(obs, vm_history, expected_runs, exec_by_id):
     idle_24h_values = [max(0.0, 100 - _occupied_minutes(intervals_by_vm.get(name, []), window_start, snap_dt) / idle_24h_minutes * 100) for name in vm_names]
     avg_vm_idle_24h = round(sum(idle_24h_values) / len(idle_24h_values), 1) if idle_24h_values else 0
 
+    vm_consolidation = _suggest_vm_consolidation(rpas, obs['rpaAggregates'])
+
     summary={'totalRpas':len(rpas),'totalVms':len(vms),'executions24h':len(recent),'success24h':succ,'warning24h':warn,'error24h':err,
              'successRate24h':round(100*succ/len(recent),1) if recent else 0,
              'criticalRpas':sum(r['attention']=='CRITICAL' for r in idx_rpas),'warningRpas':sum(r['attention']=='WARNING' for r in idx_rpas),
@@ -884,7 +1019,8 @@ def build_index(obs, vm_history, expected_runs, exec_by_id):
     return {'snapshot':obs['snapshot'],'periodStart':obs['periodStart'],'periodEnd':obs['periodEnd'],'rpas':idx_rpas,'trend':trend,
             'timeline':timeline,'incidents':incidents,'errorPareto':error_pareto,'heatmapSteps':heat_steps,'heatmap':heat,
             'vms':vms,'executionDetail':execution_detail,'summary':summary,'alerts':alerts,'loadStats':obs['loadStats'],
-            'vmUtilization':vm_utilization,'vmIdleTrend':vm_idle_trend}
+            'vmUtilization':vm_utilization,'vmIdleTrend':vm_idle_trend,
+            'vmReliability':vm_reliability,'vmConsolidation':vm_consolidation}
 
 
 def get_data(mode=None):

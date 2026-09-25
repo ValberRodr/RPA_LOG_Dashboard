@@ -1144,6 +1144,186 @@
         }
 
         /* ---------------------------------------------------------------------
+           Confiabilidade por VM
+           ------------------------------------------------------------------ */
+        .reliability-legend {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .reliability-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 10.5px;
+            font-weight: 700;
+            padding: 5px 9px;
+            border-radius: 999px;
+        }
+
+        .vm-reliability-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 14px;
+        }
+
+        .reliability-card {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 13px 14px;
+            background: var(--panel-2);
+            transition: border-color var(--transition), transform var(--transition);
+        }
+
+        .reliability-card:hover {
+            border-color: var(--border-strong);
+            transform: translateY(-1px);
+        }
+
+        .reliability-card-top {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+        }
+
+        .reliability-icon {
+            width: 26px;
+            height: 26px;
+            border-radius: 8px;
+            display: grid;
+            place-items: center;
+            flex: none;
+        }
+
+        .reliability-icon.success { background: var(--success-soft); color: var(--success); }
+        .reliability-icon.warning { background: var(--warning-soft); color: var(--warning); }
+        .reliability-icon.danger { background: var(--danger-soft); color: var(--danger); }
+        .reliability-icon.neutral { background: var(--panel-3); color: var(--text-3); }
+        .reliability-icon .icon { width: 15px; height: 15px; }
+
+        .reliability-card-machine {
+            font-size: 12.5px;
+            font-weight: 700;
+        }
+
+        .reliability-card-rate {
+            margin-left: auto;
+            font-size: 15px;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .reliability-breakdown {
+            margin-top: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .reliability-breakdown-row {
+            display: grid;
+            grid-template-columns: 1fr 44px;
+            gap: 8px;
+            align-items: center;
+            font-size: 10.5px;
+            color: var(--text-2);
+        }
+
+        .reliability-breakdown-row .progress-track { height: 5px; }
+        .reliability-breakdown-row strong { color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
+
+        /* ---------------------------------------------------------------------
+           Sugestão de consolidação de VMs
+           ------------------------------------------------------------------ */
+        .consolidation-kpis {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            margin-bottom: 16px;
+        }
+
+        .consolidation-group {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 13px 14px;
+            background: var(--panel-2);
+            margin-bottom: 12px;
+        }
+
+        .consolidation-group:last-child { margin-bottom: 0; }
+
+        .consolidation-group-head {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            margin-bottom: 10px;
+        }
+
+        .consolidation-group-head .kpi-icon { width: 28px; height: 28px; border-radius: 8px; }
+        .consolidation-group-head .kpi-icon .icon { width: 15px; height: 15px; }
+        .consolidation-group-title { font-size: 12.5px; font-weight: 750; }
+        .consolidation-group-sub { font-size: 10.5px; color: var(--text-3); }
+
+        .consolidation-track {
+            position: relative;
+            height: 26px;
+            border-radius: 7px;
+            background: var(--panel-3);
+            background-image: linear-gradient(to right, var(--border) 1px, transparent 1px);
+            background-size: calc(100% / 24) 100%;
+            margin-bottom: 10px;
+        }
+
+        .consolidation-segment {
+            position: absolute;
+            top: 4px;
+            height: 18px;
+            min-width: 4px;
+            border-radius: 4px;
+            cursor: default;
+            transition: filter var(--transition), transform var(--transition);
+        }
+
+        .consolidation-segment:hover {
+            filter: brightness(1.15);
+            transform: translateY(-1px);
+            z-index: 2;
+        }
+
+        .consolidation-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .consolidation-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 10.5px;
+            padding: 4px 9px 4px 6px;
+            border-radius: 999px;
+            background: var(--panel-3);
+            border: 1px solid var(--border);
+            color: var(--text-2);
+        }
+
+        .consolidation-chip .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            flex: none;
+        }
+
+        .consolidation-caveat {
+            margin: 14px 0 0;
+            font-size: 10.5px;
+            color: var(--text-3);
+            line-height: 1.5;
+        }
+
+        /* ---------------------------------------------------------------------
            Diagnóstico / step timeline
            ------------------------------------------------------------------ */
         .detail-hero {
@@ -1777,6 +1957,31 @@
                                 </div>
                             </div>
                             <div class="card-body vm-utilization-grid" id="vmUtilizationList"></div>
+                        </article>
+
+                        <article class="card">
+                            <div class="card-header">
+                                <div>
+                                    <h2>Confiabilidade por VM</h2>
+                                    <p>Separa problema de máquina (afeta todas as RPAs que rodam nela) de problema concentrado numa RPA específica — a VM provavelmente não é a causa nesse caso.</p>
+                                </div>
+                                <div class="reliability-legend" id="reliabilitySummary"></div>
+                            </div>
+                            <div class="card-body vm-reliability-grid" id="vmReliabilityList"></div>
+                        </article>
+
+                        <article class="card">
+                            <div class="card-header">
+                                <div>
+                                    <h2>Sugestão de consolidação de VMs</h2>
+                                    <p>Encaixa as RPAs pelos horários reais de agenda — sem mudar nenhum horário — para estimar quantas VMs seriam realmente necessárias.</p>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div class="consolidation-kpis" id="consolidationKpis"></div>
+                                <div id="consolidationGroups"></div>
+                                <p class="consolidation-caveat" id="consolidationCaveat"></p>
+                            </div>
                         </article>
 
                         <article class="card">
@@ -3019,6 +3224,132 @@
             });
         }
 
+        /* =====================================================================
+           RENDER — CONFIABILIDADE POR VM
+           Isola: erro concentrado numa RPA específica (a VM provavelmente não
+           é a causa) × erro espalhado por todas as RPAs que rodam na mesma VM
+           (sinal de problema de infraestrutura/máquina).
+           ===================================================================== */
+        const RELIABILITY_META = {
+            SAUDAVEL: { label: 'Saudável', cls: 'success', icon: 'i-check' },
+            ATENCAO: { label: 'Atenção', cls: 'warning', icon: 'i-triangle' },
+            PROBLEMA_ESPECIFICO: { label: 'Específico de 1 RPA', cls: 'warning', icon: 'i-diagnostic' },
+            PROBLEMA_GERAL: { label: 'Problema geral da VM', cls: 'danger', icon: 'i-alert' },
+            DADOS_INSUFICIENTES: { label: 'Dados insuficientes', cls: 'neutral', icon: 'i-clock' },
+        };
+
+        function renderVmReliability() {
+            const list = DATA.vmReliability || [];
+            const counts = {};
+            list.forEach(v => { counts[v.classification] = (counts[v.classification] || 0) + 1; });
+            const order = ['PROBLEMA_GERAL', 'PROBLEMA_ESPECIFICO', 'ATENCAO', 'SAUDAVEL', 'DADOS_INSUFICIENTES'];
+            $('#reliabilitySummary').innerHTML = order.filter(k => counts[k]).map(k =>
+                `<span class="badge ${RELIABILITY_META[k].cls}"><span class="dot"></span>${counts[k]} ${RELIABILITY_META[k].label.toLowerCase()}</span>`
+            ).join('');
+
+            $('#vmReliabilityList').innerHTML = list.map(v => {
+                const m = RELIABILITY_META[v.classification] || RELIABILITY_META.DADOS_INSUFICIENTES;
+                const breakdown = v.byRpa.slice(0, 4).map(r => `
+                    <div class="reliability-breakdown-row" title="${escapeHtml(r.rpaName)}: ${r.errors}/${r.executions} execução(ões) com erro">
+                        <div>
+                            <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.rpaName)}</span>
+                            <div class="progress-track"><div class="progress-fill ${r.errorRate >= 15 ? 'danger' : r.errorRate > 0 ? 'warning' : 'success'}" style="width:${Math.max(2, Math.min(100, r.errorRate))}%"></div></div>
+                        </div>
+                        <strong>${r.errorRate}%</strong>
+                    </div>
+                `).join('');
+                const codesLine = v.topErrorCodes.length ? v.topErrorCodes.map(c => `${escapeHtml(c.code)} (${c.count}×)`).join(' · ') : 'sem erros no período';
+                const worstNote = v.worstRpa ? `<div class="cell-subtitle" style="margin-top:8px;color:var(--warning)">Concentrado em ${escapeHtml(v.worstRpa.rpaName)} (${v.worstRpa.errorRate}%) — as demais RPAs desta VM estão bem.</div>` : '';
+                return `
+                    <div class="reliability-card" data-tip="${escapeHtml(v.machine)}<br>Códigos frequentes: ${escapeHtml(codesLine)}">
+                        <div class="reliability-card-top">
+                            <div class="reliability-icon ${m.cls}"><svg class="icon"><use href="#${m.icon}"></use></svg></div>
+                            <div>
+                                <div class="reliability-card-machine mono">${escapeHtml(v.machine)}</div>
+                                <span class="badge ${m.cls}">${m.label}</span>
+                            </div>
+                            <div class="reliability-card-rate">${v.overallErrorRate}%</div>
+                        </div>
+                        ${worstNote}
+                        <div class="reliability-breakdown">${breakdown || '<div class="cell-subtitle">Sem execuções no período.</div>'}</div>
+                    </div>
+                `;
+            }).join('') || '<div class="empty-state">Sem dados de confiabilidade no período.</div>';
+
+            $$('#vmReliabilityList [data-tip]').forEach(el => {
+                el.addEventListener('mousemove', e => showTooltip(e, el.dataset.tip));
+                el.addEventListener('mouseleave', hideTooltip);
+            });
+        }
+
+        /* =====================================================================
+           RENDER — SUGESTÃO DE CONSOLIDAÇÃO DE VMs
+           Encaixa RPAs pelos horários reais de agenda (coloração de grafo de
+           conflito no servidor) sem alterar nenhum horário agendado.
+           ===================================================================== */
+        const CONSOLIDATION_PALETTE = ['#6c68e7', '#43c6d9', '#f2b84b', '#35c58b', '#f06464', '#63a4ff', '#c084fc', '#fb923c'];
+
+        function renderVmConsolidation() {
+            const c = DATA.vmConsolidation;
+            if (!c) return;
+
+            $('#consolidationKpis').innerHTML = [
+                { icon: 'i-server', cls: 'info', label: 'VMs dedicadas hoje', value: c.currentVmCount, footer: '1 RPA por VM' },
+                { icon: 'i-box', cls: 'success', label: 'VMs sugeridas', value: c.suggestedVmCount, footer: 'Mesmos horários de agenda' },
+                { icon: 'i-check', cls: c.potentialSavings > 0 ? 'success' : 'neutral', label: 'Economia potencial', value: `${c.potentialSavings} VM${c.potentialSavings === 1 ? '' : 's'}`, footer: c.potentialSavings > 0 ? 'Poderiam ser liberadas' : 'Já no ponto ideal' },
+            ].map(k => `
+                <article class="card kpi-card">
+                    <div class="kpi-top">
+                        <div><div class="kpi-label">${k.label}</div><div class="kpi-value">${k.value}</div></div>
+                        <div class="kpi-icon ${k.cls}"><svg class="icon"><use href="#${k.icon}"></use></svg></div>
+                    </div>
+                    <div class="kpi-footer"><span>${k.footer}</span><span></span></div>
+                </article>
+            `).join('');
+
+            $('#consolidationGroups').innerHTML = c.groups.map(g => {
+                const segments = [];
+                g.rpas.forEach((rpa, i) => {
+                    const color = CONSOLIDATION_PALETTE[i % CONSOLIDATION_PALETTE.length];
+                    rpa.windows.forEach(w => {
+                        const [startStr, endStr] = w.split('–');
+                        const [sh, sm] = startStr.split(':').map(Number);
+                        const [eh, em] = endStr.split(':').map(Number);
+                        const startMin = sh * 60 + sm;
+                        let endMin = eh * 60 + em;
+                        if (endMin <= startMin) endMin = 24 * 60;
+                        endMin = Math.min(endMin, 24 * 60);
+                        const left = startMin / 1440 * 100;
+                        const width = Math.max(0.5, (endMin - startMin) / 1440 * 100);
+                        segments.push(`<div class="consolidation-segment" style="left:${left}%;width:${width}%;background:${color}" data-tip="${escapeHtml(rpa.rpaName)}<br>${escapeHtml(w)}"></div>`);
+                    });
+                });
+                const chips = g.rpas.map((rpa, i) => `
+                    <span class="consolidation-chip"><span class="dot" style="background:${CONSOLIDATION_PALETTE[i % CONSOLIDATION_PALETTE.length]}"></span>${escapeHtml(rpa.rpaName)} <span class="mono" style="opacity:.65">(hoje: ${escapeHtml(rpa.currentVm)})</span></span>
+                `).join('');
+                return `
+                    <div class="consolidation-group">
+                        <div class="consolidation-group-head">
+                            <div class="kpi-icon info"><svg class="icon"><use href="#i-server"></use></svg></div>
+                            <div>
+                                <div class="consolidation-group-title">${escapeHtml(g.vmLabel)}</div>
+                                <div class="consolidation-group-sub">${g.rpas.length} RPA${g.rpas.length === 1 ? '' : 's'} sem sobreposição de horário</div>
+                            </div>
+                        </div>
+                        <div class="consolidation-track">${segments.join('')}</div>
+                        <div class="consolidation-chips">${chips}</div>
+                    </div>
+                `;
+            }).join('') || '<div class="empty-state">Sem RPAs suficientes para sugerir consolidação.</div>';
+
+            $('#consolidationCaveat').innerHTML = `<strong>Método:</strong> ${escapeHtml(c.method)}<br><strong>Ressalva:</strong> ${escapeHtml(c.caveat)}`;
+
+            $$('#consolidationGroups [data-tip]').forEach(el => {
+                el.addEventListener('mousemove', e => showTooltip(e, el.dataset.tip));
+                el.addEventListener('mouseleave', hideTooltip);
+            });
+        }
+
         function renderFailureHeatmap() {
             const cols = DATA.heatmapSteps.length;
             const max = Math.max(1, ...DATA.heatmap.flatMap(row => row.values));
@@ -3471,6 +3802,8 @@
             renderHistoricalHeatmap();
             renderVmIdleTrend();
             renderVmUtilizationList();
+            renderVmReliability();
+            renderVmConsolidation();
             renderIncidentQueue();
             renderVmCompactList();
             renderAlerts();
