@@ -68,6 +68,12 @@ test('Fmt.criticalityBadge classifica CRÍTICA como danger e ALTA como warning',
     assert.match(Fmt.criticalityBadge('MÉDIA'), /badge neutral/);
 });
 
+test('Fmt.criticalityBadge escapa o valor (defesa em profundidade contra XSS armazenado)', () => {
+    const html = Fmt.criticalityBadge('<img src=x onerror=alert(1)>');
+    assert.doesNotMatch(html, /<img/);
+    assert.match(html, /&lt;img/);
+});
+
 test('Fmt.auditComplianceBadge trata ausência de regra sem lançar erro', () => {
     assert.match(Fmt.auditComplianceBadge(null), /SEM REGRA/);
     assert.match(Fmt.auditComplianceBadge(undefined), /SEM REGRA/);

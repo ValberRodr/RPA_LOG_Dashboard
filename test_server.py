@@ -245,6 +245,47 @@ class TestRpaRegistryStore(unittest.TestCase):
     def test_next_rpa_id_when_empty(self):
         self.assertEqual(self.store._next_rpa_id([]), 'RPA001')
 
+    def test_create_rpa_rejects_absolute_dependency_path(self):
+        # Path traversal: um caminho absoluto faz `ROOT / caminho` (pathlib)
+        # descartar ROOT inteiro e apontar direto pro caminho absoluto —
+        # DependencyAnalyzer usaria isso pra checar existência/mtime de
+        # QUALQUER arquivo do sistema.
+        payload = _valid_registry_payload(dependencyFiles=[{'path': '/etc/passwd', 'label': 'x'}])
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.create_rpa(payload)
+
+    def test_create_rpa_rejects_dependency_path_traversal(self):
+        payload = _valid_registry_payload(dependencyFiles=[{'path': '../../../../etc/passwd', 'label': 'x'}])
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.create_rpa(payload)
+
+    def test_create_rpa_rejects_dependency_missing_label_or_path(self):
+        payload = _valid_registry_payload(dependencyFiles=[{'path': 'config/x.json'}])
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.create_rpa(payload)
+
+    def test_create_rpa_accepts_valid_relative_dependency_path(self):
+        payload = _valid_registry_payload(dependencyFiles=[{'path': 'config/dependencies/RPA001/x.json', 'label': 'Mapeamento'}])
+        rpa = self.store.create_rpa(payload)
+        self.assertEqual(rpa['dependencyFiles'], [{'path': 'config/dependencies/RPA001/x.json', 'label': 'Mapeamento'}])
+
+    def test_create_rpa_ignores_unknown_extra_fields_mass_assignment(self):
+        # Uma chamada direta à API (fora da UI) tentando injetar uma chave
+        # arbitrária no registro não deve conseguir — só as chaves conhecidas
+        # (REQUIRED_FIELDS + OPTIONAL_FIELDS) chegam ao disco.
+        payload = _valid_registry_payload(**{'isAdmin': True, 'injectedField': 'hack'})
+        rpa = self.store.create_rpa(payload)
+        self.assertNotIn('isAdmin', rpa)
+        self.assertNotIn('injectedField', rpa)
+        data = json.loads(self.meta_file.read_text(encoding='utf-8'))
+        persisted = next(r for r in data['rpas'] if r['rpaId'] == rpa['rpaId'])
+        self.assertNotIn('isAdmin', persisted)
+        self.assertNotIn('injectedField', persisted)
+
+    def test_update_rpa_ignores_unknown_extra_fields_mass_assignment(self):
+        updated = self.store.update_rpa('RPA001', _valid_registry_payload(process='VND_Teste', **{'isAdmin': True}))
+        self.assertNotIn('isAdmin', updated)
+
 
 class TestLogFilenamePatterns(unittest.TestCase):
     """server.py só abre arquivos cujo nome bate com esses padrões — testar
@@ -352,6 +393,50 @@ class TestAutomationAnywhereGatewayMock(unittest.TestCase):
         # a agenda local (fixture) não foi tocada pela chamada acima
         self.assertEqual(self.obs['schedules'][0]['scheduledTime'], '08:00')
 
+    def test_authenticate_mock_token_is_deterministic(self):
+        # Regressão do fix hashlib (era hash() nativo do Python, aleatorizado
+        # por processo via PYTHONHASHSEED — duas chamadas na MESMA execução
+        # já podiam divergir entre processos diferentes).
+        first = self.gateway.authenticate('', '', 'mesma-chave-123')['token']
+        second = self.gateway.authenticate('', '', 'mesma-chave-123')['token']
+        self.assertEqual(first, second)
+
+
+class TestAutomationAnywhereSsrfGuard(unittest.TestCase):
+    """`_forward` é o único ponto por onde o servidor faz uma chamada HTTP de
+    verdade para uma Control Room — todo teste aqui usa IPs literais (nunca
+    um hostname de verdade) para não depender de DNS/rede no ambiente de CI."""
+
+    def setUp(self):
+        self.gateway = server.AutomationAnywhereGateway(
+            config_file=Path('/nonexistent-on-purpose.json'), get_data_fn=lambda: (None, None),
+        )
+
+    def test_loopback_target_is_blocked(self):
+        self.assertTrue(self.gateway._is_blocked_target('http://127.0.0.1:9999/v2/x'))
+
+    def test_ipv6_loopback_target_is_blocked(self):
+        self.assertTrue(self.gateway._is_blocked_target('http://[::1]:9999/v2/x'))
+
+    def test_link_local_metadata_target_is_blocked(self):
+        # 169.254.169.254 — endpoint de metadata clássico em roubo de
+        # credenciais via SSRF em provedores de nuvem.
+        self.assertTrue(self.gateway._is_blocked_target('http://169.254.169.254/latest/meta-data'))
+
+    def test_private_network_target_is_allowed(self):
+        # Caso de uso legítimo e documentado: Control Room on-premises numa
+        # rede privada da empresa.
+        self.assertFalse(self.gateway._is_blocked_target('http://10.0.0.5/v2/x'))
+
+    def test_public_ip_target_is_allowed(self):
+        self.assertFalse(self.gateway._is_blocked_target('http://8.8.8.8/v2/x'))
+
+    def test_forward_short_circuits_on_blocked_target_without_network_call(self):
+        status, raw, net_err = self.gateway._forward('GET', 'http://127.0.0.1:9999/v2/x', {}, None)
+        self.assertEqual(status, 0)
+        self.assertIsNone(raw)
+        self.assertIn('SSRF_BLOCKED', net_err)
+
 
 class TestDatasetBuilds(unittest.TestCase):
     """Smoke test do pipeline real de dados — só roda se ./logs existir."""
@@ -388,6 +473,9 @@ class TestHttpServerRoutes(unittest.TestCase):
         cls.port = cls.httpd.server_address[1]
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
         cls.thread.start()
+        cls.csrf_token = json.loads(
+            urllib.request.urlopen(f'http://127.0.0.1:{cls.port}/api/csrf-token', timeout=10).read()
+        )['token']
 
     @classmethod
     def tearDownClass(cls):
@@ -398,14 +486,24 @@ class TestHttpServerRoutes(unittest.TestCase):
         with urllib.request.urlopen(f'http://127.0.0.1:{self.port}{path}', timeout=10) as resp:
             return resp.status, resp.read()
 
-    def _post_json(self, path, payload, headers=None):
+    def _post_json(self, path, payload, headers=None, csrf=True):
+        """`csrf=True` por padrão injeta o token válido automaticamente — os
+        testes de CSRF/Origin abaixo passam `csrf=False` e/ou um header
+        manual para exercitar o caminho de rejeição. Erros HTTP (403/413/400)
+        são devolvidos como (status, body) em vez de lançar, para poder
+        inspecionar o corpo JSON do erro como qualquer outra resposta."""
         body = json.dumps(payload).encode('utf-8')
         req = urllib.request.Request(f'http://127.0.0.1:{self.port}{path}', data=body, method='POST')
         req.add_header('Content-Type', 'application/json')
+        if csrf:
+            req.add_header('X-CSRF-Token', self.csrf_token)
         for k, v in (headers or {}).items():
             req.add_header(k, v)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status, resp.read()
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, resp.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read()
 
     def test_index_html_serves(self):
         status, body = self._get('/index.html')
@@ -467,6 +565,103 @@ class TestHttpServerRoutes(unittest.TestCase):
         data = json.loads(body)
         self.assertTrue(data['ok'])
         self.assertGreaterEqual(len(data['rpas']), 1)
+
+    def test_csrf_token_route_returns_a_nonempty_token(self):
+        status, body = self._get('/api/csrf-token')
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertTrue(data['ok'])
+        self.assertGreater(len(data['token']), 20)
+
+    def test_post_without_csrf_token_is_rejected(self):
+        status, body = self._post_json('/api/aa/authenticate', {'baseUrl': '', 'username': '', 'apiKey': 'chave-de-teste-123'}, csrf=False)
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(body)['error'], 'CSRF_CHECK_FAILED')
+
+    def test_post_with_wrong_csrf_token_is_rejected(self):
+        status, body = self._post_json(
+            '/api/aa/authenticate', {'baseUrl': '', 'username': '', 'apiKey': 'chave-de-teste-123'},
+            csrf=False, headers={'X-CSRF-Token': 'token-forjado-por-um-atacante'},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(body)['error'], 'CSRF_CHECK_FAILED')
+
+    def test_post_registry_delete_without_csrf_is_rejected_even_for_nonexistent_id(self):
+        # Prova o cenário de CSRF descrito no relatório de segurança: um POST
+        # de exclusão sem o token — o tipo exato de requisição que um <form>
+        # cross-site conseguiria disparar — precisa ser barrado ANTES de
+        # tocar em rpa_registry, mesmo contra um id que nem existe.
+        status, body = self._post_json('/api/registry/rpas/RPA999/delete', {}, csrf=False)
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(body)['error'], 'CSRF_CHECK_FAILED')
+
+    def test_post_with_foreign_origin_is_rejected_even_with_valid_csrf_token(self):
+        status, body = self._post_json(
+            '/api/aa/authenticate', {'baseUrl': '', 'username': '', 'apiKey': 'chave-de-teste-123'},
+            headers={'Origin': 'https://site-malicioso.example'},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(body)['error'], 'ORIGIN_NOT_ALLOWED')
+
+    def test_post_with_matching_origin_is_accepted(self):
+        status, body = self._post_json(
+            '/api/aa/authenticate', {'baseUrl': '', 'username': '', 'apiKey': 'chave-de-teste-123'},
+            headers={'Origin': server.ALLOWED_ORIGIN},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)['ok'])
+
+    def test_reload_is_post_only_get_no_longer_works(self):
+        # /api/reload virou POST de propósito (uma GET com efeito colateral é
+        # trivialmente disparável por <img src="..."> em qualquer página).
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._get('/api/reload?mode=90d')
+        self.assertEqual(ctx.exception.code, 404)
+        ctx.exception.close()
+
+    def test_reload_via_post_with_csrf_succeeds(self):
+        status, body = self._post_json('/api/reload?mode=90d', {})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)['ok'])
+
+    def test_post_body_larger_than_limit_is_rejected(self):
+        huge_payload = {'apiKey': 'x' * (server.MAX_POST_BODY_BYTES + 1024)}
+        status, body = self._post_json('/api/aa/authenticate', huge_payload)
+        self.assertEqual(status, 413)
+
+    def test_dotfile_paths_are_blocked(self):
+        # .git/HEAD existe de verdade neste checkout (é um repositório git) —
+        # antes da correção, isso devolvia 200 com o conteúdo real do
+        # arquivo, expondo o histórico completo do repositório.
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._get('/.git/HEAD')
+        self.assertEqual(ctx.exception.code, 404)
+        ctx.exception.close()
+
+    def test_directory_listing_is_disabled(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._get('/config/')
+        self.assertEqual(ctx.exception.code, 404)
+        ctx.exception.close()
+
+    def test_html_response_has_per_request_nonce_and_no_unsafe_inline_script(self):
+        with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/index.html', timeout=10) as resp:
+            csp = resp.headers.get('Content-Security-Policy')
+            body = resp.read().decode('utf-8')
+        self.assertIn("script-src 'self' 'nonce-", csp)
+        self.assertNotIn("script-src 'self' 'unsafe-inline'", csp)
+        self.assertIn("style-src 'self' 'unsafe-inline'", csp)  # trade-off deliberado, ver Handler.end_headers
+        # index.html não tem nenhum <script> inline (tudo foi extraído para
+        # assets/dashboard-app.js) — nada para substituir, mas o header
+        # continua correto mesmo assim.
+        self.assertNotIn('<script>', body)
+
+    def test_html_with_inline_script_gets_nonce_injected_and_matches_header(self):
+        with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/investigacao.html', timeout=10) as resp:
+            csp = resp.headers.get('Content-Security-Policy')
+            body = resp.read().decode('utf-8')
+        nonce = csp.split("'nonce-", 1)[1].split("'", 1)[0]
+        self.assertIn(f'<script nonce="{nonce}">', body)
 
     def test_unknown_aa_route_returns_404(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:

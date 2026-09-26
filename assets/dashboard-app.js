@@ -76,7 +76,7 @@ class Fmt {
 
     static criticalityBadge(value) {
         const cls = value === 'CRÍTICA' ? 'danger' : value === 'ALTA' ? 'warning' : 'neutral';
-        return `<span class="badge ${cls}">${value}</span>`;
+        return `<span class="badge ${cls}">${Fmt.escapeHtml(value)}</span>`;
     }
 
     static auditComplianceBadge(value) {
@@ -381,6 +381,30 @@ class NavigationController {
 }
 
 /* =========================================================================
+   CsrfTokenStore — busca e cacheia o token CSRF exigido pelo servidor em
+   toda rota POST que muda estado (server.py, Handler._csrf_token_is_valid).
+   Buscado uma vez via GET /api/csrf-token e reaproveitado; assets/
+   aa-integration.js também usa esta classe (bare name, mesmo padrão de
+   escopo léxico compartilhado do resto deste arquivo) para anexar o
+   cabeçalho em toda chamada a /api/aa/*.
+   ========================================================================= */
+class CsrfTokenStore {
+    static _token = null;
+    static _pending = null;
+
+    static async get() {
+        if (CsrfTokenStore._token) return CsrfTokenStore._token;
+        if (!CsrfTokenStore._pending) {
+            CsrfTokenStore._pending = fetch('/api/csrf-token', { cache: 'no-store' })
+                .then(r => r.json())
+                .then(r => { CsrfTokenStore._token = r.token; return r.token; })
+                .finally(() => { CsrfTokenStore._pending = null; });
+        }
+        return CsrfTokenStore._pending;
+    }
+}
+
+/* =========================================================================
    RpaDataStore — acesso a DATA/OBS_DATA, montagem do detalhe de auditoria e
    todo o ciclo de carregamento incremental (90 dias / histórico completo).
    ========================================================================= */
@@ -509,7 +533,7 @@ class RpaDataStore {
         const reloadButton = DomUtils.$('#reloadButton');
         if (reloadButton) reloadButton.disabled = true;
         try {
-            await fetch(`/api/reload?mode=${mode}`, { cache: 'no-store' });
+            await fetch(`/api/reload?mode=${mode}`, { method: 'POST', cache: 'no-store', headers: { 'X-CSRF-Token': await CsrfTokenStore.get() } });
             const finalStatus = await RpaDataStore.pollLoadStatus();
             if (finalStatus && finalStatus.phase === 'erro') {
                 UiFeedback.showToast(`Falha ao atualizar dados: ${finalStatus.error || 'erro desconhecido'}.`);
@@ -2004,7 +2028,11 @@ class RegistryPage {
         const saveBtn = DomUtils.$('#registrySaveBtn');
         saveBtn.disabled = true;
         try {
-            const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(r => r.json());
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': await CsrfTokenStore.get() },
+                body: JSON.stringify(payload),
+            }).then(r => r.json());
             if (!resp.ok) {
                 DomUtils.$('#registryFormError').innerHTML = `<div class="registry-error">${Fmt.escapeHtml(resp.error || 'Não foi possível salvar.')}</div>`;
                 saveBtn.disabled = false;
@@ -2046,7 +2074,10 @@ class RegistryPage {
     static async _runDelete(rpaId, overlay) {
         overlay.remove();
         try {
-            const resp = await fetch(`/api/registry/rpas/${encodeURIComponent(rpaId)}/delete`, { method: 'POST' }).then(r => r.json());
+            const resp = await fetch(`/api/registry/rpas/${encodeURIComponent(rpaId)}/delete`, {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': await CsrfTokenStore.get() },
+            }).then(r => r.json());
             if (!resp.ok) { showToast(resp.error || 'Não foi possível excluir.'); return; }
             showToast('RPA removida do cadastro.');
             await reloadData(DATA.loadStats?.mode || '90d');
@@ -2164,6 +2195,8 @@ const goToPage = NavigationController.goToPage;
 const refreshOverflowHints = NavigationController.refreshOverflowHints;
 const openExecutionWorkspace = NavigationController.openExecutionWorkspace;
 const bindFilterListeners = NavigationController.bindFilterListeners;
+
+const getCsrfToken = CsrfTokenStore.get;
 
 const buildAuditDetail = RpaDataStore.buildAuditDetail;
 const buildAuditExecutions = RpaDataStore.buildAuditExecutions;

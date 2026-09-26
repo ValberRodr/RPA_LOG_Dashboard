@@ -189,7 +189,18 @@
 
         /** Chamada crua a uma rota /api/aa/* — sempre same-origin. */
         async _call(path, { method = 'GET', body } = {}) {
-            const headers = { 'X-AA-Base-Url': this.config.baseUrl, 'X-AA-Token': this.secrets.getToken() };
+            // X-CSRF-Token: exigido pelo servidor em toda rota POST que muda
+            // estado (server.py, Handler._csrf_token_is_valid) — sem isso,
+            // um site malicioso aberto noutra aba conseguiria acionar
+            // qualquer ação da integração AA (reexecutar bot, mexer em
+            // schedule) só fazendo o navegador da vítima mandar a
+            // requisição. getCsrfToken() é definida em dashboard-app.js e
+            // lida por nome aqui (mesmo padrão de escopo compartilhado do
+            // resto deste arquivo).
+            const headers = {
+                'X-AA-Base-Url': this.config.baseUrl, 'X-AA-Token': this.secrets.getToken(),
+                'X-CSRF-Token': await getCsrfToken(),
+            };
             const startedAt = this.telemetry.recordRequestStart();
             try {
                 const res = await fetch(path, {

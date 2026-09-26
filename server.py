@@ -22,11 +22,16 @@ from datetime import datetime, timedelta, date
 from collections import defaultdict, Counter
 from urllib.parse import urlparse, parse_qs
 import bisect
+import hashlib
+import hmac
+import ipaddress
 import json
 import math
 import mimetypes
 import os
 import re
+import secrets
+import socket
 import statistics
 import sys
 import threading
@@ -42,10 +47,27 @@ META_FILE = ROOT / 'config' / 'rpa_metadata.json'
 AA_CONFIG_FILE = ROOT / 'config' / 'aa_config.json'
 HOST = '127.0.0.1'
 PORT = int(os.environ.get('RPA_MONITOR_PORT', '8765'))
+ALLOWED_ORIGIN = f'http://{HOST}:{PORT}'
 
 DEFAULT_WINDOW_DAYS = 90
 EXEC_FNAME_RE = re.compile(r'^RPA_(\d{4}-\d{2}-\d{2})(?:_(.+))?\.log$')
 VM_FNAME_RE = re.compile(r'^VM_(\d{4}-\d{2}-\d{2})\.jsonl$')
+
+# ---------------------------------------------------------------------------
+# CSRF: token de vida do processo (Seção de segurança). Como o servidor não
+# usa cookies/sessão, a defesa contra CSRF é um cabeçalho custom
+# (X-CSRF-Token) exigido em toda rota POST que muda estado — navegadores só
+# permitem que JS defina um cabeçalho custom em requisições same-origin (uma
+# requisição cross-site com cabeçalho custom dispara preflight CORS, que
+# este servidor nunca aprova, então o navegador nunca chega a enviar a
+# requisição de verdade). O token é obtido via GET /api/csrf-token — essa
+# rota é pública, mas só JavaScript da MESMA origem consegue LER a resposta
+# (fetch cross-origin sem Access-Control-Allow-Origin tem o corpo bloqueado
+# pelo navegador, mesmo que a requisição saia). Gerado uma vez por processo:
+# reiniciar o servidor invalida qualquer token capturado antes.
+# ---------------------------------------------------------------------------
+CSRF_TOKEN = secrets.token_urlsafe(32)
+MAX_POST_BODY_BYTES = 2 * 1024 * 1024  # generoso para qualquer payload legítimo da API
 
 STATE_SEVERITY = {
     'NAO_INICIOU': 'CRITICO', 'SLA_ESTOURADO': 'CRITICO',
@@ -496,9 +518,18 @@ class DependencyAnalyzer:
             'daysSinceModification': None, 'errorsBefore30d': 0, 'errorsAfter30d': 0,
             'firstErrorAfter': None, 'signal': 'SEM_DADOS',
         }
+        # Reforço de segurança no PONTO DE USO (não só na entrada via
+        # RpaRegistryStore.validate_payload): um caminho absoluto ou com ".."
+        # nunca deve escapar da pasta do projeto. `ROOT / caminho_absoluto`
+        # substituiria ROOT inteiro pelo caminho absoluto (comportamento do
+        # próprio pathlib) — resolve() + relative_to() é o que efetivamente
+        # bloqueia isso, tratando qualquer tentativa de escape como "arquivo
+        # não encontrado" em vez de seguir e ler metadados fora do projeto.
         try:
-            st = (ROOT / dep['path']).stat()
-        except OSError:
+            resolved = (ROOT / dep['path']).resolve()
+            resolved.relative_to(ROOT.resolve())
+            st = resolved.stat()
+        except (OSError, ValueError):
             return entry
 
         mtime = datetime.fromtimestamp(st.st_mtime)
@@ -1204,6 +1235,15 @@ class RpaRegistryStore:
     CALENDARS = ('daily', 'weekdays')
     TIME_RE = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
 
+    # Campos opcionais (com default) — junto de REQUIRED_FIELDS, formam a
+    # allow-list COMPLETA do que é persistido. `_extract_editable_fields`
+    # nunca copia o payload inteiro para o registro gravado em disco: só
+    # essas chaves saem do payload do cliente, o resto (qualquer campo extra
+    # que uma chamada direta à API tente injetar) é silenciosamente
+    # descartado — evita mass assignment.
+    OPTIONAL_FIELDS = ('volumeMin', 'volumeMax', 'runbook', 'steps', 'benefits', 'owners', 'dependencyFiles')
+    OPTIONAL_DEFAULTS = {'volumeMin': 0, 'volumeMax': 0, 'runbook': '', 'steps': [], 'benefits': [], 'owners': [], 'dependencyFiles': []}
+
     def __init__(self, meta_file: Path):
         self.meta_file = meta_file
 
@@ -1271,6 +1311,24 @@ class RpaRegistryStore:
             if r['process'] == process:
                 raise RpaRegistryValidationError(f'Já existe uma RPA cadastrada com o processo "{process}".')
 
+        # Path traversal: um caminho de dependência absoluto (ex.: "/etc/passwd")
+        # ou com ".." escaparia da pasta do projeto — `DependencyAnalyzer`
+        # depois usaria esse caminho para checar existência/data de modificação
+        # de QUALQUER arquivo do sistema. Bloqueado aqui (na entrada) e de novo
+        # no ponto de uso (DependencyAnalyzer._dependency_file_status), como
+        # defesa em profundidade.
+        for dep in payload.get('dependencyFiles') or []:
+            if not isinstance(dep, dict) or not dep.get('path') or not dep.get('label'):
+                raise RpaRegistryValidationError('Cada arquivo de dependência precisa de um caminho e um rótulo.')
+            dep_path = dep['path']
+            if not isinstance(dep_path, str) or Path(dep_path).is_absolute():
+                raise RpaRegistryValidationError(f'Caminho de dependência não pode ser absoluto: "{dep_path}".')
+            try:
+                resolved = (ROOT / dep_path).resolve()
+                resolved.relative_to(ROOT.resolve())
+            except ValueError:
+                raise RpaRegistryValidationError(f'Caminho de dependência fora da pasta do projeto: "{dep_path}".')
+
     # ---- geração de agenda ---------------------------------------------
     @staticmethod
     def _add_minutes(hhmm, minutes):
@@ -1307,19 +1365,23 @@ class RpaRegistryStore:
         nums = [int(r['rpaId'][3:]) for r in rpas if r['rpaId'][:3] == 'RPA' and r['rpaId'][3:].isdigit()]
         return f'RPA{(max(nums) + 1) if nums else 1:03d}'
 
+    @classmethod
+    def _extract_editable_fields(cls, payload):
+        """Copia SÓ as chaves conhecidas (REQUIRED_FIELDS + OPTIONAL_FIELDS)
+        do payload recebido — nunca `dict(payload)` puro. Uma chamada direta
+        à API (fora da UI) que tente injetar uma chave arbitrária no registro
+        gravado em disco tem essa chave silenciosamente ignorada."""
+        out = {field: payload[field] for field in cls.REQUIRED_FIELDS}
+        for field in cls.OPTIONAL_FIELDS:
+            out[field] = payload.get(field, cls.OPTIONAL_DEFAULTS[field])
+        return out
+
     # ---- CRUD ---------------------------------------------------------
     def create_rpa(self, payload):
         data = self._load()
         self.validate_payload(payload, data['rpas'])
-        rpa = dict(payload)
+        rpa = self._extract_editable_fields(payload)
         rpa['rpaId'] = self._next_rpa_id(data['rpas'])
-        rpa.setdefault('steps', [])
-        rpa.setdefault('benefits', [])
-        rpa.setdefault('owners', [])
-        rpa.setdefault('dependencyFiles', [])
-        rpa.setdefault('runbook', '')
-        rpa.setdefault('volumeMin', 0)
-        rpa.setdefault('volumeMax', 0)
         data['rpas'].append(rpa)
         data['schedules'] = [s for s in data['schedules'] if s['rpaId'] != rpa['rpaId']] + self.build_schedules_for(rpa)
         self._save(data)
@@ -1331,7 +1393,8 @@ class RpaRegistryStore:
         if existing is None:
             raise RpaRegistryValidationError(f'RPA {rpa_id} não encontrada no cadastro.')
         self.validate_payload(payload, data['rpas'], editing_rpa_id=rpa_id)
-        updated = {**existing, **payload, 'rpaId': rpa_id}
+        updated = self._extract_editable_fields(payload)
+        updated['rpaId'] = rpa_id
         data['rpas'] = [updated if r['rpaId'] == rpa_id else r for r in data['rpas']]
         data['schedules'] = [s for s in data['schedules'] if s['rpaId'] != rpa_id] + self.build_schedules_for(updated)
         self._save(data)
@@ -1389,6 +1452,18 @@ class AutomationAnywhereGateway:
     PROXY_ALLOWED_PREFIXES = ('/v2/', '/v3/', '/v4/')
     UPSTREAM_TIMEOUT = 8
 
+    # SSRF: baseUrl vem do navegador (X-AA-Base-Url, digitado pelo usuário na
+    # "Configuração avançada" da conexão) e este servidor faz a chamada HTTP
+    # de verdade — sem isso, qualquer script capaz de mudar esse cabeçalho
+    # transformaria o servidor local num proxy para QUALQUER host, inclusive
+    # o endpoint de metadata de nuvem (169.254.169.254, clássico em roubo de
+    # credenciais via SSRF) ou o próprio loopback da máquina. Redes privadas
+    # (10/8, 172.16/12, 192.168/16) continuam permitidas de propósito — é o
+    # caso de uso legítimo mais comum (Control Room on-premises).
+    _BLOCKED_HOST_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+        '127.0.0.0/8', '::1/128', '0.0.0.0/8', '169.254.0.0/16', 'fe80::/10',
+    ))
+
     MOCK_CAPABILITIES = {
         'activity':    'AVAILABLE',
         'audit':       'AVAILABLE',
@@ -1442,11 +1517,36 @@ class AutomationAnywhereGateway:
     def is_mock(self, base_url):
         return not base_url or base_url.strip().lower() in ('mock', 'http://mock', 'mock://local')
 
+    @classmethod
+    def _is_blocked_target(cls, url):
+        """True se o host do `url` resolve para loopback/link-local/metadata
+        — os únicos alvos que NUNCA são uma Control Room legítima. Uma falha
+        de resolução de DNS também é tratada como bloqueada (falha segura:
+        preferível recusar a chamada a arriscar seguir para um destino não
+        verificado)."""
+        host = urlparse(url).hostname
+        if not host:
+            return True
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except socket.gaierror:
+            return True
+        for info in infos:
+            try:
+                ip = ipaddress.ip_address(info[4][0])
+            except ValueError:
+                return True
+            if any(ip in net for net in cls._BLOCKED_HOST_NETWORKS):
+                return True
+        return False
+
     # ---- transporte HTTP com a Control Room real -----------------------
     def _forward(self, method, url, headers, body_bytes):
         """Encaminha uma chamada ao Control Room real. Nunca loga
         headers/corpo (podem conter o token) — só o código de status e, em
         erro, uma mensagem genérica sem o payload original."""
+        if self._is_blocked_target(url):
+            return 0, None, 'SSRF_BLOCKED: destino não permitido (loopback/link-local/metadata).'
         req = urllib.request.Request(url, data=body_bytes, method=method)
         for k, v in headers.items():
             req.add_header(k, v)
@@ -1591,7 +1691,13 @@ class AutomationAnywhereGateway:
                 return {'ok': False, 'error': 'AUTH_ERROR', 'message': 'API Key simulada precisa ter ao menos 6 caracteres.'}
             return {
                 'ok': True,
-                'token': f'MOCK-TOKEN-{abs(hash(api_key)) % 1_000_000:06d}',
+                # hashlib em vez do hash() nativo do Python: hash() é
+                # aleatorizado por processo (PYTHONHASHSEED) e não tem
+                # nenhuma garantia de estabilidade — inofensivo aqui (é só um
+                # token cosmético de simulação, nunca usado como segredo real),
+                # mas hashlib é a escolha correta sempre que "hash" aparece no
+                # nome de uma variável, para não normalizar o hábito.
+                'token': f'MOCK-TOKEN-{int(hashlib.sha256(api_key.encode("utf-8")).hexdigest(), 16) % 1_000_000:06d}',
                 'mock': True,
                 'controlRoom': 'MOCK · ambiente de simulação local',
                 'username': username or 'svc_rpa_observability',
@@ -1706,14 +1812,109 @@ class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header('Cache-Control','no-store, no-cache, must-revalidate, max-age=0')
         self.send_header('Pragma','no-cache')
+        # script-src: sem 'unsafe-inline'. Toda resposta .html passa por
+        # _serve_html_with_nonce, que gera um nonce por requisição e o injeta
+        # em cada <script> inline daquela página — só esse nonce exato (ou um
+        # <script src> de 'self') executa. Isso fecha a maior parte do valor
+        # de uma CSP: um payload de XSS refletido/armazenado que consiga
+        # injetar HTML não consegue mais rodar via <script> inline, porque
+        # não tem como adivinhar o nonce da requisição.
+        #
+        # style-src: mantém 'unsafe-inline' de propósito — todo o frontend
+        # gera atributos style="..." dinamicamente (barras de progresso,
+        # posicionamento de gráficos SVG, cores condicionais) em centenas de
+        # pontos; remover isso exigiria reescrever toda a camada de
+        # renderização para usar classes CSS/custom properties em vez de
+        # style inline, um refactor desproporcional ao ganho — CSS injetado
+        # não executa JavaScript arbitrário (o risco real de um XSS), só
+        # permite ataques bem mais limitados de UI redress/exfiltração via
+        # seletor. Trade-off deliberado, não um descuido.
+        nonce = getattr(self, '_csp_nonce', None)
+        script_src = f"'self' 'nonce-{nonce}'" if nonce else "'self'"
         self.send_header('Content-Security-Policy',
-                          "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+                          f"default-src 'self'; script-src {script_src}; style-src 'self' 'unsafe-inline'; "
                           "img-src 'self' data:; connect-src 'self'")
         super().end_headers()
 
+    @staticmethod
+    def _path_has_dotfile_segment(path):
+        """Bloqueia qualquer segmento de caminho começando com "." — sem
+        isso, SimpleHTTPRequestHandler serve `.git/`, `.DS_Store` e qualquer
+        outro dotfile normalmente, expondo o histórico completo do
+        repositório (e qualquer segredo já commitado e "removido" depois,
+        que o git nunca esquece) para quem alcançar o servidor."""
+        return any(seg.startswith('.') for seg in path.split('/') if seg)
+
+    def list_directory(self, path):
+        """Nunca lista o conteúdo de uma pasta — só serve um arquivo se o
+        caminho exato for pedido. Sem isso, /config/ ou /logs/ devolviam um
+        índice HTML com o nome de todo arquivo/subpasta ali dentro."""
+        body = b'Not Found'
+        self.send_response(404)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return None
+
+    def _serve_html_with_nonce(self, path):
+        """Serve um .html gerando um nonce novo a cada requisição e
+        injetando-o em cada <script> INLINE (sem src) daquela página — ver o
+        comentário em end_headers(). Generaliza para qualquer .html do
+        projeto (index, as 3 páginas avulsas, docs/documentacao.html):
+        nenhum deles usa <script> inline com atributos, então a substituição
+        literal de "<script>" cobre 100% dos casos existentes; um
+        <script src="..."> não precisa de nonce (já coberto por 'self')."""
+        fs_path = Path(self.translate_path(path))
+        if not fs_path.is_file():
+            self.send_response(404); self.end_headers(); return
+        html = fs_path.read_text(encoding='utf-8')
+        nonce = secrets.token_urlsafe(16)
+        html = html.replace('<script>', f'<script nonce="{nonce}">')
+        self._csp_nonce = nonce
+        body = html.encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _origin_is_allowed(self):
+        """CSRF, camada 2 (defesa em profundidade — a principal é o token em
+        _csrf_token_is_valid): quando o navegador manda Origin numa
+        requisição cross-site, ele nunca pode ser forjado por JavaScript —
+        se vier preenchido e não for a própria origem do servidor, rejeita
+        antes mesmo de olhar o token. Ferramentas não-navegador (curl,
+        test_server.py) não mandam Origin, então continuam funcionando."""
+        origin = self.headers.get('Origin')
+        return True if not origin else origin.rstrip('/').lower() == ALLOWED_ORIGIN.lower()
+
+    def _csrf_token_is_valid(self):
+        """CSRF, camada 1: exige o cabeçalho X-CSRF-Token (obtido via GET
+        /api/csrf-token) em toda rota que muda estado. Um site malicioso não
+        consegue definir esse cabeçalho numa requisição cross-site — só um
+        <form> ou fetch(mode:'no-cors') sem cabeçalhos custom, que portanto
+        nunca vai carregar X-CSRF-Token — e fetch() com o cabeçalho dispara
+        preflight CORS, que este servidor nunca aprova (não manda
+        Access-Control-Allow-Origin), então o navegador bloqueia a
+        requisição antes de ela sair. Comparação em tempo constante
+        (hmac.compare_digest) para não vazar o token por timing."""
+        supplied = self.headers.get('X-CSRF-Token') or ''
+        return hmac.compare_digest(supplied, CSRF_TOKEN)
+
     def do_GET(self):
+        self._csp_nonce = None
         parsed = urlparse(self.path)
         path = parsed.path
+        if self._path_has_dotfile_segment(path):
+            self.send_response(404); self.end_headers(); return
+        if path == '/api/csrf-token':
+            # Rota pública de propósito: a requisição cross-site até sai,
+            # mas o navegador bloqueia o JS malicioso de LER a resposta
+            # (CORS — este servidor nunca manda Access-Control-Allow-Origin),
+            # então só o próprio dashboard (mesma origem) consegue de fato
+            # obter o valor do token.
+            return self._send_json({'ok': True, 'token': CSRF_TOKEN})
         # `?mode=` é opcional: só as duas tags <script> estáticas do primeiro
         # carregamento de cada página o enviam (mode=90d), garantindo que abrir
         # o app sempre volta ao padrão de 90 dias mesmo que uma sessão anterior
@@ -1733,11 +1934,6 @@ class Handler(SimpleHTTPRequestHandler):
             return self._send(payload,'application/json; charset=utf-8')
         if path == '/api/load-status':
             return self._send(json.dumps(_build_status,ensure_ascii=False),'application/json; charset=utf-8')
-        if path == '/api/reload':
-            qs = parse_qs(urlparse(self.path).query)
-            mode = 'full' if qs.get('mode',['90d'])[0] == 'full' else '90d'
-            threading.Thread(target=get_data, args=(mode,), daemon=True).start()
-            return self._send(json.dumps({'ok':True,'mode':mode},ensure_ascii=False),'application/json; charset=utf-8')
         # ---- Cadastro de RPAs (CRUD sobre config/rpa_metadata.json) ----
         if path == '/api/registry/rpas':
             return self._send_json({'ok': True, 'rpas': rpa_registry.list_rpas()})
@@ -1749,19 +1945,54 @@ class Handler(SimpleHTTPRequestHandler):
             activity_id = path.rsplit('/', 1)[-1]
             base_url, token = self._aa_ctx_from_headers()
             return self._send_json(aa_gateway.activity_detail(base_url, token, activity_id))
+        if path == '/':
+            path = '/index.html'
+        if path.endswith('.html'):
+            return self._serve_html_with_nonce(path)
         return super().do_GET()
 
     def do_POST(self):
+        self._csp_nonce = None
         parsed = urlparse(self.path)
         path = parsed.path
-        if not (path.startswith('/api/aa/') or path.startswith('/api/registry/')):
+        # /api/reload é POST (não GET) de propósito: GET precisa ser
+        # seguro/sem efeito colateral (HTTP RFC 7231) e, antes desta correção,
+        # uma simples <img src="…/api/reload?mode=full"> em QUALQUER página
+        # aberta noutra aba já disparava um reprocessamento completo do
+        # histórico sem nenhuma interação do usuário.
+        protected = path.startswith('/api/aa/') or path.startswith('/api/registry/') or path == '/api/reload'
+        if not protected:
             self.send_response(404); self.end_headers(); return
-        length = int(self.headers.get('Content-Length') or 0)
+        if not self._origin_is_allowed():
+            return self._send_json({'ok': False, 'error': 'ORIGIN_NOT_ALLOWED'}, status=403)
+        if not self._csrf_token_is_valid():
+            return self._send_json(
+                {'ok': False, 'error': 'CSRF_CHECK_FAILED', 'message': 'Token CSRF ausente ou inválido — recarregue a página.'},
+                status=403,
+            )
+        try:
+            length = int(self.headers.get('Content-Length') or 0)
+        except ValueError:
+            return self._send_json({'ok': False, 'error': 'BAD_REQUEST'}, status=400)
+        if length < 0:
+            return self._send_json({'ok': False, 'error': 'BAD_REQUEST'}, status=400)
+        if length > MAX_POST_BODY_BYTES:
+            # Drena o corpo (em pedaços, sem acumular tudo em memória) antes
+            # de responder — sem isso, o cliente ainda está no meio do envio
+            # quando a conexão fecha e recebe um connection reset em vez da
+            # resposta 413, que é a informação útil aqui.
+            self._drain(length)
+            return self._send_json({'ok': False, 'error': 'PAYLOAD_TOO_LARGE'}, status=413)
         raw_body = self.rfile.read(length) if length else b''
         try:
             payload = json.loads(raw_body.decode('utf-8')) if raw_body else {}
         except ValueError:
             payload = {}
+        if path == '/api/reload':
+            qs = parse_qs(parsed.query)
+            mode = 'full' if qs.get('mode',['90d'])[0] == 'full' else '90d'
+            threading.Thread(target=get_data, args=(mode,), daemon=True).start()
+            return self._send_json({'ok': True, 'mode': mode})
         if path.startswith('/api/registry/rpas'):
             return self._handle_registry_post(path, payload)
         if path == '/api/aa/authenticate':
@@ -1801,11 +2032,22 @@ class Handler(SimpleHTTPRequestHandler):
         o navegador os reenvia a cada chamada a partir da memória da sessão."""
         return (self.headers.get('X-AA-Base-Url') or '').rstrip('/'), self.headers.get('X-AA-Token') or ''
 
-    def _send(self,payload,ctype):
-        body=payload.encode('utf-8'); self.send_response(200); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+    def _drain(self, length, chunk_size=65536):
+        """Lê e descarta até `length` bytes do corpo da requisição, em
+        pedaços — nunca acumula o corpo inteiro em memória (é chamado
+        justamente quando `length` já foi identificado como grande demais)."""
+        remaining = length
+        while remaining > 0:
+            data = self.rfile.read(min(chunk_size, remaining))
+            if not data:
+                break
+            remaining -= len(data)
 
-    def _send_json(self, obj):
-        self._send(json.dumps(obj, ensure_ascii=False), 'application/json; charset=utf-8')
+    def _send(self,payload,ctype,status=200):
+        body=payload.encode('utf-8'); self.send_response(status); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+
+    def _send_json(self, obj, status=200):
+        self._send(json.dumps(obj, ensure_ascii=False), 'application/json; charset=utf-8', status=status)
 
     def log_message(self,fmt,*args):
         if '/api/' in self.path: print('[HTTP]',fmt%args)

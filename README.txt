@@ -288,23 +288,66 @@ SEGURANÇA
   localStorage, sessionStorage, log ou PDF — só em variáveis de memória,
   descartadas ao desconectar ou fechar a aba.
 - O proxy genérico da integração (`/api/aa/proxy`) só encaminha caminhos
-  que comecem com /v2, /v3 ou /v4 — nunca uma URL arbitrária.
+  que comecem com /v2, /v3 ou /v4 — nunca uma URL arbitrária. `_forward`
+  também recusa qualquer destino cujo host resolva para loopback, link-local
+  ou o endpoint de metadata de nuvem (169.254.169.254) — defesa contra SSRF
+  a partir de um `X-AA-Base-Url` malicioso, mantendo redes privadas (10/8,
+  172.16/12, 192.168/16) liberadas de propósito (caso de uso legítimo:
+  Control Room on-premises).
 - O Cadastro de RPAs valida todo payload antes de gravar (campos
   obrigatórios, formato de horário, unicidade de processo, ordenação de
-  duração) e escreve via arquivo temporário + substituição atômica — uma
-  falha no meio da escrita nunca deixa config/rpa_metadata.json corrompido.
+  duração, e que nenhum caminho de `dependencyFiles` escape da pasta do
+  projeto — bloqueado tanto na entrada quanto de novo no ponto de uso, em
+  DependencyAnalyzer) e escreve via arquivo temporário + substituição
+  atômica — uma falha no meio da escrita nunca deixa
+  config/rpa_metadata.json corrompido. `create_rpa`/`update_rpa` só copiam
+  chaves conhecidas do payload (allow-list) para o arquivo — uma chamada
+  direta à API não consegue gravar um campo arbitrário (mass assignment).
+- CSRF: toda rota POST que muda estado (`/api/registry/rpas/*`,
+  `/api/aa/*`, `/api/reload`) exige o cabeçalho `X-CSRF-Token`, obtido via
+  `GET /api/csrf-token` — um token gerado uma vez por processo (reiniciar o
+  servidor invalida qualquer token capturado antes) e comparado em tempo
+  constante (`hmac.compare_digest`). Sem cookies/sessão, é essa a defesa
+  contra um site malicioso aberto noutra aba do navegador forçar uma ação
+  (ex.: apagar uma RPA) só com um `<form>`/`fetch(no-cors)` escondido — o
+  servidor também rejeita qualquer requisição cujo header `Origin`, quando
+  presente, não seja a própria origem do app. `/api/reload` deixou de ser
+  GET por causa disso: uma GET com efeito colateral é disparável só com uma
+  tag `<img>`, sem nenhum JavaScript.
+- CSP sem `'unsafe-inline'` em `script-src`: cada resposta `.html` recebe um
+  nonce novo por requisição, injetado em cada `<script>` inline daquela
+  página — só esse nonce exato (ou um `<script src>` de `'self'`) executa.
+  `style-src` mantém `'unsafe-inline'` de propósito (trade-off documentado
+  em `Handler.end_headers` — remover exigiria reescrever toda a geração de
+  `style="..."` dinâmico do frontend; CSS injetado não executa JavaScript
+  arbitrário, o risco real de XSS).
+- `Handler` bloqueia qualquer segmento de caminho começando com "." (nunca
+  mais serve `.git/`, `.DS_Store` etc. — antes, o histórico completo do
+  repositório era acessível via HTTP) e nunca lista o conteúdo de uma pasta
+  (`/config/`, `/logs/` deixaram de expor um índice de arquivos).
+- `do_POST` limita o corpo da requisição a 2 MB (`MAX_POST_BODY_BYTES`) e
+  rejeita um `Content-Length` malformado — sem isso, um corpo arbitrariamente
+  grande era lido inteiro em memória de uma vez.
+- O mock de token da integração AA usa `hashlib` em vez do `hash()` nativo
+  do Python (aleatorizado por processo via `PYTHONHASHSEED`, sem nenhuma
+  garantia de estabilidade) — cosmético (nunca é um segredo real), mas
+  correto por princípio.
 
 --------------------------------------------------------------------------------
 TESTES
 --------------------------------------------------------------------------------
 `python3 test_server.py` roda uma suíte local (unittest da biblioteca
 padrão, sem dependências) cobrindo: os regex de nome de arquivo de log, a
-integração Automation Anywhere em modo mock (sem tocar em ./logs), o CRUD
-completo do Cadastro de RPAs (RpaRegistryStore, sempre contra um arquivo
-JSON temporário — nunca config/rpa_metadata.json real), um smoke test de
-`build_dataset()` contra os logs reais do projeto, e as rotas HTTP
-principais contra um servidor de verdade numa porta livre. Rodar uma classe
-específica: `python3 -m unittest test_server.TestRpaRegistryStore -v`
+integração Automation Anywhere em modo mock (sem tocar em ./logs), o guard
+de SSRF de `_forward` (TestAutomationAnywhereSsrfGuard, sempre com IPs
+literais — nunca depende de DNS/rede), o CRUD completo do Cadastro de RPAs
+(RpaRegistryStore, sempre contra um arquivo JSON temporário — nunca
+config/rpa_metadata.json real — incluindo path traversal e mass assignment),
+um smoke test de `build_dataset()` contra os logs reais do projeto, e as
+rotas HTTP principais contra um servidor de verdade numa porta livre —
+inclusive CSRF/Origin, bloqueio de dotfiles/directory listing e o nonce de
+CSP por requisição. Rodar uma classe específica:
+`python3 -m unittest test_server.TestRpaRegistryStore -v`
 
 `node --test test_dashboard.js` roda os testes das partes puras (sem DOM)
 de assets/dashboard-app.js: `Fmt` inteira (formatação de datas, badges,
