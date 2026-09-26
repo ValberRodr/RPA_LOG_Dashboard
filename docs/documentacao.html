@@ -1,0 +1,1159 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>RPA Ops Monitor — Documentação Técnica</title>
+<style>
+    :root {
+        --bg: #111217; --bg-soft: #17191f; --panel: #1c1e25; --panel-2: #22252d; --panel-3: #282b35;
+        --border: rgba(255,255,255,.075); --border-strong: rgba(255,255,255,.13);
+        --text: #f4f5f9; --text-2: #a8adbd; --text-3: #747a8e;
+        --primary: #6c68e7; --primary-soft: rgba(108,104,231,.15);
+        --cyan: #43c6d9; --success: #35c58b; --success-soft: rgba(53,197,139,.13);
+        --warning: #f2b84b; --warning-soft: rgba(242,184,75,.14);
+        --danger: #f06464; --danger-soft: rgba(240,100,100,.14);
+        --info: #63a4ff;
+        --shadow: 0 18px 45px rgba(0,0,0,.25);
+        --radius: 12px;
+        --sidebar-w: 300px;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    html[data-theme="light"] {
+        --bg: #f4f6fb; --bg-soft: #eef1f6; --panel: #ffffff; --panel-2: #f7f8fb; --panel-3: #eef1f6;
+        --border: rgba(22,32,54,.09); --border-strong: rgba(22,32,54,.16);
+        --text: #172036; --text-2: #55607a; --text-3: #8891a6;
+        --shadow: 0 12px 35px rgba(32,50,85,.08);
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+        margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans);
+        font-size: 14.5px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--primary); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code, pre, .mono { font-family: var(--mono); }
+    code { background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-size: .89em; color: var(--cyan); }
+    pre.code-block {
+        background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 14px 16px; overflow-x: auto; font-size: 12.6px; line-height: 1.55; color: var(--text-2);
+        position: relative; margin: 14px 0;
+    }
+    pre.code-block code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; }
+    pre.code-block .lang-tag {
+        position: absolute; top: 8px; right: 12px; font: 700 9.5px/1 var(--sans); letter-spacing: .06em;
+        text-transform: uppercase; color: var(--text-3);
+    }
+    h1, h2, h3, h4 { font-weight: 800; letter-spacing: -.01em; color: var(--text); scroll-margin-top: 84px; }
+    h2 { font-size: 21px; margin: 0 0 6px; display: flex; align-items: center; gap: 8px; }
+    h3 { font-size: 16.5px; margin: 30px 0 8px; padding-top: 4px; }
+    h4 { font-size: 13.5px; margin: 20px 0 6px; color: var(--text-2); text-transform: uppercase; letter-spacing: .05em; }
+    p { margin: 0 0 12px; color: var(--text-2); }
+    .lead { font-size: 15.5px; color: var(--text); }
+    ul, ol { color: var(--text-2); padding-left: 22px; margin: 0 0 14px; }
+    li { margin-bottom: 5px; }
+    strong { color: var(--text); }
+
+    /* ---- layout ---- */
+    .doc-shell { display: flex; min-height: 100vh; }
+    .sidebar {
+        width: var(--sidebar-w); flex: none; position: fixed; top: 0; left: 0; bottom: 0;
+        background: var(--bg-soft); border-right: 1px solid var(--border); overflow-y: auto;
+        padding: 18px 14px 40px; z-index: 20;
+    }
+    .sidebar-brand { display: flex; align-items: center; gap: 9px; padding: 4px 8px 16px; }
+    .sidebar-brand .mark {
+        width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg, var(--primary), var(--cyan));
+        display: flex; align-items: center; justify-content: center; flex: none; color: #fff; font-weight: 800; font-size: 13px;
+    }
+    .sidebar-brand .name { font-weight: 800; font-size: 13.5px; line-height: 1.25; }
+    .sidebar-brand .name small { display: block; font-weight: 600; color: var(--text-3); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; }
+    .toc-search {
+        width: 100%; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--panel);
+        color: var(--text); font: inherit; font-size: 12.5px; margin-bottom: 14px;
+    }
+    .toc-search:focus { outline: none; border-color: var(--primary); }
+    .toc-group { margin-bottom: 4px; }
+    .toc-group-title {
+        font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: var(--text-3);
+        padding: 12px 8px 6px;
+    }
+    .toc-link {
+        display: block; padding: 6px 8px; border-radius: 7px; font-size: 12.8px; color: var(--text-2);
+        border-left: 2px solid transparent; margin-bottom: 1px;
+    }
+    .toc-link:hover { background: var(--panel); color: var(--text); text-decoration: none; }
+    .toc-link.active { background: var(--primary-soft); color: var(--primary); border-left-color: var(--primary); font-weight: 700; }
+    .toc-link.hidden { display: none; }
+
+    .content-wrap { margin-left: var(--sidebar-w); flex: 1; min-width: 0; }
+    .topbar {
+        position: sticky; top: 0; z-index: 15; display: flex; align-items: center; justify-content: space-between;
+        gap: 12px; padding: 10px 34px; background: color-mix(in srgb, var(--bg) 88%, transparent);
+        backdrop-filter: blur(10px); border-bottom: 1px solid var(--border);
+    }
+    .topbar-title { font-size: 12.5px; font-weight: 700; color: var(--text-2); }
+    .topbar-actions { display: flex; gap: 8px; }
+    .btn-chip {
+        display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px;
+        border: 1px solid var(--border-strong); background: var(--panel); color: var(--text-2); font: 700 11.5px/1 var(--sans);
+        cursor: pointer;
+    }
+    .btn-chip:hover { color: var(--text); border-color: var(--primary); }
+
+    main.content { max-width: 900px; margin: 0 auto; padding: 40px 34px 120px; }
+    .doc-hero { padding: 10px 0 34px; border-bottom: 1px solid var(--border); margin-bottom: 34px; }
+    .doc-hero .eyebrow { font: 800 11px/1 var(--sans); letter-spacing: .09em; text-transform: uppercase; color: var(--primary); margin-bottom: 10px; }
+    .doc-hero h1 { font-size: 32px; margin: 0 0 12px; }
+    .doc-hero p { font-size: 15.5px; max-width: 660px; }
+    .hero-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    .chip { font: 700 11px/1 var(--sans); padding: 6px 10px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); color: var(--text-2); }
+
+    section.section { margin-bottom: 52px; }
+    .section-intro { color: var(--text-2); }
+
+    .callout { border-radius: var(--radius); border: 1px solid var(--border); padding: 14px 16px; margin: 16px 0; display: flex; gap: 11px; }
+    .callout .icon-dot { width: 20px; height: 20px; border-radius: 6px; flex: none; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:12px; }
+    .callout p, .callout ul { margin: 0; font-size: 13.3px; }
+    .callout ul { margin-top: 6px; }
+    .callout-warn { background: var(--warning-soft); border-color: rgba(242,184,75,.35); }
+    .callout-warn .icon-dot { background: var(--warning); color: #241a03; }
+    .callout-info { background: var(--primary-soft); border-color: rgba(108,104,231,.35); }
+    .callout-info .icon-dot { background: var(--primary); color: #fff; }
+    .callout-danger { background: var(--danger-soft); border-color: rgba(240,100,100,.35); }
+    .callout-danger .icon-dot { background: var(--danger); color: #2b0808; }
+    .callout-ok { background: var(--success-soft); border-color: rgba(53,197,139,.35); }
+    .callout-ok .icon-dot { background: var(--success); color: #06281b; }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); margin: 14px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 12.8px; background: var(--panel); }
+    th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { background: var(--panel-2); color: var(--text-3); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; font-weight: 800; white-space: nowrap; }
+    tr:last-child td { border-bottom: none; }
+    td code { white-space: nowrap; }
+    .col-narrow { width: 1%; white-space: nowrap; }
+
+    .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font: 800 10.3px/1.4 var(--sans); text-transform: uppercase; letter-spacing: .03em; }
+    .badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .badge.success { background: var(--success-soft); color: var(--success); }
+    .badge.warning { background: var(--warning-soft); color: var(--warning); }
+    .badge.danger  { background: var(--danger-soft);  color: var(--danger); }
+    .badge.info    { background: rgba(99,164,255,.15); color: var(--info); }
+    .badge.neutral { background: var(--panel-3); color: var(--text-2); }
+
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px,1fr)); gap: 12px; margin: 16px 0; }
+    .fact-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+    .fact-card .num { font: 800 22px/1 var(--sans); color: var(--text); }
+    .fact-card .label { font-size: 11.5px; color: var(--text-3); margin-top: 5px; }
+
+    .file-tree { font-family: var(--mono); font-size: 12.3px; color: var(--text-2); background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px; overflow-x: auto; }
+    .file-tree .d { color: var(--primary); font-weight: 700; }
+    .file-tree .c { color: var(--text-3); }
+
+    /* pipeline diagram */
+    .pipeline { display: flex; flex-direction: column; align-items: stretch; gap: 0; margin: 20px 0; }
+    .pipe-box {
+        background: var(--panel); border: 1px solid var(--border-strong); border-radius: var(--radius);
+        padding: 12px 16px; display: flex; flex-direction: column; gap: 2px;
+    }
+    .pipe-box .t { font-weight: 800; font-size: 13px; }
+    .pipe-box .s { font-size: 11.5px; color: var(--text-3); }
+    .pipe-arrow { align-self: center; display: flex; flex-direction: column; align-items: center; color: var(--text-3); font-size: 10.5px; padding: 5px 0; }
+    .pipe-arrow .line { width: 1.5px; height: 16px; background: var(--border-strong); }
+    .pipe-arrow .tri { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid var(--border-strong); }
+    .pipe-fork { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+    .flow-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 16px 0; }
+    .flow-node { background: var(--panel); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 13px; font-size: 12px; font-weight: 700; }
+    .flow-sep { color: var(--text-3); font-size: 16px; }
+
+    /* state machine */
+    .state-graph { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+    .state-chip { border: 1px solid var(--border-strong); border-radius: 10px; padding: 8px 12px; font-size: 11.8px; background: var(--panel); }
+    .state-chip b { display: block; font-size: 12.5px; margin-bottom: 2px; }
+
+    .anchor-link { opacity: 0; margin-left: 6px; font-size: 13px; color: var(--text-3); }
+    h2:hover .anchor-link, h3:hover .anchor-link { opacity: 1; }
+
+    .kbd { font-family: var(--mono); background: var(--panel-3); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; font-size: .85em; }
+
+    footer.doc-footer { padding: 30px 34px 60px; color: var(--text-3); font-size: 12px; border-top: 1px solid var(--border); max-width: 900px; margin: 0 auto; }
+
+    @media (max-width: 980px) {
+        .sidebar { display: none; }
+        .content-wrap { margin-left: 0; }
+    }
+    @media print {
+        .sidebar, .topbar { display: none !important; }
+        .content-wrap { margin-left: 0; }
+        body { background: #fff; color: #111; }
+        a { color: #111; }
+        pre.code-block, table, .callout, .fact-card, .pipe-box, .flow-node, .state-chip { break-inside: avoid; }
+    }
+</style>
+</head>
+<body>
+<div class="doc-shell">
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+            <div class="mark">OP</div>
+            <div class="name">RPA Ops Monitor<small>Documentação técnica</small></div>
+        </div>
+        <input class="toc-search" id="tocSearch" type="search" placeholder="Filtrar seções…">
+
+        <div class="toc-group">
+            <div class="toc-group-title">Visão geral</div>
+            <a class="toc-link" href="#introducao">Introdução</a>
+            <a class="toc-link" href="#inicio-rapido">Início rápido</a>
+            <a class="toc-link" href="#mapa-arquivos">Mapa de arquivos</a>
+        </div>
+        <div class="toc-group">
+            <div class="toc-group-title">Arquitetura</div>
+            <a class="toc-link" href="#fluxo-dados">Fluxo de dados</a>
+            <a class="toc-link" href="#ciclo-requisicao">Ciclo de vida da requisição</a>
+            <a class="toc-link" href="#escopo-compartilhado">Escopo léxico compartilhado</a>
+            <a class="toc-link" href="#cache-invalidacao">Cache e invalidação</a>
+        </div>
+        <div class="toc-group">
+            <div class="toc-group-title">Backend · server.py</div>
+            <a class="toc-link" href="#pipeline-classes">Pipeline de dados (classes)</a>
+            <a class="toc-link" href="#api-http">API HTTP</a>
+            <a class="toc-link" href="#modelo-dados">Modelo de dados (obs / index)</a>
+            <a class="toc-link" href="#vocabulario-estados">Vocabulário de 11 estados</a>
+            <a class="toc-link" href="#config-cadastro">Cadastro (rpa_metadata.json)</a>
+            <a class="toc-link" href="#formato-logs">Formato dos arquivos de log</a>
+        </div>
+        <div class="toc-group">
+            <div class="toc-group-title">Frontend · Dashboard</div>
+            <a class="toc-link" href="#inventario-paginas">Inventário de páginas</a>
+            <a class="toc-link" href="#referencia-classes-frontend">Referência de classes</a>
+            <a class="toc-link" href="#padrao-alias">Padrão de alias + boot</a>
+        </div>
+        <div class="toc-group">
+            <div class="toc-group-title">Frontend · Páginas avulsas</div>
+            <a class="toc-link" href="#kit-ui-compartilhado">Kit de UI (RPAUI)</a>
+            <a class="toc-link" href="#paginas-avulsas">Investigação / Diagnóstico / Dashboard da RPA</a>
+        </div>
+        <div class="toc-group">
+            <div class="toc-group-title">Integração Automation Anywhere</div>
+            <a class="toc-link" href="#aa-visao-geral">Visão geral e remoção</a>
+            <a class="toc-link" href="#aa-maquina-estados">Máquina de estados</a>
+            <a class="toc-link" href="#aa-motor-correlacao">Motor de correlação</a>
+            <a class="toc-link" href="#aa-referencia-frontend">Classes do módulo (frontend)</a>
+            <a class="toc-link" href="#aa-gateway-backend">AutomationAnywhereGateway (backend)</a>
+            <a class="toc-link" href="#aa-paginas">As 10 páginas novas</a>
+        </div>
+        <div class="toc-group">
+            <div class="toc-group-title">Qualidade</div>
+            <a class="toc-link" href="#testes">Testes automatizados</a>
+            <a class="toc-link" href="#seguranca">Segurança</a>
+        </div>
+        <div class="toc-group">
+            <div class="toc-group-title">Sustentação</div>
+            <a class="toc-link" href="#runbook">Runbook operacional</a>
+            <a class="toc-link" href="#extensao">Como estender</a>
+            <a class="toc-link" href="#glossario">Glossário</a>
+        </div>
+    </nav>
+
+    <div class="content-wrap">
+        <div class="topbar">
+            <div class="topbar-title">RPA Ops Monitor · Documentação técnica</div>
+            <div class="topbar-actions">
+                <button class="btn-chip" id="themeToggle">🌙 Tema</button>
+                <button class="btn-chip" onclick="window.print()">🖨 Exportar PDF</button>
+            </div>
+        </div>
+
+        <main class="content">
+            <header class="doc-hero">
+                <div class="eyebrow">Documentação de sustentação · uso interno</div>
+                <h1>RPA Ops Monitor</h1>
+                <p class="lead">Referência técnica completa do painel de observabilidade de RPAs: arquitetura, pipeline de dados, todas as classes do backend e do frontend, modelo de dados, integração opcional com a Automation Anywhere 360 Control Room, testes automatizados e o runbook de sustentação. Escrita para quem vai manter e evoluir o código, não para o usuário final do dashboard.</p>
+                <div class="hero-chips">
+                    <span class="chip">Python 3 · stdlib apenas</span>
+                    <span class="chip">JavaScript vanilla · sem build/bundler</span>
+                    <span class="chip">Zero dependências externas</span>
+                    <span class="chip">Somente 127.0.0.1</span>
+                    <span class="chip">10 RPAs · 11 VMs (base sintética)</span>
+                </div>
+            </header>
+
+            <!-- ================================================================ -->
+            <section class="section" id="introducao">
+                <h2>Introdução<a class="anchor-link" href="#introducao">#</a></h2>
+                <p>O <strong>RPA Ops Monitor</strong> é um painel de observabilidade para uma esteira de RPAs (Robotic Process Automation) operando em VMs dedicadas. Ele lê os arquivos de log gerados pelas próprias automações e pela telemetria das máquinas, calcula indicadores operacionais (SLA, duração, retries, confiabilidade de infraestrutura, Pareto de erros, sugestão de consolidação de VMs) e apresenta tudo em um cockpit único, com telas de drill-down para investigação técnica.</p>
+                <p>O projeto é deliberadamente <strong>sem dependências externas</strong>: o backend é um único processo Python usando apenas a biblioteca padrão (<code>http.server</code>), e o frontend é JavaScript clássico servido diretamente pelo mesmo processo — sem Node, sem bundler, sem framework, sem CDN. Essa escolha de arquitetura é o que permite rodar em qualquer estação com Python 3 instalado, sem instalação de pacotes e sem acesso à internet.</p>
+                <div class="callout callout-info">
+                    <div class="icon-dot">i</div>
+                    <p>Este documento assume que quem o lê já sabe o que o produto faz operacionalmente (a UI é autoexplicativa). O foco aqui é <strong>como o código está organizado</strong>, <strong>por que</strong> certas decisões foram tomadas e <strong>onde mexer</strong> para cada tipo de mudança.</p>
+                </div>
+                <h3>Módulos opcionais</h3>
+                <p>Há um único módulo aditivo e removível no projeto: a <a href="#aa-visao-geral">integração com a Automation Anywhere 360 Control Room</a> (<code>assets/aa-integration.js</code> + <code>AutomationAnywhereGateway</code> em <code>server.py</code>). Remover as duas tags (<code>&lt;link&gt;</code>/<code>&lt;script&gt;</code>) de <code>index.html</code> devolve o dashboard exatamente ao estado anterior à integração — nenhum dado, cálculo ou fluxo do cockpit original depende dela.</p>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="inicio-rapido">
+                <h2>Início rápido<a class="anchor-link" href="#inicio-rapido">#</a></h2>
+                <h3>Rodar o painel</h3>
+                <p>Duplo clique no launcher do seu sistema operacional, ou execute o servidor manualmente:</p>
+                <pre class="code-block"><span class="lang-tag">shell</span><code># macOS / Linux
+./Iniciar_Monitoramento.command
+
+# Windows
+Iniciar_Monitoramento.bat
+
+# Manual (qualquer SO com Python 3)
+python3 server.py
+# abre automaticamente http://127.0.0.1:8765/index.html</code></pre>
+                <p>A porta pode ser alterada com a variável de ambiente <code>RPA_MONITOR_PORT</code> (padrão <code>8765</code>). O servidor só escuta em <code>127.0.0.1</code> — não é exposto na rede.</p>
+
+                <h3>Rodar os testes automatizados</h3>
+                <pre class="code-block"><span class="lang-tag">shell</span><code># Backend — 26 testes, unittest da stdlib, sem dependências
+python3 test_server.py
+python3 -m unittest test_server.TestAutomationAnywhereGatewayMock -v   # rodar uma classe específica
+
+# Frontend (partes puras, sem DOM) — 18 testes, test runner nativo do Node ≥18
+node --test test_dashboard.js</code></pre>
+
+                <h3>Requisitos</h3>
+                <div class="table-wrap"><table>
+                    <tr><th>Para</th><th>Requisito</th></tr>
+                    <tr><td>Rodar o painel</td><td>Python 3.9+ (só biblioteca padrão — nenhum <code>pip install</code>)</td></tr>
+                    <tr><td>Rodar <code>test_dashboard.js</code></td><td>Node.js ≥ 18 (usa <code>node:test</code>/<code>node:assert</code> nativos) — opcional, só para desenvolvimento</td></tr>
+                    <tr><td>Abrir o painel</td><td>Qualquer navegador moderno; Chart.js é vendorizado localmente em <code>assets/chart.umd.min.js</code></td></tr>
+                </table></div>
+
+                <div class="callout callout-warn">
+                    <div class="icon-dot">!</div>
+                    <p>Abrir os arquivos <code>.html</code> diretamente via <code>file://</code> (sem o servidor) funciona parcialmente: cada página cai no fallback estático <code>assets/observability-data.js</code>/<code>assets/index-data.js</code> (dados congelados, sem leitura dos logs reais) e o botão "Recarregar dados" fica desabilitado. Use sempre o servidor local para trabalhar com dados atuais.</p>
+                </div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="mapa-arquivos">
+                <h2>Mapa de arquivos<a class="anchor-link" href="#mapa-arquivos">#</a></h2>
+                <div class="file-tree">
+<span class="d">RPA_Observability_Package_v3/</span>
+├── server.py                      <span class="c"># backend: pipeline de dados + servidor HTTP + integração AA</span>
+├── test_server.py                 <span class="c"># 26 testes do backend (unittest, stdlib)</span>
+├── test_dashboard.js              <span class="c"># 18 testes das partes puras do frontend (node --test)</span>
+├── index.html                     <span class="c"># cockpit operacional (SPA de página única)</span>
+├── investigacao.html              <span class="c"># investigação forense por execution_id</span>
+├── diagnostico.html               <span class="c"># diagnóstico técnico-operacional por execution_id</span>
+├── rpa-dashboard.html             <span class="c"># dashboard histórico individual da RPA</span>
+├── Iniciar_Monitoramento.command  <span class="c"># launcher macOS/Linux</span>
+├── Iniciar_Monitoramento.bat      <span class="c"># launcher Windows</span>
+├── README.txt                     <span class="c"># guia de arquitetura resumido (nível "onboarding rápido")</span>
+├── <span class="d">docs/</span>
+│   └── documentacao.html          <span class="c"># ESTE arquivo</span>
+├── <span class="d">assets/</span>
+│   ├── dashboard-app.js           <span class="c"># toda a lógica de index.html, 14 classes</span>
+│   ├── observability-core.js      <span class="c"># kit de UI (window.RPAUI) das 3 páginas avulsas</span>
+│   ├── observability.css          <span class="c"># CSS compartilhado pelas 3 páginas avulsas</span>
+│   ├── aa-integration.js          <span class="c"># integração opcional Automation Anywhere (14 classes)</span>
+│   ├── aa-integration.css         <span class="c"># estilos do módulo acima</span>
+│   ├── chart.umd.min.js           <span class="c"># Chart.js vendorizado (sem CDN) — só index.html</span>
+│   ├── auto-refresh.js            <span class="c"># badge + timer de refresh automático (20 min)</span>
+│   ├── observability-data.js      <span class="c"># fallback estático de OBS_DATA (uso via file://)</span>
+│   └── index-data.js              <span class="c"># fallback estático de INDEX_DATA (uso via file://)</span>
+├── <span class="d">config/</span>
+│   ├── rpa_metadata.json          <span class="c"># cadastro: 10 RPAs + 44 regras de agenda</span>
+│   ├── aa_config.json             <span class="c"># config NÃO sensível da integração AA (URL/usuário)</span>
+│   └── <span class="d">dependencies/</span>                <span class="c"># arquivos de dependência fictícios por RPA</span>
+└── <span class="d">logs/</span>Organizacao&amp;Processos/Melhoria_Continua/Monitoramento/
+    ├── <span class="d">Logs/AAAA/MM/{processo}/</span>     <span class="c"># RPA_AAAA-MM-DD.log e RPA_AAAA-MM-DD_{execution_id}.log</span>
+    └── <span class="d">VMS/Historico/AAAA/MM/{maquina}/</span> <span class="c"># VM_AAAA-MM-DD.jsonl</span>
+                </div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="fluxo-dados">
+                <h2>Fluxo de dados<a class="anchor-link" href="#fluxo-dados">#</a></h2>
+                <p>Tudo no painel deriva de três fontes em disco: os logs de execução consolidados por dia, os logs de eventos por execução, e a telemetria de VM. Nada é persistido em banco — cada requisição HTTP relevante decide se precisa reprocessar (ver <a href="#cache-invalidacao">cache e invalidação</a>) e, quando precisa, o pipeline abaixo roda por completo.</p>
+                <div class="pipeline">
+                    <div class="pipe-box"><div class="t">logs/*.log, logs/*.jsonl</div><div class="s">Execuções, eventos por etapa, telemetria de VM — filtrados por nome de arquivo ANTES de abrir (janela de datas)</div></div>
+                    <div class="pipe-arrow"><div class="line"></div><div class="tri"></div><span><code>DatasetBuilder.build_dataset(mode)</code></span></div>
+                    <div class="pipe-box"><div class="t">obs — dataset "de detalhe"</div><div class="s">executions, eventsByExecution, vmContextByExecution, rpaAggregates, recurrenceByExecution, dependencyStatus, loadIssues, loadStats</div></div>
+                    <div class="pipe-arrow"><div class="line"></div><div class="tri"></div><span><code>IndexBuilder.build_index(obs, …)</code></span></div>
+                    <div class="pipe-box"><div class="t">index — dataset "agregado"</div><div class="s">rpas (estado operacional), trend, timeline, incidents, alerts, vms, vmUtilization, vmReliability, vmConsolidation, errorParetos, summary</div></div>
+                    <div class="pipe-arrow"><div class="line"></div><div class="tri"></div></div>
+                    <div class="pipe-fork">
+                        <div class="pipe-box"><div class="t">GET /assets/observability-data.js</div><div class="s">window.OBS_DATA = obs</div></div>
+                        <div class="pipe-box"><div class="t">GET /assets/index-data.js</div><div class="s">window.INDEX_DATA = index</div></div>
+                    </div>
+                    <div class="pipe-arrow"><div class="line"></div><div class="tri"></div></div>
+                    <div class="pipe-box"><div class="t">Frontend</div><div class="s">index.html lê <code>DATA</code> (= INDEX_DATA); as 3 páginas avulsas leem <code>window.OBS_DATA</code>/<code>window.INDEX_DATA</code> via <code>window.RPAUI</code></div></div>
+                </div>
+                <p>O <code>obs</code> ("detalhe") e o <code>index</code> ("agregado") são gerados juntos numa única chamada — <code>build_dataset</code> monta <code>obs</code> e, ao final, chama <code>build_index(obs, …)</code> internamente. Isso significa que os dois arquivos servidos ao navegador são <strong>sempre consistentes entre si</strong> (mesmo snapshot, mesma janela de tempo).</p>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="ciclo-requisicao">
+                <h2>Ciclo de vida da requisição<a class="anchor-link" href="#ciclo-requisicao">#</a></h2>
+                <p><code>Handler</code> (subclasse de <code>SimpleHTTPRequestHandler</code>) intercepta um pequeno conjunto de rotas dinâmicas e delega todo o resto (HTML, CSS, JS estáticos) ao comportamento padrão do <code>http.server</code>, servindo a partir da raiz do projeto (<code>directory=ROOT</code>).</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Método</th><th>Rota</th><th>O que faz</th></tr>
+                    <tr><td class="col-narrow"><span class="badge info">GET</span></td><td><code>/assets/observability-data.js</code></td><td>Chama <code>get_data(mode)</code> e devolve <code>window.OBS_DATA = {…}</code> como JavaScript gerado na hora.</td></tr>
+                    <tr><td class="col-narrow"><span class="badge info">GET</span></td><td><code>/assets/index-data.js</code></td><td>Idem, devolvendo <code>window.INDEX_DATA = {…}</code>.</td></tr>
+                    <tr><td class="col-narrow"><span class="badge info">GET</span></td><td><code>/api/status</code></td><td>Snapshot rápido: contagem de execuções/eventos e <code>loadStats</code> da última carga.</td></tr>
+                    <tr><td class="col-narrow"><span class="badge info">GET</span></td><td><code>/api/load-status</code></td><td>Lê o dicionário global <code>_build_status</code> — usado pelo frontend para desenhar a barra de progresso real durante um reload.</td></tr>
+                    <tr><td class="col-narrow"><span class="badge info">GET</span></td><td><code>/api/reload?mode=90d|full</code></td><td>Dispara <code>get_data(mode)</code> numa <code>threading.Thread</code> em segundo plano e retorna imediatamente — o cliente acompanha o progresso via <code>/api/load-status</code>.</td></tr>
+                    <tr><td class="col-narrow"><span class="badge info">GET</span></td><td><code>/api/aa/config</code></td><td>Config não sensível da integração AA (<code>baseUrl</code>/<code>username</code>).</td></tr>
+                    <tr><td class="col-narrow"><span class="badge info">GET</span></td><td><code>/api/aa/activity/execution/{id}</code></td><td>Detalhe de uma atividade da Control Room (proxy/mock).</td></tr>
+                    <tr><td class="col-narrow"><span class="badge success">POST</span></td><td><code>/api/aa/authenticate</code></td><td>Autentica na Control Room (ou emite um token mock).</td></tr>
+                    <tr><td class="col-narrow"><span class="badge success">POST</span></td><td><code>/api/aa/discover</code></td><td>Discovery de capabilities (Activity, Audit, Repository, Scheduler, Devices, Packages, Policy, WLM, ACC, BotInsight).</td></tr>
+                    <tr><td class="col-narrow"><span class="badge success">POST</span></td><td><code>/api/aa/activity/list</code></td><td>Activity List paginada.</td></tr>
+                    <tr><td class="col-narrow"><span class="badge success">POST</span></td><td><code>/api/aa/proxy</code></td><td>Proxy genérico para as demais capacidades — restrito a <code>/v2</code>, <code>/v3</code>, <code>/v4</code>.</td></tr>
+                    <tr><td class="col-narrow"><span class="badge neutral">GET</span></td><td>qualquer outro caminho</td><td>Cai em <code>super().do_GET()</code> — serve o arquivo estático correspondente a partir da raiz do projeto.</td></tr>
+                </table></div>
+                <p>Toda resposta recebe, em <code>Handler.end_headers()</code>: <code>Cache-Control: no-store, no-cache, must-revalidate, max-age=0</code> (o navegador nunca deve cachear nada — os dados mudam a cada reprocessamento) e um <code>Content-Security-Policy</code> restrito a <code>'self'</code> (ver <a href="#seguranca">Segurança</a>).</p>
+                <div class="callout callout-info">
+                    <div class="icon-dot">i</div>
+                    <p>O parâmetro <code>?mode=90d</code> nas duas tags <code>&lt;script&gt;</code> estáticas do primeiro carregamento de cada página garante que abrir o app sempre volta ao padrão de 90 dias, mesmo que uma sessão anterior tenha deixado "histórico completo" em cache no processo do servidor. O refresh incremental (<code>reloadData</code>) busca sem esse parâmetro, preservando o modo que o usuário escolheu na sessão atual.</p>
+                </div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="escopo-compartilhado">
+                <h2>Escopo léxico compartilhado (leia antes de mexer no frontend)<a class="anchor-link" href="#escopo-compartilhado">#</a></h2>
+                <div class="callout callout-danger">
+                    <div class="icon-dot">!</div>
+                    <p><strong>Isto é a regra mais importante deste documento.</strong> <code>index.html</code> carrega <code>assets/dashboard-app.js</code> e, depois, <code>assets/aa-integration.js</code> como duas tags <code>&lt;script&gt;</code> clássicas — sem <code>type="module"</code> e sem nenhuma envolvida por IIFE. Scripts clássicos no mesmo documento compartilham <strong>um único ambiente léxico de topo</strong>: toda <code>let</code>/<code>const</code>/<code>class</code>/<code>function</code> declarada em <code>dashboard-app.js</code> fica visível, por nome, para <code>aa-integration.js</code> carregado em seguida.</p>
+                </div>
+                <p><code>aa-integration.js</code> depende disso para ler, por nome puro, sem nenhuma importação: <code>DATA</code>, <code>$</code>, <code>$$</code>, <code>escapeHtml</code>, <code>showToast</code>, <code>goToPage</code>, <code>fmtDateTime</code>, <code>fmtTime</code>, <code>window.OBS_DATA</code>, <code>window.DATA</code>. Envolver <code>dashboard-app.js</code> num IIFE, ou convertê-lo para <code>type="module"</code> (módulos ES têm escopo próprio, não vazam para o escopo global), faz esses identificadores desaparecerem e quebra a integração inteira silenciosamente — sem erro de sintaxe, só chamadas para <code>undefined</code>.</p>
+                <h3>Por que as classes não resolveram isso</h3>
+                <p>A conversão para OOP (ver <a href="#referencia-classes-frontend">Referência de classes</a>) moveu cada função solta para dentro de uma classe como <code>static</code>, mas <strong>preservou o alias de nível superior</strong> para cada uma (ex.: <code>const escapeHtml = Fmt.escapeHtml;</code>) exatamente por causa desta dependência — sem os aliases, seria preciso reescrever <code>aa-integration.js</code> inteiro para chamar <code>Fmt.escapeHtml(...)</code> em vez de <code>escapeHtml(...)</code>, e o próprio módulo AA teria que virar um "consumidor consciente" das classes internas do dashboard, acoplamento que o projeto evita de propósito.</p>
+                <pre class="code-block"><span class="lang-tag">js</span><code>// fim de assets/dashboard-app.js — um alias por função que existia solta antes
+const escapeHtml = Fmt.escapeHtml;
+const showToast  = UiFeedback.showToast;
+const goToPage   = NavigationController.goToPage;
+// ... (lista completa em #padrao-alias)
+
+// aa-integration.js (carregado DEPOIS, mesmo documento) lê essas mesmas
+// variáveis de topo por nome, em tempo de chamada:
+showToast('Automation Anywhere conectado.');
+goToPage('aa-control-room');</code></pre>
+                <p><strong>Regra prática para PRs futuros:</strong> nunca adicione <code>type="module"</code> a <code>dashboard-app.js</code>, nunca envolva o arquivo inteiro numa função IIFE, e ao renomear qualquer identificador de topo (função, classe, alias) grep em <code>assets/aa-integration.js</code> antes de finalizar a mudança.</p>
+                <p>A mesma regra vale, num nível mais restrito, para <a href="#kit-ui-compartilhado"><code>observability-core.js</code></a>: ele <em>é</em> envolvido por uma IIFE própria, mas de propósito — expõe deliberadamente um único ponto de contato, <code>window.RPAUI</code>, para as 3 páginas avulsas. Trocar qualquer chave desse objeto (<code>D</code>, <code>esc</code>, <code>getRpa</code>, etc.) quebra as três páginas ao mesmo tempo.</p>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="cache-invalidacao">
+                <h2>Cache e invalidação<a class="anchor-link" href="#cache-invalidacao">#</a></h2>
+                <p>Há dois níveis de cache no backend, ambos em memória (nada em disco além dos próprios logs):</p>
+                <h3>1. Cache do dataset completo — <code>DataCache.get_data(mode)</code></h3>
+                <p>Guarda o último par <code>(obs, index)</code> construído, junto de um <strong>fingerprint barato</strong>: contagem de arquivos <code>.log</code>/<code>.jsonl</code> em <code>RPA_LOG_ROOT</code>/<code>VM_ROOT</code>, o <code>mtime</code> mais recente e o tamanho total somado — tudo via <code>os.walk</code> + <code>stat()</code>, sem ler conteúdo. Uma requisição repetida sem nada alterado em disco retorna o cache sem tocar nos arquivos.</p>
+                <pre class="code-block"><span class="lang-tag">python</span><code>fp = (count, newest, size)
+if _cache['obs'] is None or _cache['fingerprint'] != fp or _cache['mode'] != effective_mode:
+    obs, index = build_dataset(effective_mode)
+    _cache.update({'fingerprint': fp, 'mode': effective_mode, 'obs': obs, 'index': index})
+return _cache['obs'], _cache['index']</code></pre>
+                <h3>2. Cache por arquivo — <code>LogFileReader._read_cached(path)</code></h3>
+                <p>Mesmo quando o fingerprint global muda (um arquivo novo apareceu, por exemplo), a maioria dos arquivos antigos não mudou — <code>_file_cache</code> guarda, por caminho, <code>{mtime_ns, size, rows}</code> e só reabre/reparseia um arquivo se <code>mtime</code> ou <code>size</code> mudaram desde a última leitura. Isso é o que torna um refresh incremental barato mesmo com centenas de arquivos de log acumulados.</p>
+                <div class="callout callout-warn">
+                    <div class="icon-dot">!</div>
+                    <p>Os dois caches são <strong>por processo</strong>, não por modo isoladamente — trocar de <code>90d</code> para <code>full</code> invalida o cache do dataset completo (o <code>fingerprint</code> por si só não muda, mas <code>_cache['mode']</code> muda, forçando reconstrução). Já <code>_file_cache</code> nunca é limpo por modo: um arquivo lido em modo <code>90d</code> permanece em cache e é reaproveitado se a mesma janela pedir de novo em modo <code>full</code>.</p>
+                </div>
+                <h3>Reconstrução incremental no frontend</h3>
+                <p><code>RpaDataStore.reloadData(mode)</code> (chamada pelo botão "Recarregar dados" e pelo refresh automático de 20 min) <strong>nunca</strong> recarrega a página inteira: chama <code>/api/reload</code>, sonda <code>/api/load-status</code> a cada 350&nbsp;ms até a fase virar <code>concluido</code>/<code>erro</code>, e então rebusca só os dois scripts de dados com um <code>&lt;script&gt;</code> temporário (<code>fetchScript</code>) — preservando página ativa, filtros e posição de scroll.</p>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="pipeline-classes">
+                <h2>Backend · pipeline de dados (server.py)<a class="anchor-link" href="#pipeline-classes">#</a></h2>
+                <p><code>server.py</code> concentra tudo: parsing dos logs, cálculo de indicadores, servidor HTTP e a integração AA. O pipeline de construção do dataset está organizado em 11 classes, na ordem em que aparecem no arquivo — cada uma expõe seus métodos como <code>@staticmethod</code> com o mesmo nome que a função solta original tinha, e ganha um alias de módulo (<code>build_dataset = DatasetBuilder.build_dataset</code>) logo depois das definições, preservando toda chamada interna e a superfície usada por <code>test_server.py</code> sem reescrever nada.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Classe</th><th>Responsabilidade</th><th>Métodos</th></tr>
+                    <tr><td><code>TimeMath</code></td><td>Conversão de data/hora ISO e estatística simples.</td><td><code>dt(v)</code>, <code>pctl(values,p)</code>, <code>median(values)</code></td></tr>
+                    <tr><td><code>IntervalMath</code></td><td>Aritmética de intervalos de tempo — base da utilização/ociosidade de VM.</td><td><code>_merge_intervals</code>, <code>_occupied_minutes</code>, <code>_max_concurrency</code></td></tr>
+                    <tr><td><code>VmReliabilityClassifier</code></td><td>Distingue problema geral de infraestrutura de problema concentrado numa RPA específica.</td><td><code>_classify_vm_reliability(rpa_breakdown, min_samples=3, elevated=15.0, spread_threshold=15.0)</code></td></tr>
+                    <tr><td><code>VmConsolidationPlanner</code></td><td>Sugestão de consolidação de VMs por coloração gulosa de grafo (Welsh-Powell), sem alterar horários de agenda.</td><td><code>_rpa_time_windows</code>, <code>_windows_conflict</code>, <code>_suggest_vm_consolidation</code></td></tr>
+                    <tr><td><code>LogFileDiscovery</code></td><td>Localiza e filtra arquivos <strong>antes</strong> de abrir — só entra numa pasta ano/mês que possa conter algo na janela carregada.</td><td><code>_window_bounds</code>, <code>_month_span</code>, <code>_walk_year_month_dirs</code>, <code>_collect_exec_files</code>, <code>_collect_vm_files</code></td></tr>
+                    <tr><td><code>LogFileReader</code></td><td>Leitura incremental com cache por <code>mtime</code>+tamanho.</td><td><code>_read_cached(path, issues)</code></td></tr>
+                    <tr><td><code>ScheduleMatcher</code></td><td>Casa agenda esperada × execuções reais; atribui o estado operacional de cada ocorrência.</td><td><code>_nearest_schedule</code>, <code>_build_expected_runs</code>, <code>_run_state</code>, <code>_alert_message</code></td></tr>
+                    <tr><td><code>DependencyAnalyzer</code></td><td>Correlaciona a última alteração de um arquivo de dependência com a linha do tempo de erros da RPA — sempre como correlação, nunca causa confirmada.</td><td><code>_dependency_file_status(dep, exs, now, period_start_dt)</code></td></tr>
+                    <tr><td><code>DatasetBuilder</code></td><td>Monta o dataset "de detalhe" (<code>obs</code>) inteiro, num único método sequencial.</td><td><code>build_dataset(mode='90d')</code></td></tr>
+                    <tr><td><code>IndexBuilder</code></td><td>Agrega <code>obs</code> em <code>index</code> — KPIs, tendências, Pareto multi-dimensão, central de alertas.</td><td><code>build_index(obs, vm_history, expected_runs, exec_by_id)</code></td></tr>
+                    <tr><td><code>DataCache</code></td><td>Cache em memória de <code>(obs, index)</code> por fingerprint barato.</td><td><code>get_data(mode=None)</code></td></tr>
+                </table></div>
+                <div class="callout callout-info">
+                    <div class="icon-dot">i</div>
+                    <p><code>DatasetBuilder.build_dataset</code> e <code>IndexBuilder.build_index</code> foram <strong>deliberadamente mantidos como um único método sequencial</strong> cada um (não fragmentados em vários métodos menores). O fluxo é de passagem única com dezenas de variáveis locais interdependentes (execuções → eventos → telemetria → agregados → Pareto → alertas, nessa ordem, cada etapa lendo o resultado da anterior); fatiar mais aumentaria o risco de regressão sem ganho real de legibilidade. Comentários de fase (<code># -----</code>) marcam os blocos lógicos internos de cada um.</p>
+                </div>
+
+                <h3>Classificação de confiabilidade de VM — o algoritmo</h3>
+                <p><code>VmReliabilityClassifier._classify_vm_reliability</code> só consegue distinguir "problema da máquina" de "problema de uma RPA específica" quando a VM é compartilhada por mais de uma RPA com amostra suficiente (<code>min_samples=3</code> execuções). Fluxo de decisão:</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Condição</th><th>Classificação</th></tr>
+                    <tr><td>Menos de 5 execuções no total na VM</td><td><span class="badge neutral">DADOS_INSUFICIENTES</span></td></tr>
+                    <tr><td>≤ 1 RPA com amostra confiável (≥3 execuções)</td><td><span class="badge warning">ATENÇÃO</span> se taxa de erro geral ≥ 15%, senão <span class="badge success">SAUDÁVEL</span></td></tr>
+                    <tr><td>Taxa geral ≥ 15% <strong>e</strong> dispersão entre RPAs &lt; 15 pontos</td><td><span class="badge danger">PROBLEMA_GERAL</span> — todas as RPAs sofrem parecido, aponta para a máquina</td></tr>
+                    <tr><td>Dispersão ≥ 15 pontos <strong>e</strong> pior RPA ≥ 15% de erro</td><td><span class="badge warning">PROBLEMA_ESPECIFICO</span> — concentrado numa RPA, a VM provavelmente não é a causa</td></tr>
+                    <tr><td>Nenhuma das anteriores</td><td><span class="badge success">SAUDÁVEL</span></td></tr>
+                </table></div>
+
+                <h3>Sugestão de consolidação de VMs — o algoritmo</h3>
+                <p><code>VmConsolidationPlanner</code> constrói, para cada RPA, uma janela de ocupação estimada (duração <strong>P95 histórica</strong>, não a nominal, + 5&nbsp;min de margem) para cada horário de agenda. Duas RPAs "conflitam" se alguma combinação de janelas se sobrepõe considerando que o calendário <code>weekdays</code> está contido em <code>daily</code> (qualquer par pode cair no mesmo dia útil — por isso o teste de conflito soma/subtrai 1440&nbsp;min para cobrir a virada de dia). O grafo de conflito resultante é colorido pelo método guloso Welsh-Powell (ordena por grau decrescente, atribui a menor cor livre) — cada cor final vira uma "VM sugerida".</p>
+                <div class="callout callout-warn">
+                    <div class="icon-dot">!</div>
+                    <p>É uma <strong>sugestão para avaliação</strong>, não uma ação automática: não considera picos acima do P95, licenças/aplicações específicas de cada máquina, nem janelas de manutenção. O texto de <code>caveat</code> retornado pelo próprio algoritmo é exibido literalmente na UI (Visão Operacional → Consolidação de VMs).</p>
+                </div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="api-http">
+                <h2>API HTTP — referência completa<a class="anchor-link" href="#api-http">#</a></h2>
+                <p>Já listada em <a href="#ciclo-requisicao">Ciclo de vida da requisição</a>. Detalhes de autenticação da integração AA: <code>baseUrl</code> e <code>token</code> nunca ficam guardados no servidor — o navegador os reenvia a cada chamada via os headers <code>X-AA-Base-Url</code> e <code>X-AA-Token</code> (lidos por <code>Handler._aa_ctx_from_headers</code>), a partir da memória de sessão do <code>AASecretVault</code>/<code>AAConfigStore</code> no frontend.</p>
+                <pre class="code-block"><span class="lang-tag">http</span><code>POST /api/aa/proxy HTTP/1.1
+Content-Type: application/json
+X-AA-Base-Url: https://empresa.my.automationanywhere.digital
+X-AA-Token: &lt;token em memória, nunca persistido&gt;
+
+{"method": "GET", "path": "/v2/devices/list?page=0&amp;size=1", "body": null}</code></pre>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="modelo-dados">
+                <h2>Modelo de dados<a class="anchor-link" href="#modelo-dados">#</a></h2>
+                <p>Esquema real de <code>obs</code> (window.OBS_DATA) e <code>index</code> (window.INDEX_DATA), extraído diretamente do que <code>DatasetBuilder</code>/<code>IndexBuilder</code> produzem.</p>
+
+                <h3><code>obs</code> — dataset de detalhe</h3>
+                <div class="table-wrap"><table>
+                    <tr><th>Chave</th><th>Tipo</th><th>Conteúdo</th></tr>
+                    <tr><td><code>snapshot</code></td><td>ISO datetime</td><td>Timestamp do dado mais recente carregado (última linha de telemetria de VM, ou fim da última execução).</td></tr>
+                    <tr><td><code>periodStart</code> / <code>periodEnd</code></td><td>date (YYYY-MM-DD)</td><td>Primeira/última data com execução no dataset carregado.</td></tr>
+                    <tr><td><code>rpas</code></td><td>array</td><td>Cadastro cru de <code>rpa_metadata.json</code> (sem transformação).</td></tr>
+                    <tr><td><code>schedules</code></td><td>array</td><td>Regras de agenda cruas de <code>rpa_metadata.json</code>.</td></tr>
+                    <tr><td><code>executions</code></td><td>array</td><td>Uma entrada por execução real, já casada com a agenda esperada (ver tabela abaixo).</td></tr>
+                    <tr><td><code>eventsByExecution</code></td><td>objeto</td><td><code>{executionId: [evento, …]}</code> — etapas com status/duração/erro.</td></tr>
+                    <tr><td><code>vmContextByExecution</code></td><td>objeto</td><td><code>{executionId: [snapshotVm, …]}</code> — janela de ±90 min de telemetria ao redor do início da execução.</td></tr>
+                    <tr><td><code>rpaAggregates</code></td><td>objeto</td><td><code>{rpaId: {…}}</code> — indicadores históricos por RPA (ver abaixo).</td></tr>
+                    <tr><td><code>recurrenceByExecution</code></td><td>objeto</td><td><code>{executionId: [execuçãoRelacionada, …]}</code> — mesmo processo + código de erro, ±30 dias, até 12 itens.</td></tr>
+                    <tr><td><code>vmLatest</code></td><td>objeto</td><td><code>{machine: snapshotMaisRecente}</code>.</td></tr>
+                    <tr><td><code>dependencyStatus</code></td><td>objeto</td><td><code>{rpaId: [statusDependencia, …]}</code> — só para RPAs com <code>dependencyFiles</code> cadastrado.</td></tr>
+                    <tr><td><code>loadIssues</code></td><td>array (máx. 200)</td><td>Arquivos ignorados/parcialmente inválidos na carga atual — ver <code>LogFileReader</code>.</td></tr>
+                    <tr><td><code>loadStats</code></td><td>objeto</td><td>Estatísticas da carga: modo, janela, contagem de arquivos/execuções/eventos/issues.</td></tr>
+                </table></div>
+
+                <h4>Objeto de execução (<code>obs.executions[i]</code>)</h4>
+                <div class="table-wrap"><table>
+                    <tr><th>Campo</th><th>Descrição</th></tr>
+                    <tr><td><code>executionId</code>, <code>rpaId</code>, <code>process</code></td><td>Identificadores.</td></tr>
+                    <tr><td><code>status</code></td><td><code>SUCCESS</code> / <code>WARNING</code> / <code>ERROR</code> — como veio do log.</td></tr>
+                    <tr><td><code>start</code>, <code>end</code>, <code>durationMin</code></td><td>Janela real de execução.</td></tr>
+                    <tr><td><code>totalItems</code>, <code>processedItems</code>, <code>successItems</code>, <code>warningItems</code>, <code>errorItems</code></td><td>Volume processado.</td></tr>
+                    <tr><td><code>retryCount</code>, <code>machine</code>, <code>version</code>, <code>robotName</code>, <code>orchestrator</code>, <code>environment</code></td><td>Metadados técnicos da execução.</td></tr>
+                    <tr><td><code>scheduleId</code>, <code>expectedRunKey</code>, <code>scheduledDatetime</code></td><td>Vínculo com a regra de agenda que gerou essa ocorrência esperada.</td></tr>
+                    <tr><td><code>latestStartDatetime</code>, <code>warningFinishDatetime</code>, <code>deadlineDatetime</code></td><td>Limites calculados a partir da agenda (tolerância de início, aviso, deadline).</td></tr>
+                    <tr><td><code>startDelaySec</code>, <code>completionDelaySec</code></td><td>Atraso de início e de conclusão em segundos (pode ser negativo).</td></tr>
+                    <tr><td><code>startCompliance</code></td><td><code>NO_PRAZO</code> / <code>ATRASADA</code></td></tr>
+                    <tr><td><code>durationCompliance</code></td><td><code>NORMAL</code> / <code>DEGRADADA</code> / <code>CRITICA</code>, contra <code>warningDurationMin</code>/<code>maxDurationMin</code> da regra de agenda.</td></tr>
+                    <tr><td><code>deadlineCompliance</code></td><td><code>NO_PRAZO</code> / <code>SLA_ESTOURADO</code></td></tr>
+                </table></div>
+
+                <h4>Agregado por RPA (<code>obs.rpaAggregates[rpaId]</code>)</h4>
+                <p><code>totalExecutions</code>, <code>success</code>/<code>warning</code>/<code>error</code>, <code>successRate</code>, <code>avgDuration</code>/<code>medianDuration</code>/<code>p95Duration</code>, <code>processedItems</code>, <code>retries</code>, <code>slaBreaches</code>, <code>machines[]</code> (contagem por VM), <code>errorCodes[]</code>/<code>errorSteps[]</code> (Pareto local), <code>stepStats[]</code> (média/P95/amostras/erros por etapa), <code>daily[]</code> (série diária completa).</p>
+
+                <h3><code>index</code> — dataset agregado</h3>
+                <div class="table-wrap"><table>
+                    <tr><th>Chave</th><th>Conteúdo</th></tr>
+                    <tr><td><code>rpas</code></td><td>Um "card operacional" por RPA — inclui o <code>state</code> (ver <a href="#vocabulario-estados">vocabulário de estados</a>) e o overlay <code>vmDegraded</code>.</td></tr>
+                    <tr><td><code>trend</code></td><td>Série de 14 dias: sucesso/atenção/erro/taxa de sucesso, usada no gráfico de tendência.</td></tr>
+                    <tr><td><code>timeline</code></td><td>Execuções do dia mais recente, com <code>startMinute</code> para a grade hora-a-hora da Visão Operacional.</td></tr>
+                    <tr><td><code>incidents</code></td><td>Até 30 eventos <code>ERROR</code> mais recentes dos últimos 30 dias.</td></tr>
+                    <tr><td><code>errorPareto</code> / <code>errorParetos</code></td><td>O primeiro é só por código (últimos 30 dias, para o heatmap); o segundo é multi-dimensão (<code>step</code>/<code>machine</code>/<code>application</code>/<code>errorCode</code>/<code>rpa</code>/<code>errorType</code>) sobre TODO o período carregado.</td></tr>
+                    <tr><td><code>heatmapSteps</code> / <code>heatmap</code></td><td>Top 7 etapas por volume de erro × todas as RPAs, para o heatmap de Falhas.</td></tr>
+                    <tr><td><code>vms</code></td><td>Card por VM: <code>cpu</code>/<code>memory</code>/<code>disk</code>, <code>rdp</code>, <code>health</code>, <code>assignedRpas</code>, histórico das últimas 12 leituras.</td></tr>
+                    <tr><td><code>executionDetail</code></td><td>Execução ERROR mais recente (ou a última qualquer, se não houver erro) — usada como exemplo pré-carregado em Auditoria/Diagnóstico.</td></tr>
+                    <tr><td><code>summary</code></td><td>KPIs consolidados de 24h + contadores por estado (ver campos abaixo).</td></tr>
+                    <tr><td><code>alerts</code></td><td>Central de alertas deduplicada — um alerta por (RPA, estado) com contador, não uma linha por ocorrência.</td></tr>
+                    <tr><td><code>vmUtilization</code></td><td>Ocupação real (não nominal) de cada VM — minutos ocupados, % ociosidade, concorrência máxima, divisão por RPA.</td></tr>
+                    <tr><td><code>vmIdleTrend</code></td><td>Série de 14 dias da ociosidade média da frota.</td></tr>
+                    <tr><td><code>vmReliability</code></td><td>Classificação de cada VM (ver algoritmo acima).</td></tr>
+                    <tr><td><code>vmConsolidation</code></td><td>Saída de <code>_suggest_vm_consolidation</code>.</td></tr>
+                </table></div>
+
+                <h4>Campos de <code>index.summary</code></h4>
+                <p><code>totalRpas</code>, <code>totalVms</code>, <code>executions24h</code>/<code>success24h</code>/<code>warning24h</code>/<code>error24h</code>/<code>successRate24h</code>, <code>criticalRpas</code>/<code>warningRpas</code>, <code>notStarted</code>/<code>slaAtRisk</code>/<code>delayed</code>, <code>vmDegraded</code>, <code>totalExecutionMinutes24h</code>, <code>avgVmIdlePercent24h</code>, <code>maxConcurrencyVm{machine,value}</code>, <code>errors7d</code>/<code>errors30d</code>, <code>topErrorMachine</code>/<code>topErrorRpa</code> (<code>{label,count}</code> ou <code>null</code>).</p>
+
+                <h4>Objeto de alerta (<code>index.alerts[i]</code>)</h4>
+                <p><code>id</code>, <code>severity</code> (<code>CRITICO</code>/<code>ALTO</code>/<code>ATENCAO</code>/<code>INFORMATIVO</code>), <code>rule</code> (o estado ou <code>RETRY_EXCESSIVO</code>/<code>VM_DEGRADADA</code>), <code>rpaId</code>/<code>rpaName</code>/<code>process</code>/<code>criticality</code> (<code>null</code> para alertas de infraestrutura), <code>message</code>, <code>count</code> (dedup), <code>firstSeen</code>/<code>lastSeen</code>, <code>executionId</code>, <code>machine</code>.</p>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="vocabulario-estados">
+                <h2>Vocabulário de 11 estados operacionais<a class="anchor-link" href="#vocabulario-estados">#</a></h2>
+                <p>Cada ocorrência esperada de agenda (<code>expected_run</code>) recebe exatamente um destes estados via <code>ScheduleMatcher._run_state</code>. É o vocabulário usado em toda a UI (badges, filtros, Central de Alertas).</p>
+                <div class="state-graph">
+                    <div class="state-chip"><b>AGUARDANDO</b>ainda dentro da tolerância de início — sem alerta</div>
+                    <div class="state-chip"><b>EXECUTANDO</b>reservado para telemetria ao vivo; nunca atribuído por este modelo (baseado em logs pós-execução)</div>
+                    <div class="state-chip"><b>SUCESSO</b>concluiu dentro de todos os limites — sem alerta</div>
+                    <div class="state-chip"><b>ATRASADA</b><span class="badge warning">ATENÇÃO</span> início além da tolerância</div>
+                    <div class="state-chip"><b>NAO_INICIOU</b><span class="badge danger">CRÍTICO</span> passou do deadline sem nenhuma execução casada</div>
+                    <div class="state-chip"><b>DURACAO_ANORMAL</b><span class="badge warning">ATENÇÃO</span> duração classificada como CRÍTICA</div>
+                    <div class="state-chip"><b>SLA_EM_RISCO</b><span class="badge danger">ALTO</span> sem execução iniciada e restam ≤25% do prazo até o deadline</div>
+                    <div class="state-chip"><b>SLA_ESTOURADO</b><span class="badge danger">CRÍTICO</span> concluiu depois do deadline</div>
+                    <div class="state-chip"><b>VM_DEGRADADA</b><span class="badge danger">ALTO</span> overlay: VM primária em saúde CRITICAL enquanto a RPA estaria AGUARDANDO/SUCESSO</div>
+                    <div class="state-chip"><b>ERRO</b><span class="badge danger">ALTO</span> execução terminou com status ERROR</div>
+                    <div class="state-chip"><b>WARNING</b><span class="badge warning">ATENÇÃO</span> execução terminou com status WARNING</div>
+                </div>
+                <p>A severidade vem do dicionário <code>STATE_SEVERITY</code> em <code>server.py</code> — estados sem entrada ali (<code>AGUARDANDO</code>, <code>EXECUTANDO</code>, <code>SUCESSO</code>) nunca geram alerta na Central de Alertas.</p>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="config-cadastro">
+                <h2>Cadastro — rpa_metadata.json<a class="anchor-link" href="#config-cadastro">#</a></h2>
+                <p>Fonte de verdade de tudo que <strong>não</strong> vem do log: identidade da RPA, criticidade, agenda esperada, benefícios de negócio, responsáveis e dependências. Hoje contém <strong>10 RPAs</strong> e <strong>44 regras de agenda</strong>.</p>
+                <pre class="code-block"><span class="lang-tag">json</span><code>{
+  "rpaId": "RPA001",
+  "process": "VND_Integracao_Pedidos_Salesforce",
+  "name": "Integração de Pedidos Salesforce",
+  "businessArea": "Comercial",
+  "criticality": "ALTA",
+  "application": "Salesforce",
+  "primaryVm": "GBS02I356857N01",
+  "backupVm": "GBS02I356857N11",
+  "schedule": ["08:00", "09:00", "…"],
+  "calendar": "weekdays",
+  "expectedDurationMin": 19,
+  "warningDurationMin": 25,
+  "maxDurationMin": 35,
+  "startToleranceMin": 7,
+  "maxRetries": 2,
+  "steps": ["Preparar_Execucao", "Autenticar_Salesforce", "…"],
+  "dependencyFiles": [
+    {"path": "config/dependencies/RPA001/mapeamento_campos_pedidos_salesforce.json",
+     "label": "Mapeamento de campos Pedido → Salesforce"}
+  ],
+  "benefits": ["Reduz em ~70% o tempo de integração…"],
+  "owners": [{"name": "Fernanda Duarte", "role": "Business Owner — Comercial"}]
+}</code></pre>
+                <p>Cada RPA tem N entradas correspondentes em <code>schedules</code> (uma por horário do array <code>schedule</code>), cada uma com seus próprios <code>latestStartTime</code>/<code>warningFinishTime</code>/<code>deadlineTime</code> — é isso que <code>ScheduleMatcher._build_expected_runs</code> expande em ocorrências diárias.</p>
+                <div class="callout callout-info">
+                    <div class="icon-dot">i</div>
+                    <p><strong>Para adicionar uma RPA nova:</strong> (1) adicionar a entrada em <code>rpas</code>, (2) adicionar uma entrada em <code>schedules</code> por horário de agenda, (3) criar a pasta de logs em <code>logs/…/Logs/{ano}/{mês}/{process}/</code> seguindo o padrão de nomes descrito em <a href="#formato-logs">Formato dos logs</a>. Nenhuma mudança de código é necessária — o pipeline lê o cadastro dinamicamente.</p>
+                </div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="formato-logs">
+                <h2>Formato dos arquivos de log<a class="anchor-link" href="#formato-logs">#</a></h2>
+                <div class="table-wrap"><table>
+                    <tr><th>Arquivo</th><th>Padrão de nome</th><th>Conteúdo</th></tr>
+                    <tr><td>Execuções (consolidado do dia)</td><td><code>RPA_AAAA-MM-DD.log</code></td><td>Uma linha JSON por execução daquele processo naquele dia.</td></tr>
+                    <tr><td>Eventos (por execução)</td><td><code>RPA_AAAA-MM-DD_{execution_id}.log</code></td><td>Uma linha JSON por etapa/evento daquela execução específica.</td></tr>
+                    <tr><td>Telemetria de VM</td><td><code>VM_AAAA-MM-DD.jsonl</code></td><td>Uma linha JSON por leitura periódica de CPU/RAM/disco/RDP.</td></tr>
+                </table></div>
+                <p>Regexes de validação em <code>server.py</code>: <code>EXEC_FNAME_RE = ^RPA_(\d{4}-\d{2}-\d{2})(?:_(.+))?\.log$</code> (o grupo 2 opcional distingue arquivo de execução de arquivo de evento) e <code>VM_FNAME_RE = ^VM_(\d{4}-\d{2}-\d{2})\.jsonl$</code>.</p>
+                <h4>Exemplo — linha de execução</h4>
+                <pre class="code-block"><span class="lang-tag">jsonl</span><code>{"execution_id": "20260625_005", "process_name": "FAT_Emissao_Faturas_SAP",
+ "robot_name": "BOT_PRD_FAT_01", "orchestrator": "AA360_FAT_PRD", "environment": "PRD",
+ "start_time": "2026-06-25T07:00:38", "end_time": "2026-06-25T07:27:04",
+ "duration_seconds": 1586, "status": "SUCCESS",
+ "total_items": 508, "processed_items": 508, "success_items": 508,
+ "warning_items": 0, "error_items": 0, "retry_count": 0,
+ "machine_name": "GBS02I356857N07", "version": "1.3.6"}</code></pre>
+                <h4>Exemplo — linha de evento</h4>
+                <pre class="code-block"><span class="lang-tag">jsonl</span><code>{"timestamp": "2026-07-28T01:01:09", "execution_id": "20260728_001",
+ "transaction_id": "REQ31085A6A", "loop_number": 1,
+ "step_name": "Autenticar_SharePoint", "step_order": 1, "severity": "INFO",
+ "status": "SUCCESS", "duration_seconds": 174.56,
+ "message": "Etapa Autenticar_SharePoint concluida.", "application": "SharePoint",
+ "error_code": null, "error_type": null, "error_message": null}</code></pre>
+                <h4>Exemplo — linha de telemetria de VM</h4>
+                <pre class="code-block"><span class="lang-tag">jsonl</span><code>{"data": "2026-08-02 00:00:00", "machine_name": "GBS02I356857N01",
+ "logged_user": "1420807", "cpu_percent": 1.0, "memory_percent": 43.2,
+ "memory_available_gb": 9.09, "disk_percent": 40.3, "disk_free_gb": 298.66,
+ "data_boot": "2026-07-26 04:00:00", "uptime_hours": 164.0, "rdp_status": "CONNECTED"}</code></pre>
+                <p>Estrutura de diretórios (o ano/mês no caminho é usado por <code>LogFileDiscovery</code> para pular pastas inteiras fora da janela de datas, sem precisar abrir nenhum arquivo dentro delas):</p>
+                <div class="file-tree">logs/Organizacao&amp;Processos/Melhoria_Continua/Monitoramento/
+├── <span class="d">Logs/2026/06/VND_Integracao_Pedidos_Salesforce/</span>
+│   ├── RPA_2026-06-25.log                    <span class="c"># execuções do dia</span>
+│   └── RPA_2026-06-25_20260625_001.log       <span class="c"># eventos da execução 20260625_001</span>
+└── <span class="d">VMS/Historico/2026/08/GBS02I356857N01/</span>
+    └── VM_2026-08-02.jsonl                   <span class="c"># telemetria do dia</span></div>
+                <div class="callout callout-warn">
+                    <div class="icon-dot">!</div>
+                    <p>Uma linha JSON inválida não derruba o arquivo inteiro: <code>LogFileReader._read_cached</code> pula a linha, registra até 3 ocorrências em <code>issues</code> (visíveis no painel "Qualidade dos dados" da Visão Operacional) e continua processando o resto. Um arquivo ilegível (erro de leitura/stat) é ignorado por completo, também registrado.</p>
+                </div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="inventario-paginas">
+                <h2>Frontend · Dashboard — inventário de páginas<a class="anchor-link" href="#inventario-paginas">#</a></h2>
+                <p><code>index.html</code> é uma SPA de página única: cada item do menu lateral alterna a classe <code>.active</code> entre <code>&lt;section class="page" id="page-{nome}"&gt;</code> via <code>NavigationController.goToPage(nome)</code> — nada recarrega, nenhuma rota de navegador muda.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Página (<code>data-page</code>)</th><th>Classe responsável</th><th>O que mostra</th></tr>
+                    <tr><td><code>overview</code></td><td><code>OverviewPage</code></td><td>KPIs do parque, timeline do dia, fila de incidentes, qualidade dos dados, heatmap histórico RPA×hora, ociosidade/utilização de VM, confiabilidade de VM, sugestão de consolidação.</td></tr>
+                    <tr><td><code>alerts</code></td><td><code>AlertsPage</code></td><td>Central de alertas deduplicada, KPIs de severidade, contexto 7/30 dias, recorrência por VM/etapa.</td></tr>
+                    <tr><td><code>executions</code></td><td><code>ExecutionsPage</code></td><td>Composição de execuções, taxa de sucesso diária (14 dias), duração atual × esperada, carga por horário.</td></tr>
+                    <tr><td><code>incidents</code></td><td><code>IncidentsPage</code></td><td>Pareto multi-dimensão de erros, heatmap RPA×etapa, tabela completa de incidentes.</td></tr>
+                    <tr><td><code>vms</code></td><td><code>InfrastructurePage</code></td><td>KPIs de infraestrutura, grade de VMs com uso real (não nominal).</td></tr>
+                    <tr><td><code>audit</code></td><td><code>AuditPage</code></td><td>Seletor RPA/execução, trilha de etapas, comparativo histórico por etapa, evidências.</td></tr>
+                    <tr><td><code>catalog</code></td><td><code>CatalogPage</code></td><td>Um card por RPA — agenda, VM, benefícios de negócio, responsáveis.</td></tr>
+                    <tr><td><code>diagnostic</code> <span class="badge neutral">sem item de menu</span></td><td><code>DiagnosticPage</code></td><td>Seção pré-renderizada no boot (<code>RpaOpsApp.renderAll</code> chama <code>renderDiagnostic(DATA.executionDetail)</code>), mas não há botão de navegação visível nesta versão do <code>index.html</code> que leve até ela — o drill-down técnico completo hoje é feito pela página avulsa <code>diagnostico.html</code> (aberta em nova aba pelo botão "Diagnóstico ↗"). Ver nota de sustentação abaixo.</td></tr>
+                </table></div>
+                <div class="callout callout-warn">
+                    <div class="icon-dot">!</div>
+                    <p><strong>Nota de sustentação:</strong> <code>DiagnosticPage.renderIncidentDiagnostic</code> e <code>DiagnosticPage.renderGenericDiagnostic</code> existem e têm alias de módulo, mas nenhum ponto do HTML atual os chama — só <code>renderDiagnostic</code> é usado, uma vez, no boot. Antes de remover esse código por parecer morto, confirme com o time de produto se <code>page-diagnostic</code> é um remanescente de uma versão anterior da navegação ou um ponto de extensão futuro planejado.</p>
+                </div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="referencia-classes-frontend">
+                <h2>Frontend · Dashboard — referência de classes<a class="anchor-link" href="#referencia-classes-frontend">#</a></h2>
+                <p><code>assets/dashboard-app.js</code> (~2000 linhas) organiza as antigas ~63 funções soltas de <code>index.html</code> em 14 classes por responsabilidade. Nenhuma lógica mudou nessa conversão — cada método é a função original, movida verbatim para dentro de um <code>static</code>.</p>
+
+                <h3>Fmt — formatação pura (testável isoladamente)</h3>
+                <p>Nenhum método toca o DOM. É a única parte de <code>dashboard-app.js</code> coberta por <code>test_dashboard.js</code>, junto com os mini-charts SVG de <code>ChartService</code>.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Método</th><th>Descrição</th></tr>
+                    <tr><td><code>fmtDateTime(value)</code> / <code>fmtTime(value)</code></td><td>Formata data/hora em pt-BR via <code>Intl.DateTimeFormat</code>.</td></tr>
+                    <tr><td><code>fmtHoursMinutes(totalMinutes)</code></td><td><code>"2h 05m"</code> ou <code>"45m"</code> conforme o total.</td></tr>
+                    <tr><td><code>formatAuditDuration(seconds)</code></td><td><code>"45.2s"</code> abaixo de 1 min, <code>"2m 05s"</code> acima.</td></tr>
+                    <tr><td><code>statusBadge(status)</code></td><td>Badge HTML para os 12 status conhecidos (SUCCESS/WARNING/ERROR + os 11 estados operacionais); desconhecido cai em <code>neutral</code> sem lançar erro.</td></tr>
+                    <tr><td><code>severityBadge(sev)</code></td><td>Badge para <code>CRITICO</code>/<code>ALTO</code>/<code>ATENCAO</code>/<code>INFORMATIVO</code>.</td></tr>
+                    <tr><td><code>criticalityBadge(value)</code></td><td>Badge para criticidade de RPA (<code>CRÍTICA</code>/<code>ALTA</code>/outras).</td></tr>
+                    <tr><td><code>auditComplianceBadge(value)</code></td><td>Badge de conformidade (<code>NO_PRAZO</code>/<code>NORMAL</code>=sucesso, <code>DEGRADADA</code>/<code>ATRASADA</code>=aviso, resto=erro); <code>null</code>/<code>undefined</code> vira "SEM REGRA".</td></tr>
+                    <tr><td><code>auditStatusIcon(status)</code></td><td>Ícone SVG (check/triângulo/x) usado na trilha de etapas de Auditoria.</td></tr>
+                    <tr><td><code>heatClass(value, max)</code></td><td>Bucket <code>heat-0</code>…<code>heat-4</code> proporcional ao máximo — usado nos dois heatmaps.</td></tr>
+                    <tr><td><code>metricClass(value, warning, critical)</code></td><td><code>success</code>/<code>warning</code>/<code>danger</code> conforme limiares.</td></tr>
+                    <tr><td><code>escapeHtml(value)</code></td><td>Escapa os 5 caracteres perigosos de HTML — usado em <strong>toda</strong> interpolação de texto do usuário/dado na UI.</td></tr>
+                    <tr><td><code>clamp(value, min, max)</code></td><td>Limita um número num intervalo.</td></tr>
+                </table></div>
+
+                <h3>DomUtils, UiFeedback, ChartService</h3>
+                <div class="table-wrap"><table>
+                    <tr><th>Classe</th><th>Método</th><th>Descrição</th></tr>
+                    <tr><td rowspan="2"><code>DomUtils</code></td><td><code>$(selector, scope)</code></td><td><code>querySelector</code> com escopo opcional.</td></tr>
+                    <tr><td><code>$$(selector, scope)</code></td><td><code>querySelectorAll</code> retornando array.</td></tr>
+                    <tr><td rowspan="3"><code>UiFeedback</code></td><td><code>showToast(message)</code></td><td>Toast de 2.2s no canto da tela.</td></tr>
+                    <tr><td><code>showTooltip(event, htmlText)</code></td><td>Tooltip flutuante posicionado perto do cursor, sem sair da viewport.</td></tr>
+                    <tr><td><code>hideTooltip()</code></td><td>Esconde o tooltip.</td></tr>
+                    <tr><td rowspan="7"><code>ChartService</code></td><td><code>registry</code> <span class="badge neutral">static prop</span></td><td>Mapa <code>{canvasId: instânciaChart}</code> — evita "Canvas is already in use" ao rerenderizar.</td></tr>
+                    <tr><td><code>chartPalette()</code></td><td>Lê as cores atuais das variáveis CSS (acompanha tema claro/escuro).</td></tr>
+                    <tr><td><code>drawChart(canvasId, config)</code></td><td>Destrói instância anterior (se houver) e cria uma nova via Chart.js.</td></tr>
+                    <tr><td><code>redrawThemedCharts()</code></td><td>Rerenderiza os 3 gráficos Chart.js sensíveis a tema, ao trocar claro/escuro.</td></tr>
+                    <tr><td><code>sparkline(values, stroke, fill, height)</code></td><td>Mini-gráfico SVG puro (sem Chart.js) — trata lista vazia e range zero sem gerar <code>NaN</code>.</td></tr>
+                    <tr><td><code>lineChart(rows, valueKey, options)</code></td><td>Gráfico de linha em SVG puro com grid, eixos e tooltip via <code>data-tip</code>.</td></tr>
+                    <tr><td><code>tooltipBase(p)</code></td><td>Config de tooltip compartilhada entre os gráficos Chart.js.</td></tr>
+                </table></div>
+
+                <h3>NavigationController</h3>
+                <div class="table-wrap"><table>
+                    <tr><th>Método</th><th>Descrição</th></tr>
+                    <tr><td><code>goToPage(pageName)</code></td><td>Alterna <code>.active</code> entre seções/links, salva em <code>sessionStorage</code>, e faz <code>resize()</code> de todos os charts registrados após duplo <code>requestAnimationFrame</code> — necessário porque um canvas construído com a página ainda em <code>display:none</code> herda tamanho errado.</td></tr>
+                    <tr><td><code>refreshOverflowHints(scope)</code></td><td>Mostra "↔ role para o lado" em tabelas/heatmaps mais largos que o card — macOS esconde a scrollbar até o hover.</td></tr>
+                    <tr><td><code>openExecutionWorkspace(page, executionId)</code></td><td>Abre <code>investigacao.html</code>/<code>diagnostico.html</code> em nova aba; avisa via toast se não há execução selecionada.</td></tr>
+                    <tr><td><code>bindFilterListeners()</code></td><td>Liga os filtros de cada página (RPA/status de Visão Operacional, severidade de Alertas, dimensão do Pareto, seletores de Auditoria).</td></tr>
+                    <tr><td><code>bindGlobalControls()</code></td><td>Liga navegação, menu mobile, tema (persistido em <code>localStorage</code>), botão de refresh manual, e a busca global (filtra linhas via <code>data-search-text</code>).</td></tr>
+                </table></div>
+
+                <h3>RpaDataStore</h3>
+                <div class="table-wrap"><table>
+                    <tr><th>Método</th><th>Descrição</th></tr>
+                    <tr><td><code>buildAuditDetail(obs, executionId)</code></td><td>Monta o objeto de detalhe completo de uma execução para a página Auditoria.</td></tr>
+                    <tr><td><code>buildAuditExecutions(obs)</code></td><td>Pré-computa o detalhe de <strong>todas</strong> as execuções do dia mais recente — cache de conveniência, não recalculado a cada clique.</td></tr>
+                    <tr><td><code>computeStepHistory(rpaId, currentExecutionId)</code></td><td>Para cada etapa da RPA, reconstrói duração e recorrência de erro nas demais execuções do período — nunca inclui a execução em auditoria no próprio histórico.</td></tr>
+                    <tr><td><code>setLoadProgress(status)</code> / <code>hideLoadProgress()</code></td><td>Atualiza a barra de progresso visual durante um reload.</td></tr>
+                    <tr><td><code>pollLoadStatus()</code></td><td>Sonda <code>/api/load-status</code> a cada 350ms (timeout de 60s) até fase <code>concluido</code>/<code>erro</code>.</td></tr>
+                    <tr><td><code>fetchScript(src)</code></td><td>Injeta um <code>&lt;script&gt;</code> temporário com cache-busting (<code>?t=timestamp</code>) e resolve quando carrega.</td></tr>
+                    <tr><td><code>reloadData(mode)</code></td><td>Orquestra o refresh incremental completo — ver <a href="#cache-invalidacao">Cache e invalidação</a>.</td></tr>
+                </table></div>
+
+                <h3>As 7 classes de página (uma por item de menu)</h3>
+                <p>Cada uma só tem métodos <code>render*()</code> — leem <code>DATA</code>/<code>window.OBS_DATA</code> e escrevem <code>innerHTML</code> no elemento correspondente. Referência completa por classe:</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Classe</th><th>Métodos</th></tr>
+                    <tr><td><code>OverviewPage</code></td><td><code>renderOverviewKpis</code>, <code>populateRpaFilterOptions</code>, <code>renderRpaOpsTable</code>, <code>renderTimeline</code>, <code>renderIncidentQueue</code>, <code>renderVmCompactList</code>, <code>renderDataQuality</code>, <code>renderLoadPeriodLabel</code>, <code>renderHistoricalHeatmap</code>, <code>renderVmIdleTrend</code>, <code>renderVmUtilizationList</code>, <code>renderVmReliability</code>, <code>renderVmConsolidation</code></td></tr>
+                    <tr><td><code>AlertsPage</code></td><td><code>paretoListHtml</code> (helper compartilhado, também usado por <code>IncidentsPage</code>), <code>renderAlertContext</code>, <code>renderAlerts</code></td></tr>
+                    <tr><td><code>ExecutionsPage</code></td><td><code>renderSuccessTrend</code>, <code>renderExecutionKpis</code>, <code>renderDurationComparison</code>, <code>renderHourlyLoad</code></td></tr>
+                    <tr><td><code>IncidentsPage</code></td><td><code>renderErrorPareto</code>, <code>renderFailureHeatmap</code>, <code>renderIncidentTable</code></td></tr>
+                    <tr><td><code>InfrastructurePage</code></td><td><code>renderVmKpis</code>, <code>renderVmGrid</code></td></tr>
+                    <tr><td><code>AuditPage</code></td><td><code>populateAuditRpaSelect</code>, <code>populateAuditExecutionSelect</code>, <code>initAuditPicker</code>, <code>renderAuditStepHistory</code>, <code>renderAuditExecution</code>, <code>openAuditExecution</code>, <code>renderExecutionAuditTable</code></td></tr>
+                    <tr><td><code>DiagnosticPage</code></td><td><code>renderDiagnostic</code>, <code>renderIncidentDiagnostic</code>, <code>renderGenericDiagnostic</code></td></tr>
+                    <tr><td><code>CatalogPage</code></td><td><code>renderCatalog</code></td></tr>
+                    <tr><td><code>RpaOpsApp</code></td><td><code>renderAll()</code> — chama, em ordem, todo método de render acima; idempotente, roda no boot e a cada refresh. <code>init()</code> — liga filtros, restaura a página salva em <code>sessionStorage</code>, liga o botão de reload e o debounce de resize.</td></tr>
+                </table></div>
+                <div class="callout callout-info">
+                    <div class="icon-dot">i</div>
+                    <p><strong>Para adicionar uma página nova:</strong> criar a <code>&lt;section class="page" id="page-{nome}"&gt;</code> em <code>index.html</code> + um botão <code>.nav-link</code> com <code>data-page="{nome}"</code> + um método <code>renderNome()</code> na classe <code>*Page</code> correspondente (ou uma nova classe, se a página for grande) + chamar esse método a partir de <code>RpaOpsApp.renderAll()</code>.</p>
+                </div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="padrao-alias">
+                <h2>Padrão de alias e sequência de boot<a class="anchor-link" href="#padrao-alias">#</a></h2>
+                <p>Depois das 14 classes, <code>dashboard-app.js</code> declara ~65 <code>const</code> de alias — um por função que existia solta no arquivo original — e só então executa a sequência de boot. A ordem importa: em JavaScript, uma referência a um identificador de topo dentro do corpo de uma função é resolvida <strong>em tempo de chamada</strong>, não em tempo de definição — então, por construção, todo alias já existe no momento em que qualquer método é de fato invocado (sempre depois de o arquivo inteiro ter executado).</p>
+                <pre class="code-block"><span class="lang-tag">js</span><code>// depois de TODAS as classes definidas:
+const escapeHtml = Fmt.escapeHtml;
+const goToPage   = NavigationController.goToPage;
+const renderAll  = RpaOpsApp.renderAll;
+const init       = RpaOpsApp.init;
+// … (~65 no total — ver arquivo para a lista completa)
+
+// BOOT — só roda no navegador (guarda de ambiente evita quebrar em Node/testes)
+let DATA;                                   // variável solta, nunca propriedade de classe
+const chartRegistry = ChartService.registry;
+
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    DATA = window.INDEX_DATA;
+    DATA.auditExecutions = buildAuditExecutions(window.OBS_DATA);
+    window.ACTIVE_EXECUTION_ID = DATA.executionDetail?.executionId ?? DATA.timeline?.[0]?.executionId ?? null;
+    NavigationController.bindGlobalControls();
+    window.RPA_INCREMENTAL_REFRESH = () => reloadData(DATA.loadStats?.mode || '90d');
+    init();
+}
+
+// export para test_dashboard.js via Node — no-op no navegador
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { Fmt, ChartService };
+}</code></pre>
+                <div class="callout callout-danger">
+                    <div class="icon-dot">!</div>
+                    <p><code>DATA</code> é uma <code>let</code> de topo genuína — <strong>não</strong> uma propriedade de classe — de propósito: é reatribuída por nome (<code>DATA = window.INDEX_DATA</code>) em <code>RpaDataStore.reloadData</code> e lida por nome em dezenas de métodos das classes <code>*Page</code>. Movê-la para dentro de uma classe (mesmo como <code>static</code>) quebraria essa reatribuição silenciosamente, porque os métodos continuariam lendo o identificador de topo <code>DATA</code>, não a propriedade da classe.</p>
+                </div>
+                <p><strong>Regra prática:</strong> ao adicionar uma função de topo nova em <code>dashboard-app.js</code>, decida se ela pertence a uma classe existente (o caso comum) e adicione o alias correspondente logo no bloco de aliases — nunca crie uma função solta fora desse padrão, ou <code>aa-integration.js</code> pode perder acesso a ela silenciosamente caso venha a depender dela no futuro.</p>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="kit-ui-compartilhado">
+                <h2>Kit de UI compartilhado — observability-core.js (window.RPAUI)<a class="anchor-link" href="#kit-ui-compartilhado">#</a></h2>
+                <p>As 3 páginas avulsas (<code>investigacao.html</code>, <code>diagnostico.html</code>, <code>rpa-dashboard.html</code>) não carregam <code>dashboard-app.js</code> — elas são páginas independentes que só conhecem <code>window.RPAUI</code>, montado por <code>assets/observability-core.js</code> a partir de 4 classes internas envolvidas numa IIFE própria.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Classe interna</th><th>Responsabilidade</th></tr>
+                    <tr><td><code>RpaFormatter</code></td><td>Formatação de data/hora/número/badges — sem estado, sem dependência de dado.</td></tr>
+                    <tr><td><code>RpaDataRepository</code></td><td>Todo acesso a <code>OBS_DATA</code>/<code>INDEX_DATA</code>. <code>D</code> continua exposto como propriedade crua (as páginas acessam <code>U.D.executions</code> diretamente) por design — encapsular atrás de métodos exigiria reescrever as 3 páginas.</td></tr>
+                    <tr><td><code>RpaChartRenderer</code></td><td>Os dois mini-charts em SVG puro (<code>lineSvg</code>, <code>barSvg</code>) usados pelas páginas avulsas — sem depender de Chart.js.</td></tr>
+                    <tr><td><code>RpaPageNavigator</code></td><td>Abrir outra página em nova aba, montar o toolbar padrão (fechar/exportar/snapshot), exportar PDF via <code>window.print()</code>.</td></tr>
+                </table></div>
+                <h3>API pública de <code>window.RPAUI</code></h3>
+                <div class="callout callout-danger">
+                    <div class="icon-dot">!</div>
+                    <p>Estas são as chaves que <strong>as três páginas avulsas consomem diretamente</strong>. Renomear ou remover qualquer uma quebra as três ao mesmo tempo — trate como uma API pública estável.</p>
+                </div>
+                <div class="table-wrap"><table>
+                    <tr><th>Chave</th><th>Assinatura</th><th>Descrição</th></tr>
+                    <tr><td><code>D</code></td><td>objeto</td><td><code>window.OBS_DATA</code> cru (acesso direto: <code>U.D.executions</code>, <code>U.D.rpaAggregates[id]</code>).</td></tr>
+                    <tr><td><code>IDX</code></td><td>objeto | null</td><td><code>window.INDEX_DATA</code>, quando a página carrega esse script também.</td></tr>
+                    <tr><td><code>q</code></td><td><code>URLSearchParams</code></td><td>Parâmetros da URL da página atual (<code>execution_id</code>, <code>rpa_id</code>).</td></tr>
+                    <tr><td><code>$(sel, root)</code> / <code>$$(sel, root)</code></td><td>função</td><td><code>querySelector</code>/<code>querySelectorAll</code>.</td></tr>
+                    <tr><td><code>fmtDateTime(v)</code> / <code>fmtDate(v)</code> / <code>fmtTime(v)</code></td><td>função</td><td>Formatação pt-BR; retornam <code>"—"</code> para valor vazio.</td></tr>
+                    <tr><td><code>esc(v)</code></td><td>função</td><td>Escape de HTML.</td></tr>
+                    <tr><td><code>statusBadge(s)</code> / <code>reliabilityBadge(classification)</code></td><td>função</td><td>Badges HTML.</td></tr>
+                    <tr><td><code>pct(a,b)</code> / <code>median(arr)</code> / <code>percentile(arr,p)</code></td><td>função</td><td>Utilitários estatísticos puros.</td></tr>
+                    <tr><td><code>duration(sec)</code></td><td>função</td><td>Formata segundos como <code>"45.2s"</code> ou <code>"2m 05s"</code>.</td></tr>
+                    <tr><td><code>getExecution(id)</code> / <code>getRpa(id)</code> / <code>getRpaByProcess(p)</code></td><td>função</td><td>Busca no cadastro/execuções carregados.</td></tr>
+                    <tr><td><code>getEvents(id)</code> / <code>getVmContext(id)</code></td><td>função</td><td>Eventos e telemetria de VM de uma execução.</td></tr>
+                    <tr><td><code>vmReliabilityFor(machine)</code> / <code>vmUtilizationFor(machine)</code></td><td>função</td><td>Entrada correspondente em <code>IDX.vmReliability</code>/<code>IDX.vmUtilization</code>, ou <code>null</code>.</td></tr>
+                    <tr><td><code>paretoRank(dimension, label)</code></td><td>função</td><td>Posição de um rótulo no Pareto de erros (top 12) — <code>null</code> se não aparecer.</td></tr>
+                    <tr><td><code>openInvestigation(id)</code> / <code>openDiagnostic(id)</code> / <code>openRpa(id)</code></td><td>função</td><td>Abre outra página avulsa em nova aba com o parâmetro certo na URL.</td></tr>
+                    <tr><td><code>exportPdf()</code></td><td>função</td><td><code>window.print()</code>.</td></tr>
+                    <tr><td><code>initToolbar(label)</code></td><td>função</td><td>Liga botão fechar/PDF, preenche o label de snapshot e o <code>document.title</code>.</td></tr>
+                    <tr><td><code>lineSvg(rows, series, options)</code> / <code>barSvg(rows, key, labelKey, options)</code></td><td>função</td><td>Os dois mini-charts SVG.</td></tr>
+                </table></div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="paginas-avulsas">
+                <h2>Páginas avulsas — Investigação, Diagnóstico, Dashboard da RPA<a class="anchor-link" href="#paginas-avulsas">#</a></h2>
+                <p>Cada uma abre em nova aba a partir do dashboard principal, sempre com um parâmetro obrigatório na URL. Todas seguem o mesmo padrão de classe: construtor recebe <code>window.RPAUI</code>, <code>render()</code> valida o parâmetro e monta o estado compartilhado como propriedades da instância, e cada seção visual vira um método próprio que lê esse estado via <code>this</code>.</p>
+                <div class="callout callout-ok">
+                    <div class="icon-dot">✓</div>
+                    <p><strong>Guarda de segurança idêntica nas três:</strong> sem <code>execution_id</code>/<code>rpa_id</code> válido na URL, o <code>&lt;body&gt;</code> é substituído por uma mensagem de acesso inválido — nunca há fallback para "última execução" ou "primeira RPA do catálogo".</p>
+                </div>
+                <div class="table-wrap"><table>
+                    <tr><th>Página</th><th>Classe</th><th>Parâmetro</th><th>Seções (métodos)</th></tr>
+                    <tr><td><code>investigacao.html</code></td><td><code>InvestigacaoPage</code></td><td><code>execution_id</code></td><td>hero, KPIs, trilha de etapas, agenda, reconciliação, resumo de VM (com <code>vmReliabilityFor</code>/<code>vmUtilizationFor</code>), evidências, execuções relacionadas (com <code>paretoRank</code>), dependências correlacionadas.</td></tr>
+                    <tr><td><code>diagnostico.html</code></td><td><code>DiagnosticoPage</code></td><td><code>execution_id</code></td><td>hero, KPIs, resumo (callouts condicionais), baseline histórico, duração por etapa (<code>barSvg</code>), recorrência, gráfico de VM (<code>lineSvg</code>), sinais técnicos (inclui <code>paretoRank</code> e classificação de confiabilidade de VM), checklist de próximos passos, execuções vizinhas da mesma RPA.</td></tr>
+                    <tr><td><code>rpa-dashboard.html</code></td><td><code>RpaDashboardPage</code></td><td><code>rpa_id</code></td><td>hero, KPIs, Pareto de erros/etapas, perfil de agenda, benefícios, responsáveis, desempenho por etapa, 3 gráficos históricos filtráveis (período/status/busca), tabela completa de execuções.</td></tr>
+                </table></div>
+                <p>Diferente de <code>dashboard-app.js</code>, aqui não há reuso de código entre páginas — cada classe existe só para nomear e isolar as seções de uma única tela. Em <code>RpaDashboardPage</code>, os três campos de filtro (período/status/busca) viram propriedades da instância via <code>bindFilters()</code>, permitindo que os handlers de evento chamem <code>this.renderCharts()</code>/<code>this.renderTable()</code> sem variáveis globais soltas.</p>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="aa-visao-geral">
+                <h2>Integração Automation Anywhere — visão geral<a class="anchor-link" href="#aa-visao-geral">#</a></h2>
+                <p>Camada <strong>opcional e removível</strong> de conexão com a Automation Anywhere 360 Control Room. Sem conectar, a única mudança visível no dashboard é um botão "Automation Anywhere · Conectar" no topbar. Depois de conectar (API Key real, ou deixar em branco/"mock" para simular), um grupo de navegação novo aparece no menu lateral com até 10 páginas — cada uma só visível se a capability correspondente estiver <code>AVAILABLE</code>.</p>
+                <div class="callout callout-ok">
+                    <div class="icon-dot">✓</div>
+                    <p><strong>Como remover completamente:</strong> apagar as tags <code>&lt;link&gt;</code> (aa-integration.css) e <code>&lt;script&gt;</code> (aa-integration.js) de <code>index.html</code>. Nada no pipeline de dados existente (<code>DATA</code>, <code>OBS_DATA</code>, <code>renderAll</code>, <code>reloadData</code>, <code>goToPage</code>) é chamado por este módulo nem depende dele.</p>
+                </div>
+                <h3>Mapa das 14 classes (assets/aa-integration.js)</h3>
+                <div class="table-wrap"><table>
+                    <tr><th>Classe</th><th>Responsabilidade</th></tr>
+                    <tr><td><code>AASecretVault</code></td><td>O único lugar do módulo que guarda <code>apiKey</code>/<code>token</code> — sempre em memória, nunca em <code>window</code>/<code>localStorage</code>/<code>sessionStorage</code>/log/PDF.</td></tr>
+                    <tr><td><code>AAConfigStore</code></td><td><code>baseUrl</code>/<code>username</code> (não sensível); carrega defaults de <code>/api/aa/config</code> falhando em silêncio.</td></tr>
+                    <tr><td><code>AATelemetryRecorder</code></td><td>Contadores técnicos: nº de requisições, erros HTTP, latência da última chamada, timestamps de auth/sync.</td></tr>
+                    <tr><td><code>AACacheStore</code></td><td>Cache em memória por chave lógica, com TTL próprio por entrada e status calculado sob demanda: <code>LIVE</code> (&lt; TTL/2) → <code>ATUALIZADO</code> (&lt; TTL) → <code>STALE</code> (&lt; 3×TTL) → <code>OFFLINE</code>.</td></tr>
+                    <tr><td><code>AAAuditTrail</code></td><td>Log local (até 50 entradas) de ações tentadas — nunca um segredo, só o que já é público (RPA, ação, resultado, horário).</td></tr>
+                    <tr><td><code>AAApiClient</code></td><td>Única porta de saída: fala só com <code>/api/aa/*</code> (o proxy local), nunca direto com a Control Room.</td></tr>
+                    <tr><td><code>AACorrelationEngine</code></td><td>Classifica cada atividade da Control Room contra os logs locais — ver <a href="#aa-motor-correlacao">detalhe abaixo</a>.</td></tr>
+                    <tr><td><code>AAConnectionManager</code></td><td>Máquina de estados da conexão (<code>extends EventTarget</code>) — ver <a href="#aa-maquina-estados">detalhe abaixo</a>.</td></tr>
+                    <tr><td><code>AAModalView</code></td><td>Modal de conexão: API Key + "Configuração avançada" (URL/usuário).</td></tr>
+                    <tr><td><code>AAHeaderButtonView</code></td><td>Botão fixo no topbar + popover de status quando conectado.</td></tr>
+                    <tr><td><code>AANavigationView</code></td><td>Injeta/mostra o grupo "Automation Anywhere" no menu, ocultando itens cuja capability não está <code>AVAILABLE</code>.</td></tr>
+                    <tr><td><code>AAActionsController</code></td><td>Ações que mutam estado na Control Room (reexecutar, habilitar/desabilitar schedule) — sempre pedem confirmação com RPA/Ambiente/Ação/Consequência e ficam registradas no <code>AAAuditTrail</code>.</td></tr>
+                    <tr><td><code>AAPagesController</code></td><td>Injeta e renderiza as 10 páginas novas sob demanda (lazy, via <code>MutationObserver</code> na troca de <code>.active</code>).</td></tr>
+                    <tr><td><code>AutomationAnywhereApp</code></td><td>Ponto único de montagem — instancia tudo na ordem certa e expõe <code>window.AA</code> para depuração (nunca o conteúdo do vault).</td></tr>
+                </table></div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="aa-maquina-estados">
+                <h2>Máquina de estados da conexão<a class="anchor-link" href="#aa-maquina-estados">#</a></h2>
+                <p><code>AAConnectionManager</code> dispara o evento DOM <code>statechange</code> a cada transição — as views (botão, popover, navegação) reagem sem acoplamento direto à classe.</p>
+                <div class="state-graph">
+                    <div class="state-chip"><b>DISCONNECTED</b>estado inicial / após desconectar</div>
+                    <div class="state-chip"><b>CONNECTING</b>autenticando + fazendo o probe de Activity + discovery</div>
+                    <div class="state-chip"><b>CONNECTED</b>100% das capabilities disponíveis</div>
+                    <div class="state-chip"><b>CONNECTED_PARTIAL</b>conectado, mas nem toda capability está <code>AVAILABLE</code></div>
+                    <div class="state-chip"><b>REFRESHING</b>sincronização automática de 5 min em andamento</div>
+                    <div class="state-chip"><b>STALE</b>a última sincronização automática falhou</div>
+                    <div class="state-chip"><b>SESSION_EXPIRED</b>o backend sinalizou <code>SESSION_EXPIRED</code> numa resposta — pede reconexão</div>
+                    <div class="state-chip"><b>AUTH_ERROR</b>API Key/usuário inválidos</div>
+                    <div class="state-chip"><b>NETWORK_ERROR</b>Control Room inalcançável</div>
+                    <div class="state-chip"><b>OFFLINE</b>estado reservado no botão do topbar (não observado sendo atribuído no fluxo atual de <code>connect()</code>/refresh)</div>
+                </div>
+                <p><code>connect(apiKey, baseUrl, username)</code> é sequencial e visível: autentica → sonda Activity List (1 item) → discovery de capabilities — cada etapa atualiza um checklist (<code>pending</code>/<code>done</code>/<code>failed</code>) renderizado ao vivo no modal. Ao conectar com sucesso, agenda a sincronização automática (<code>_startAutoRefresh</code>, a cada 5 min, <strong>independente</strong> do refresh de 20 min do dashboard) e emite <code>connected</code>.</p>
+                <p><code>disconnect()</code> limpa o <code>AASecretVault</code>, zera capabilities/sessão e emite <code>disconnected</code> — o app volta para a página <code>overview</code> se o usuário estava numa página <code>aa-*</code>.</p>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="aa-motor-correlacao">
+                <h2>Motor de correlação — Activity × log local<a class="anchor-link" href="#aa-motor-correlacao">#</a></h2>
+                <p><code>AACorrelationEngine.correlate(activity)</code> nunca apresenta uma correspondência provável como fato — toda atividade recebe uma classificação explícita com o motivo em texto.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Classificação</th><th>Critério</th></tr>
+                    <tr><td><span class="badge success">EXACT</span></td><td>O <code>execution_id</code> do log local aparece literalmente dentro do <code>id</code> da atividade da Control Room.</td></tr>
+                    <tr><td><span class="badge info">HIGH_CONFIDENCE</span></td><td>Mesma automação, início a ≤ 3 min de diferença, <strong>mesma VM</strong> (<code>device</code>/<code>runner</code>).</td></tr>
+                    <tr><td><span class="badge warning">PROBABLE</span></td><td>Mesma automação dentro de ≤ 20 min, mas fora do critério acima (VM diferente e/ou diferença de tempo maior).</td></tr>
+                    <tr><td><span class="badge danger">CONFLICT</span></td><td>Duas ou mais execuções locais igualmente próximas no tempo (diferença &lt; 1 min entre a 1ª e a 2ª candidata) — ambíguo.</td></tr>
+                    <tr><td><span class="badge neutral">UNMATCHED</span></td><td>Nenhuma execução local dentro da janela de ±20 min para aquela automação.</td></tr>
+                </table></div>
+                <p>"Mesma automação" (<code>_sameAutomation</code>) compara pelo cadastro (<code>rpa.process === execRow.process</code> via <code>activity.automationId</code>) e cai para comparação de nome em texto só se a RPA não for encontrada no cadastro local — nunca compara só pelo nome da automação isolado do <code>execRow</code> avaliado, para não deixar qualquer execução do período "combinar" com a atividade.</p>
+                <div class="callout callout-info">
+                    <div class="icon-dot">i</div>
+                    <p>No modo mock, <code>AutomationAnywhereGateway._mock_activities</code> gera propositalmente ~4% dos casos com VM diferente da execução local (para exercitar <code>PROBABLE</code> em vez de sempre <code>HIGH_CONFIDENCE</code>) e 3 atividades sintéticas sem log local correspondente (para exercitar <code>UNMATCHED</code> de forma honesta) — o ID da atividade mock é deliberadamente independente do <code>execution_id</code> local, replicando o caso real onde as duas plataformas não compartilham uma chave única.</p>
+                </div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="aa-referencia-frontend">
+                <h2>Segurança e mock — AAApiClient / AAConfigStore<a class="anchor-link" href="#aa-referencia-frontend">#</a></h2>
+                <p><code>AAApiClient</code> é a única classe do módulo que faz <code>fetch</code>, e só chama rotas <code>/api/aa/*</code> (same-origin) — nunca a Control Room diretamente do navegador. Cada chamada envia <code>X-AA-Base-Url</code>/<code>X-AA-Token</code> lidos em tempo de chamada do <code>AASecretVault</code>/<code>AAConfigStore</code> (nunca de uma constante guardada cedo demais). Uma resposta com <code>error: 'SESSION_EXPIRED'</code> dispara <code>onSessionExpired</code>, que o <code>AAConnectionManager</code> usa para se auto-transicionar sem que o cliente HTTP precise conhecer a máquina de estados.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Método</th><th>Cache</th><th>Descrição</th></tr>
+                    <tr><td><code>authenticate(apiKey, baseUrl, username)</code></td><td>—</td><td><code>POST /api/aa/authenticate</code>.</td></tr>
+                    <tr><td><code>discoverCapabilities()</code></td><td>—</td><td><code>POST /api/aa/discover</code>.</td></tr>
+                    <tr><td><code>activityList(filters, {skipCache})</code></td><td>45s</td><td><code>POST /api/aa/activity/list</code>.</td></tr>
+                    <tr><td><code>activityDetail(id)</code></td><td>120s</td><td><code>GET /api/aa/activity/execution/{id}</code>.</td></tr>
+                    <tr><td><code>proxy(method, path, body, ttlMs)</code></td><td>90s (padrão) / <code>ttlMs=0</code> força ignorar cache</td><td><code>POST /api/aa/proxy</code> — usado por ações que mutam estado (habilitar schedule, reexecutar), sempre com <code>ttlMs=0</code>.</td></tr>
+                </table></div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="aa-gateway-backend">
+                <h2>AutomationAnywhereGateway — backend<a class="anchor-link" href="#aa-gateway-backend">#</a></h2>
+                <p>Classe única em <code>server.py</code> que concentra config, autenticação, discovery, Activity List/detalhe e o proxy genérico. Recebe <code>get_data_fn</code> por <strong>injeção de dependência</strong> (em vez de chamar <code>get_data()</code> global diretamente) — é isso que permite <code>test_server.py</code> passar uma função fake e testar toda a lógica de mock sem tocar em <code>./logs</code>.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Método</th><th>Descrição</th></tr>
+                    <tr><td><code>load_config()</code></td><td>Lê <code>config/aa_config.json</code>, com variáveis de ambiente <code>AA_BASE_URL</code>/<code>AA_USERNAME</code> tendo prioridade. Nunca lê/escreve segredo.</td></tr>
+                    <tr><td><code>is_mock(base_url)</code></td><td><code>True</code> se vazio ou igual a <code>"mock"</code>/<code>"http://mock"</code>/<code>"mock://local"</code>.</td></tr>
+                    <tr><td><code>authenticate(base_url, username, api_key)</code></td><td>Mock: exige ≥6 caracteres, devolve um token determinístico por hash. Real: <code>POST {baseUrl}/v2/authentication</code>.</td></tr>
+                    <tr><td><code>discover(base_url, token)</code></td><td>Mock: devolve <code>MOCK_CAPABILITIES</code> fixo. Real: sonda cada rota de <code>CAPABILITY_PROBE</code> e classifica a resposta.</td></tr>
+                    <tr><td><code>activity_list(base_url, token, filters)</code></td><td>Mock: pagina sobre <code>_mock_activities()</code>. Real: <code>POST {baseUrl}/v3/activity/list</code>.</td></tr>
+                    <tr><td><code>activity_detail(base_url, token, activity_id)</code></td><td>Busca uma atividade específica (mock ou real).</td></tr>
+                    <tr><td><code>generic_proxy(base_url, token, method, path, body)</code></td><td>Só encaminha caminhos que começam com <code>/v2</code>, <code>/v3</code> ou <code>/v4</code> — nunca uma URL arbitrária.</td></tr>
+                    <tr><td><code>_forward(method, url, headers, body_bytes)</code></td><td>Transporte HTTP cru via <code>urllib.request</code>; nunca loga headers/corpo (podem conter o token).</td></tr>
+                    <tr><td><code>_classify_status(status, network_error)</code></td><td>HTTP → <code>AVAILABLE</code>/<code>FORBIDDEN</code>/<code>UNAVAILABLE</code>/<code>TEMPORARY_ERROR</code>/<code>UNSUPPORTED</code>.</td></tr>
+                    <tr><td><code>_mock_activities()</code></td><td>Deriva um Activity List plausível a partir das execuções locais — usado para exercitar o motor de correlação de ponta a ponta.</td></tr>
+                    <tr><td><code>_mock_generic(path, method, body)</code></td><td>Simula Devices/Schedules/Repository/Audit/Policy a partir dos próprios dados locais.</td></tr>
+                </table></div>
+                <h4>Capabilities simuladas (<code>MOCK_CAPABILITIES</code>)</h4>
+                <p><code>activity</code>, <code>audit</code>, <code>repository</code>, <code>scheduler</code>, <code>devices</code>, <code>packages</code> → <span class="badge success">AVAILABLE</span> &nbsp;·&nbsp; <code>policy</code>, <code>deploy</code> → <span class="badge danger">FORBIDDEN</span> &nbsp;·&nbsp; <code>wlm</code>, <code>acc</code> → <span class="badge neutral">UNAVAILABLE</span> &nbsp;·&nbsp; <code>botInsight</code> → <span class="badge neutral">UNSUPPORTED</span></p>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="aa-paginas">
+                <h2>As 10 páginas novas (AAPagesController)<a class="anchor-link" href="#aa-paginas">#</a></h2>
+                <p>Injetadas como <code>&lt;section class="page" id="page-aa-…"&gt;</code> no formato exato que <code>goToPage()</code>/<code>renderAll()</code> originais já sabem exibir — o dashboard não precisa saber que este módulo existe. Um <code>MutationObserver</code> decide quando buscar dados (lazy) ao detectar a troca de <code>.active</code>.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Página</th><th>Capability exigida</th><th>Descrição</th></tr>
+                    <tr><td>Control Room</td><td><code>activity</code></td><td>O que está executando, em fila, falhando ou fora do baseline agora — direto da Control Room.</td></tr>
+                    <tr><td>Execuções AA</td><td><code>activity</code></td><td>Activity List oficial da Control Room, com nível de correlação com os logs locais.</td></tr>
+                    <tr><td>Execução 360°</td><td><code>activity</code></td><td>Consolida Control Room, logs locais e telemetria de VM para uma execução — não substitui Auditoria/Investigação/Diagnóstico.</td></tr>
+                    <tr><td>Schedules</td><td><code>scheduler</code></td><td>Schedule da Control Room × agenda local × execução realizada.</td></tr>
+                    <tr><td>Runners &amp; Devices</td><td><code>devices</code></td><td>Devices da Control Room combinados com a telemetria local de VM.</td></tr>
+                    <tr><td>Workload</td><td><code>wlm</code></td><td>Filas, backlog e throughput do Workload Management, quando disponível.</td></tr>
+                    <tr><td>Mudanças &amp; Audit</td><td><code>audit</code></td><td>Linha do tempo mudança → execução → falha, separando evidência de hipótese.</td></tr>
+                    <tr><td>Dependências</td><td><code>repository</code></td><td>Repository + Package Usage combinados com a criticidade local das RPAs.</td></tr>
+                    <tr><td>Qualidade / Policy</td><td><code>policy</code></td><td>Violations e resultado de scans de Policy Management, quando permitido.</td></tr>
+                    <tr><td>Analytics</td><td><code>acc</code></td><td>Indicadores de ACC/BotInsight, quando disponíveis nesta Control Room.</td></tr>
+                </table></div>
+                <p>Ações que mutam estado (<code>AAActionsController.runOrRerun</code>, <code>toggleSchedule</code>) sempre abrem um modal de confirmação com RPA/Ambiente/Ação/Consequência antes de chamar <code>AAApiClient.proxy(...)</code> com <code>ttlMs=0</code>, e o resultado é sempre registrado via <code>AAAuditTrail.log(...)</code> — nunca acontece silenciosamente.</p>
+                <div class="callout callout-ok">
+                    <div class="icon-dot">✓</div>
+                    <p>Exportação de PDF das páginas AA (<code>_hookPdfExport</code>) verifica se <code>window.open('', '_blank')</code> retornou <code>null</code> (popup bloqueado pelo navegador) antes de escrever no documento — corrigido após um bug encontrado em teste manual que causava <code>TypeError: Cannot read properties of null</code>. Ao tocar nesse fluxo novamente, preserve essa checagem.</p>
+                </div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="testes">
+                <h2>Testes automatizados<a class="anchor-link" href="#testes">#</a></h2>
+                <h3>test_server.py — 26 testes (unittest, stdlib)</h3>
+                <div class="table-wrap"><table>
+                    <tr><th>Classe de teste</th><th>Cobre</th></tr>
+                    <tr><td><code>TestLogFilenamePatterns</code></td><td><code>EXEC_FNAME_RE</code>/<code>VM_FNAME_RE</code> — aceita nome válido (com e sem sufixo de execução), rejeita prefixo/extensão errados.</td></tr>
+                    <tr><td><code>TestAutomationAnywhereGatewayMock</code></td><td>Todo o modo mock do gateway: <code>is_mock</code>, autenticação (rejeita chave curta, aceita válida), discovery fixo, Activity List (derivação + paginação), detalhe (encontrado/não encontrado), proxy genérico (devices a partir das VMs fake, allowlist de path, policy FORBIDDEN, toggle de schedule sem tocar na agenda real) — usa <code>get_data_fn</code> fake, nunca lê <code>./logs</code>.</td></tr>
+                    <tr><td><code>TestDatasetBuilds</code></td><td>Smoke test de <code>build_dataset('90d')</code> contra os logs reais do projeto — chaves de topo esperadas presentes, pelo menos 1 RPA no resultado.</td></tr>
+                    <tr><td><code>TestHttpServerRoutes</code></td><td>Servidor real numa porta livre: fluxo mock de autenticação AA de ponta a ponta, rota <code>/api/aa/config</code>, <code>/api/status</code>, <code>index.html</code> serve, <code>observability-data.js</code> é JSON prefixado válido, proxy rejeita path fora da allowlist mesmo via HTTP real, rota AA desconhecida devolve 404.</td></tr>
+                </table></div>
+                <h3>test_dashboard.js — 18 testes (node --test, sem dependências)</h3>
+                <p>Cobre só <code>Fmt</code> e os dois métodos SVG-puros de <code>ChartService</code> (<code>sparkline</code>, <code>lineChart</code>) — as únicas partes de <code>dashboard-app.js</code> que não tocam <code>window</code>/<code>document</code>. O restante (as classes <code>*Page</code>, <code>NavigationController</code>, <code>RpaDataStore</code>, e as 3 páginas avulsas) manipula o DOM diretamente e é verificado manualmente no navegador a cada mudança — disciplina mantida deliberadamente neste projeto em vez de introduzir jsdom/Puppeteer como dependência.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Área testada</th><th>Casos</th></tr>
+                    <tr><td><code>Fmt.escapeHtml</code></td><td>Os 5 caracteres perigosos; <code>null</code>/<code>undefined</code> → string vazia.</td></tr>
+                    <tr><td><code>Fmt.clamp</code></td><td>Limita nos dois sentidos.</td></tr>
+                    <tr><td><code>Fmt.fmtHoursMinutes</code> / <code>formatAuditDuration</code></td><td>Formatos abaixo e acima do limiar de 1h/1min.</td></tr>
+                    <tr><td><code>Fmt.statusBadge</code></td><td>Os 12 status conhecidos não caem no fallback "neutral"; desconhecido cai e não lança erro.</td></tr>
+                    <tr><td><code>Fmt.criticalityBadge</code> / <code>auditComplianceBadge</code></td><td>Mapeamento correto de classe CSS por valor; ausência de regra não lança erro.</td></tr>
+                    <tr><td><code>Fmt.heatClass</code></td><td>As 5 faixas (0–4), incluindo os limites exatos das fronteiras (.25/.5/.75).</td></tr>
+                    <tr><td><code>Fmt.metricClass</code></td><td>Ordem correta dos limiares warning/critical.</td></tr>
+                    <tr><td><code>ChartService.sparkline</code></td><td>Lista vazia/<code>null</code> não lança (evita <code>Math.min</code> de array vazio); 1 ponto por valor; range zero (todos os valores iguais) não gera <code>NaN</code>.</td></tr>
+                    <tr><td><code>ChartService.lineChart</code></td><td>1 círculo por linha de dado; nenhum <code>NaN</code> nas coordenadas geradas.</td></tr>
+                </table></div>
+                <h3>Como estender</h3>
+                <p>Ao adicionar uma função pura nova (sem <code>document</code>/<code>window</code>) a <code>dashboard-app.js</code>, adicione-a ao objeto exportado no fim do arquivo (<code>module.exports = { Fmt, ChartService, MinhaClasseNova }</code>) e um teste correspondente em <code>test_dashboard.js</code>. Para lógica nova no pipeline Python, adicione um teste em <code>test_server.py</code> na classe temática mais próxima (ou crie uma nova <code>class TestX(unittest.TestCase)</code>).</p>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="seguranca">
+                <h2>Segurança<a class="anchor-link" href="#seguranca">#</a></h2>
+                <div class="table-wrap"><table>
+                    <tr><th>Controle</th><th>Onde / como</th></tr>
+                    <tr><td>Servidor só local</td><td><code>HOST = '127.0.0.1'</code> em <code>server.py</code> — nunca escuta na rede.</td></tr>
+                    <tr><td>Content-Security-Policy</td><td><code>Handler.end_headers()</code>: <code>default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'</code> — bloqueia qualquer requisição para fora da origem.</td></tr>
+                    <tr><td>Sem cache HTTP</td><td><code>Cache-Control: no-store, no-cache, must-revalidate, max-age=0</code> em toda resposta — os dados mudam a cada reprocessamento, nunca devem ficar presos em cache do navegador.</td></tr>
+                    <tr><td>Sem fallback de navegação direta</td><td>Nenhuma das 3 páginas avulsas aceita abrir sem parâmetro válido na URL (ver <a href="#paginas-avulsas">Páginas avulsas</a>).</td></tr>
+                    <tr><td>API Key / token da integração AA</td><td>Nunca gravados em disco, <code>localStorage</code>, <code>sessionStorage</code>, log ou PDF — só em <code>AASecretVault</code> (memória do processo do navegador), descartados ao desconectar ou fechar a aba. O backend também nunca os persiste: recebidos por header a cada chamada, usados e descartados.</td></tr>
+                    <tr><td>Proxy genérico da integração AA</td><td><code>AutomationAnywhereGateway.PROXY_ALLOWED_PREFIXES = ('/v2/', '/v3/', '/v4/')</code> — nunca encaminha uma URL arbitrária escolhida pelo cliente.</td></tr>
+                    <tr><td>Logging de erros da integração AA</td><td><code>_forward()</code> nunca loga headers ou corpo da requisição (podem conter o token) — só código de status e, em erro, mensagem genérica.</td></tr>
+                    <tr><td>Escape de HTML</td><td><code>Fmt.escapeHtml</code>/<code>RpaFormatter.esc</code> em toda interpolação de dado dinâmico na UI — evita XSS via conteúdo de log (nome de RPA, mensagem de erro, etc.).</td></tr>
+                </table></div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="runbook">
+                <h2>Runbook operacional<a class="anchor-link" href="#runbook">#</a></h2>
+                <h3>Ciclo de atualização de dados</h3>
+                <ul>
+                    <li>Cada requisição a <code>/assets/observability-data.js</code>/<code>/assets/index-data.js</code> verifica o fingerprint dos arquivos em disco; se mudou, o dataset é reconstruído automaticamente.</li>
+                    <li>O botão "Recarregar dados" e o refresh automático de 20 min (<code>assets/auto-refresh.js</code>) disparam o mesmo caminho incremental (<code>/api/reload</code> → <code>/api/load-status</code> → rebusca os 2 scripts) — nunca um <code>location.reload()</code> na página principal.</li>
+                    <li>As 3 páginas avulsas ainda não implementam esse pipeline incremental — <code>auto-refresh.js</code> cai em <code>location.reload()</code> tradicional para elas.</li>
+                    <li>O refresh da integração AA é independente: a cada 5 min, só quando conectado, nunca bloqueia o refresh de 20 min do dashboard.</li>
+                </ul>
+                <h3>Problemas comuns</h3>
+                <div class="table-wrap"><table>
+                    <tr><th>Sintoma</th><th>Causa provável / ação</th></tr>
+                    <tr><td>Porta 8765 já em uso</td><td>Outra instância do servidor rodando. Definir <code>RPA_MONITOR_PORT=8766 python3 server.py</code> para usar outra porta, ou encerrar o processo anterior.</td></tr>
+                    <tr><td>Painel abre mas mostra dados congelados/antigos</td><td>Provavelmente aberto via <code>file://</code> — os fallbacks estáticos (<code>assets/observability-data.js</code>/<code>index-data.js</code> versionados) não são regenerados. Abrir via <code>http://127.0.0.1:8765/</code>.</td></tr>
+                    <tr><td>Painel "Qualidade dos dados" mostra arquivos ignorados</td><td>Consultar <code>loadIssues</code> — cada entrada tem <code>file</code>, <code>type</code> (<code>STAT_ERROR</code>/<code>READ_ERROR</code>/<code>JSON_ERROR</code>) e <code>action</code> já explicando o que foi feito (linha ignorada / arquivo ignorado).</td></tr>
+                    <tr><td>"Recarregar dados" fica desabilitado / não faz nada</td><td>Painel aberto via <code>file://</code> — o recurso exige o servidor local (checado explicitamente em <code>RpaDataStore.reloadData</code>).</td></tr>
+                    <tr><td>Integração AA presa em "Conectando…"</td><td>Verificar o checklist no modal (<code>auth</code>/<code>activity</code>/<code>capabilities</code>) para saber em qual etapa travou; em modo mock, confirmar que a API Key digitada tem ≥6 caracteres.</td></tr>
+                    <tr><td>Botão "Automation Anywhere" mostra "Sessão expirada"</td><td>O backend devolveu <code>SESSION_EXPIRED</code> numa chamada — basta reconectar pelo mesmo botão; nada foi perdido no dashboard original.</td></tr>
+                </table></div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="extensao">
+                <h2>Como estender<a class="anchor-link" href="#extensao">#</a></h2>
+                <div class="table-wrap"><table>
+                    <tr><th>Quero…</th><th>Onde mexer</th></tr>
+                    <tr><td>Adicionar uma RPA nova</td><td><code>config/rpa_metadata.json</code> (entrada em <code>rpas</code> + uma em <code>schedules</code> por horário) + criar a pasta de logs correspondente. Ver <a href="#config-cadastro">Cadastro</a>.</td></tr>
+                    <tr><td>Adicionar uma página nova ao dashboard principal</td><td><code>&lt;section class="page"&gt;</code> + botão <code>.nav-link</code> em <code>index.html</code>, um método <code>renderNome()</code> numa classe <code>*Page</code> de <code>dashboard-app.js</code>, chamado a partir de <code>RpaOpsApp.renderAll()</code>.</td></tr>
+                    <tr><td>Adicionar um indicador/KPI novo</td><td>Calcular no backend (dentro de <code>DatasetBuilder</code> ou <code>IndexBuilder</code>, conforme se for "de detalhe" ou "agregado") e expor no dicionário retornado — o frontend só precisa ler a chave nova, os dois arquivos são gerados juntos e sempre consistentes.</td></tr>
+                    <tr><td>Mudar um limiar de alerta/severidade</td><td><code>STATE_SEVERITY</code> (severidade por estado) ou os parâmetros de <code>VmReliabilityClassifier._classify_vm_reliability</code>/lógica de <code>ScheduleMatcher._run_state</code>, em <code>server.py</code>.</td></tr>
+                    <tr><td>Adicionar uma função pura testável ao dashboard</td><td>Como <code>static</code> numa classe existente ou nova em <code>dashboard-app.js</code> + alias de topo + entrada em <code>module.exports</code> + teste em <code>test_dashboard.js</code>.</td></tr>
+                    <tr><td>Trocar o layout/tema visual</td><td>Variáveis CSS em <code>:root</code>/<code>html[data-theme="light"]</code> no topo de <code>index.html</code> (o mesmo padrão de tokens é usado pelas 3 páginas avulsas via <code>assets/observability.css</code>).</td></tr>
+                    <tr><td>Adicionar uma capability nova à integração AA</td><td><code>AA_NAV_ITEMS</code> + um novo <code>_pageShell</code>/método <code>render*</code> em <code>AAPagesController</code> (frontend) + rota em <code>CAPABILITY_PROBE</code>/<code>MOCK_CAPABILITIES</code> e tratamento em <code>_mock_generic</code> (backend).</td></tr>
+                </table></div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="glossario">
+                <h2>Glossário<a class="anchor-link" href="#glossario">#</a></h2>
+                <div class="table-wrap"><table>
+                    <tr><th>Termo</th><th>Significado</th></tr>
+                    <tr><td><code>execution_id</code></td><td>Identificador único de uma execução de RPA, gerado pela própria automação (formato observado: <code>AAAAMMDD_NNN</code>).</td></tr>
+                    <tr><td><code>expectedRunKey</code></td><td>Chave sintética <code>ER-{rpaId}-{data}-{hora}</code> que liga uma ocorrência esperada de agenda à execução real que a atendeu (se houver).</td></tr>
+                    <tr><td>obs / index</td><td>Os dois datasets do pipeline: <code>obs</code> é o "detalhe" (execuções, eventos, telemetria crua), <code>index</code> é o "agregado" (KPIs, tendências, Pareto) — ver <a href="#modelo-dados">Modelo de dados</a>.</td></tr>
+                    <tr><td>startCompliance / durationCompliance / deadlineCompliance</td><td>Três eixos independentes de conformidade de uma execução: início dentro da tolerância, duração dentro do limite, conclusão antes do deadline.</td></tr>
+                    <tr><td>Confiabilidade de VM</td><td>Classificação (<code>SAUDAVEL</code>/<code>ATENCAO</code>/<code>PROBLEMA_ESPECIFICO</code>/<code>PROBLEMA_GERAL</code>/<code>DADOS_INSUFICIENTES</code>) que tenta separar problema de máquina de problema de uma RPA específica — ver <a href="#pipeline-classes">algoritmo</a>.</td></tr>
+                    <tr><td>Ocupação / ociosidade de VM</td><td>Inferida das próprias execuções (não há telemetria de processo em nível de SO): intervalos de execução na mesma VM são mesclados (duas RPAs simultâneas contam uma vez como "ocupado") para calcular minutos ocupados e concorrência máxima.</td></tr>
+                    <tr><td>Modo mock (integração AA)</td><td><code>aaBaseUrl</code> vazio ou <code>"mock"</code> — o backend simula respostas plausíveis da Automation Anywhere a partir dos próprios dados locais já carregados, sem precisar de um Control Room real.</td></tr>
+                    <tr><td>Correlação EXACT/HIGH_CONFIDENCE/PROBABLE/UNMATCHED/CONFLICT</td><td>Vocabulário do <code>AACorrelationEngine</code> — ver <a href="#aa-motor-correlacao">Motor de correlação</a>.</td></tr>
+                    <tr><td>Modo 90d / full</td><td>Janela de dados considerada: <code>90d</code> (padrão, últimos 90 dias) ou <code>full</code> (histórico completo) — nunca persiste como padrão entre reinicializações do processo.</td></tr>
+                </table></div>
+            </section>
+
+        </main>
+        <footer class="doc-footer">
+            Documentação técnica gerada a partir da leitura direta do código-fonte do projeto. Mantenha-a sincronizada: ao mudar uma classe, método, rota ou schema de dado documentado aqui, atualize a seção correspondente na mesma alteração. Para o histórico de mudanças, use <code>git log</code>.
+        </footer>
+    </div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    // ---- tema (persistido) ----
+    var themeBtn = document.getElementById('themeToggle');
+    var saved = localStorage.getItem('rpa-docs-theme');
+    if (saved) {
+        document.documentElement.setAttribute('data-theme', saved);
+        themeBtn.textContent = saved === 'light' ? '☀️ Tema' : '🌙 Tema';
+    }
+    themeBtn.addEventListener('click', function () {
+        var current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+        var next = current === 'light' ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('rpa-docs-theme', next);
+        themeBtn.textContent = next === 'light' ? '☀️ Tema' : '🌙 Tema';
+    });
+
+    // ---- filtro do índice lateral ----
+    var searchInput = document.getElementById('tocSearch');
+    searchInput.addEventListener('input', function () {
+        var q = searchInput.value.trim().toLowerCase();
+        document.querySelectorAll('.toc-group').forEach(function (group) {
+            var anyVisible = false;
+            group.querySelectorAll('.toc-link').forEach(function (link) {
+                var match = !q || link.textContent.toLowerCase().indexOf(q) !== -1;
+                link.classList.toggle('hidden', !match);
+                if (match) anyVisible = true;
+            });
+            group.style.display = anyVisible ? '' : 'none';
+        });
+    });
+
+    // ---- scroll-spy ----
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc-link'));
+    var sections = links.map(function (l) { return document.querySelector(l.getAttribute('href')); }).filter(Boolean);
+    var observer = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+            if (!entry.isIntersecting) return;
+            var id = '#' + entry.target.id;
+            links.forEach(function (l) { l.classList.toggle('active', l.getAttribute('href') === id); });
+        });
+    }, { rootMargin: '-15% 0px -75% 0px', threshold: 0 });
+    sections.forEach(function (s) { observer.observe(s); });
+})();
+</script>
+</body>
+</html>
