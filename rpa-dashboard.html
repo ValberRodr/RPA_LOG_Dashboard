@@ -36,12 +36,18 @@
         <section class="panel"><div class="panel-head"><h2>Desempenho das etapas</h2><span class="section-note">Média e P95</span></div><div class="panel-body" id="stepStats"></div></section>
     </div>
 
+    <div class="grid g2">
+        <section class="panel"><div class="panel-head"><h2>Benefícios da RPA</h2><span class="section-note">Base cadastral</span></div><div class="panel-body" id="benefits"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Responsáveis</h2><span class="section-note">Base cadastral</span></div><div class="panel-body" id="owners"></div></section>
+    </div>
+
     <section class="panel">
         <div class="panel-head"><h2>Histórico completo de execuções</h2><span class="section-note" id="tableCount"></span></div>
         <div class="table-wrap"><table><thead><tr><th>Execution ID</th><th>Início</th><th>Status</th><th>Duração</th><th>Itens</th><th>Retries</th><th>Deadline</th><th>VM</th><th>Ações</th></tr></thead><tbody id="executions"></tbody></table></div>
     </section>
 </main>
     <script src="assets/observability-data.js"></script>
+    <script src="assets/index-data.js?mode=90d"></script>
     <script src="assets/observability-core.js"></script>
     <script src="assets/auto-refresh.js"></script>
 <script>
@@ -69,7 +75,18 @@ if(!rpa){document.body.innerHTML='<main class="page"><div class="empty">Nenhuma 
     function renderCharts(){const daily=filteredDaily();document.querySelector('#successChart').innerHTML=U.lineSvg(daily,[{key:'successRate',label:'Success rate'}],{min:0,max:100,labelX:r=>r.date.slice(5).split('-').reverse().join('/'),formatY:v=>`${Math.round(v)}%`});document.querySelector('#durationChart').innerHTML=U.lineSvg(daily,[{key:'avgDuration',label:'Duração média'}],{min:0,labelX:r=>r.date.slice(5).split('-').reverse().join('/'),formatY:v=>`${Math.round(v)}m`});document.querySelector('#volumeChart').innerHTML=U.lineSvg(daily,[{key:'processedItems',label:'Itens processados'}],{min:0,labelX:r=>r.date.slice(5).split('-').reverse().join('/'),formatY:v=>Math.round(v).toLocaleString('pt-BR')});}
     document.querySelector('#errors').innerHTML='<strong class="muted">Códigos</strong>'+U.barSvg((agg.errorCodes||[]).slice(0,8).map(x=>({label:x.code,value:x.count})),'value');
     document.querySelector('#errorSteps').innerHTML='<strong class="muted">Etapas</strong>'+U.barSvg((agg.errorSteps||[]).slice(0,8).map(x=>({label:x.step,value:x.count})),'value');
-    document.querySelector('#profile').innerHTML=[['Horários',rpa.schedule.join(' · ')],['Calendário',rpa.calendar==='daily'?'SEG-DOM':'SEG-SEX'],['Duração esperada',`${rpa.expectedDurationMin} min`],['Atenção de duração',`${rpa.warningDurationMin} min`],['Limite máximo',`${rpa.maxDurationMin} min`],['Tolerância de início',`${rpa.startToleranceMin} min`],['Máximo de retries',rpa.maxRetries],['VM contingência',rpa.backupVm],['Impacto',rpa.businessImpact]].map(x=>`<div class="evidence"><span>${x[0]}</span><span>${U.esc(x[1])}</span></div>`).join('');
+    document.querySelector('#profile').innerHTML=[['Horários',rpa.schedule.join(' · ')],['Calendário',rpa.calendar==='daily'?'SEG-DOM':'SEG-SEX'],['Duração esperada',`${rpa.expectedDurationMin} min`],['Atenção de duração',`${rpa.warningDurationMin} min`],['Limite máximo',`${rpa.maxDurationMin} min`],['Tolerância de início',`${rpa.startToleranceMin} min`],['Máximo de retries',rpa.maxRetries],['VM contingência',rpa.backupVm],['Impacto',rpa.businessImpact]].map(x=>`<div class="evidence"><span>${x[0]}</span><span>${U.esc(x[1])}</span></div>`).join('')
+        + (()=>{ const vmRel=U.vmReliabilityFor(rpa.primaryVm), vmUtil=U.vmUtilizationFor(rpa.primaryVm), rank=U.paretoRank('rpa', rpa.name);
+            return (vmRel?`<div class="evidence"><span>Confiabilidade da VM primária</span>${U.reliabilityBadge(vmRel.classification)}</div>`:'')
+                + (vmUtil?`<div class="evidence"><span>RPAs que dividem a VM primária</span><strong>${vmUtil.byRpa.length}</strong></div>`:'')
+                + (rank?`<div class="evidence"><span>Posição no Pareto de erros por RPA</span><strong>#${rank.rank} de ${rank.of} (${rank.count} erro(s))</strong></div>`:'<div class="evidence"><span>Posição no Pareto de erros por RPA</span><strong>Fora do top de concentração de erros</strong></div>'); })();
+
+    document.querySelector('#benefits').innerHTML = (rpa.benefits||[]).length
+        ? `<ul style="margin:0;padding-left:18px;display:grid;gap:8px">${rpa.benefits.map(b=>`<li>${U.esc(b)}</li>`).join('')}</ul>`
+        : '<div class="empty">Sem benefícios cadastrados.</div>';
+    document.querySelector('#owners').innerHTML = (rpa.owners||[]).length
+        ? `<div class="mini-list">${rpa.owners.map(o=>`<div class="mini-item"><strong>${U.esc(o.name)}</strong><div class="step-meta">${U.esc(o.role)}</div></div>`).join('')}</div>`
+        : '<div class="empty">Sem responsáveis cadastrados.</div>';
     document.querySelector('#stepStats').innerHTML=(agg.stepStats||[]).map(s=>`<div class="metric-row"><span>${U.esc(s.step)}</span><div class="progress"><span style="width:${Math.min(100,s.avgSec/Math.max(...agg.stepStats.map(x=>x.avgSec))*100)}%"></span></div><strong>${U.duration(s.avgSec)}</strong></div>`).join('')||'<div class="empty">Sem dados de etapas.</div>';
 
     function renderTable(){const n=Number(period.value);const cutoff=new Date(U.D.periodEnd+'T23:59:59');cutoff.setDate(cutoff.getDate()-n+1);let rows=U.D.executions.filter(x=>x.rpaId===rpaId && new Date(x.start)>=cutoff);if(status.value!=='ALL')rows=rows.filter(x=>x.status===status.value);const q=search.value.trim().toLowerCase();if(q)rows=rows.filter(x=>(x.executionId+' '+x.machine).toLowerCase().includes(q));rows.sort((a,b)=>b.start.localeCompare(a.start));document.querySelector('#tableCount').textContent=`${rows.length} execução(ões)`;document.querySelector('#executions').innerHTML=rows.map(x=>`<tr><td class="mono">${x.executionId}</td><td class="nowrap">${U.fmtDateTime(x.start)}</td><td>${U.statusBadge(x.status)}</td><td>${x.durationMin.toFixed(1)} min</td><td>${x.processedItems}/${x.totalItems}</td><td>${x.retryCount}</td><td>${x.deadlineCompliance}</td><td class="mono">${U.esc(x.machine)}</td><td class="nowrap"><button class="btn" onclick="RPAUI.openInvestigation('${x.executionId}')">Investigar</button> <button class="btn" onclick="RPAUI.openDiagnostic('${x.executionId}')">Diagnóstico</button></td></tr>`).join('')||'<tr><td colspan="9" class="empty">Sem execuções para o filtro.</td></tr>';}

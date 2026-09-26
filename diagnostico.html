@@ -47,6 +47,7 @@
     </section>
 </main>
     <script src="assets/observability-data.js"></script>
+    <script src="assets/index-data.js?mode=90d"></script>
     <script src="assets/observability-core.js"></script>
     <script src="assets/auto-refresh.js"></script>
 <script>
@@ -83,13 +84,16 @@ if(!ex){document.body.innerHTML='<main class="page"><div class="empty">Nenhuma e
     document.querySelector('#summary').innerHTML=summary.map(s=>`<div class="callout ${s[0]}"><strong>${s[1]}</strong><br>${s[2]}</div>`).join('<div style="height:8px"></div>');
 
     const ratio=ex.durationMin/Math.max(.1,agg.medianDuration);
+    const vmRel=U.vmReliabilityFor(ex.machine), vmUtil=U.vmUtilizationFor(ex.machine);
     document.querySelector('#baseline').innerHTML=`
         <div class="evidence"><span>Duração atual</span><strong>${ex.durationMin.toFixed(2)} min</strong></div>
         <div class="evidence"><span>Mediana 92 dias</span><strong>${agg.medianDuration.toFixed(2)} min</strong></div>
         <div class="evidence"><span>P95 92 dias</span><strong>${agg.p95Duration.toFixed(2)} min</strong></div>
         <div class="evidence"><span>Relação atual / mediana</span><strong>${ratio.toFixed(2)}×</strong></div>
         <div class="evidence"><span>Success rate histórico</span><strong>${agg.successRate.toFixed(1)}%</strong></div>
-        <div class="evidence"><span>SLA estourado no histórico</span><strong>${agg.slaBreaches}</strong></div>`;
+        <div class="evidence"><span>SLA estourado no histórico</span><strong>${agg.slaBreaches}</strong></div>
+        ${vmRel ? `<div class="evidence"><span>Confiabilidade da VM ${U.esc(ex.machine)}</span>${U.reliabilityBadge(vmRel.classification)}</div>` : ''}
+        ${vmUtil ? `<div class="evidence"><span>RPAs que dividem esta VM</span><strong>${vmUtil.byRpa.length}</strong></div>` : ''}`;
 
     const stepRows=events.map(e=>({label:e.step,value:e.durationSec,status:e.status})).sort((a,b)=>b.value-a.value);
     document.querySelector('#stepDuration').innerHTML=U.barSvg(stepRows,'value','label',{format:v=>U.duration(v)});
@@ -106,6 +110,8 @@ if(!ex){document.body.innerHTML='<main class="page"><div class="empty">Nenhuma e
     if(vmMax('cpu_percent')>=85) signals.push(`CPU chegou a ${vmMax('cpu_percent').toFixed(1)}%, indicando pressão de processamento na janela.`);
     if(vm.some(r=>r.rdp_status!=='CONNECTED')) signals.push(`Foi observado estado RDP diferente de CONNECTED: ${[...new Set(vm.map(r=>r.rdp_status))].join(', ')}.`);
     if((U.D.recurrenceByExecution[executionId]||[]).length>=2) signals.push('O mesmo código de erro aparece em outras execuções recentes do processo.');
+    if(vmRel && (vmRel.classification==='PROBLEMA_GERAL'||vmRel.classification==='PROBLEMA_ESPECIFICO')) signals.push(`A VM ${U.esc(ex.machine)} está classificada como "${U.reliabilityBadge(vmRel.classification).replace(/<[^>]+>/g,'')}" na análise cruzada de confiabilidade de todas as RPAs.`);
+    if(errors[0]?.errorCode){const r=U.paretoRank('errorCode',errors[0].errorCode); if(r) signals.push(`O código ${U.esc(errors[0].errorCode)} é o #${r.rank} mais recorrente no período carregado (${r.count} ocorrência(s)).`);}
     if(!signals.length) signals.push('Não há sinal forte de infraestrutura ou recorrência; a evidência disponível aponta para evento pontual ou regra de negócio/aplicação.');
     document.querySelector('#signals').innerHTML=`<div class="mini-list">${signals.map(s=>`<div class="mini-item">${U.esc(s)}</div>`).join('')}</div>`;
 

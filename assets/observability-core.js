@@ -1,6 +1,30 @@
 /* ==========================================================================\n   Shared utilities for the local RPA observability pages.\n   No external library is required.\n   ========================================================================== */
 (function(){
     const D = window.OBS_DATA;
+    const IDX = window.INDEX_DATA || null;
+    const RELIABILITY_META = {
+        SAUDAVEL: { label: 'Saudável', cls: 'ok' },
+        ATENCAO: { label: 'Atenção', cls: 'warn' },
+        PROBLEMA_ESPECIFICO: { label: 'Específico de 1 RPA', cls: 'warn' },
+        PROBLEMA_GERAL: { label: 'Problema geral da VM', cls: 'bad' },
+        DADOS_INSUFICIENTES: { label: 'Dados insuficientes', cls: 'neutral' },
+    };
+    const vmReliabilityFor = machine => IDX?.vmReliability?.find(v => v.machine === machine) || null;
+    const vmUtilizationFor = machine => IDX?.vmUtilization?.find(v => v.machine === machine) || null;
+    const reliabilityBadge = classification => {
+        const m = RELIABILITY_META[classification] || RELIABILITY_META.DADOS_INSUFICIENTES;
+        return `<span class="badge ${m.cls}">${m.label}</span>`;
+    };
+    /* Posição de um rótulo dentro do Pareto de erros de todo o período
+       carregado (top 12 por dimensão) — null quando o rótulo não concentra
+       erro suficiente para aparecer entre os mais recorrentes. */
+    const paretoRank = (dim, label) => {
+        const rows = IDX?.errorParetos?.[dim];
+        if (!rows) return null;
+        const idx = rows.findIndex(r => r.label === label);
+        if (idx === -1) return null;
+        return { rank: idx + 1, count: rows[idx].count, of: rows.length };
+    };
     const $ = (s,root=document)=>root.querySelector(s);
     const $$ = (s,root=document)=>[...root.querySelectorAll(s)];
     const q = new URLSearchParams(location.search);
@@ -49,5 +73,5 @@
         const max=Math.max(...rows.map(r=>Number(r[key]||0)),1);
         return `<div>${rows.map(r=>`<div class="metric-row"><span title="${esc(r[labelKey])}">${esc(r[labelKey])}</span><div class="progress"><span style="width:${Number(r[key]||0)/max*100}%"></span></div><strong>${options.format?options.format(r[key]):r[key]}</strong></div>`).join('')}</div>`;
     }
-    window.RPAUI={D,$,$$,q,fmtDateTime,fmtDate,fmtTime,esc,statusBadge,pct,median,percentile,processName,getExecution,getRpa,getRpaByProcess,getEvents,getVmContext,duration,openInvestigation,openDiagnostic,openRpa,exportPdf,initToolbar,lineSvg,barSvg};
+    window.RPAUI={D,IDX,$,$$,q,fmtDateTime,fmtDate,fmtTime,esc,statusBadge,pct,median,percentile,processName,getExecution,getRpa,getRpaByProcess,getEvents,getVmContext,duration,openInvestigation,openDiagnostic,openRpa,exportPdf,initToolbar,lineSvg,barSvg,vmReliabilityFor,vmUtilizationFor,reliabilityBadge,paretoRank};
 })();

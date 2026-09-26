@@ -67,6 +67,7 @@
     </section>
 </main>
     <script src="assets/observability-data.js"></script>
+    <script src="assets/index-data.js?mode=90d"></script>
     <script src="assets/observability-core.js"></script>
     <script src="assets/auto-refresh.js"></script>
 <script>
@@ -137,6 +138,14 @@ if (!ex) {
             <div class="stat"><span>Warning / erro</span><strong>${ex.warningItems} / ${ex.errorItems}</strong></div>
         </div>`;
 
+    const vmRel = U.vmReliabilityFor(ex.machine);
+    const vmUtil = U.vmUtilizationFor(ex.machine);
+    const sharingNote = vmUtil && vmUtil.byRpa.length > 1
+        ? `Esta VM não é dedicada: também executa ${vmUtil.byRpa.length - 1} outra(s) RPA (${vmUtil.byRpa.filter(r=>r.rpaId!==ex.rpaId).slice(0,3).map(r=>U.esc(r.rpaName)).join(', ')}).`
+        : 'Esta VM está dedicada apenas a esta RPA no período analisado.';
+    const reliabilityNote = vmRel
+        ? `<div class="evidence"><span>Confiabilidade da VM</span>${U.reliabilityBadge(vmRel.classification)}</div><div class="evidence"><span>Taxa de erro geral da VM</span><strong>${vmRel.overallErrorRate}%</strong></div>`
+        : '';
     if(vm.length){
         const avg=k=>vm.reduce((a,r)=>a+Number(r[k]||0),0)/vm.length;
         const max=k=>Math.max(...vm.map(r=>Number(r[k]||0)));
@@ -144,11 +153,13 @@ if (!ex) {
             <div class="stat"><span>CPU média / pico</span><strong>${avg('cpu_percent').toFixed(1)}% / ${max('cpu_percent').toFixed(1)}%</strong></div>
             <div class="stat"><span>RAM média / pico</span><strong>${avg('memory_percent').toFixed(1)}% / ${max('memory_percent').toFixed(1)}%</strong></div>
             <div class="stat"><span>Disco máximo</span><strong>${max('disk_percent').toFixed(1)}%</strong></div>
-        </div><div style="margin-top:10px" class="callout">RDP observado: ${[...new Set(vm.map(r=>r.rdp_status))].join(', ')}.</div>`;
+        </div><div style="margin-top:10px" class="callout">RDP observado: ${[...new Set(vm.map(r=>r.rdp_status))].join(', ')}.</div>
+        ${reliabilityNote}
+        <div style="margin-top:10px" class="callout">${U.esc(sharingNote)}</div>`;
         const vmSeries=vm.map(r=>({date:r.data.slice(11,16),cpu:r.cpu_percent,memory:r.memory_percent,disk:r.disk_percent}));
         document.querySelector('#vmChart').innerHTML=U.lineSvg(vmSeries,[{key:'cpu',label:'CPU %'},{key:'memory',label:'RAM %'},{key:'disk',label:'Disco %'}],{min:0,max:100,labelX:r=>r.date,formatY:v=>`${Math.round(v)}%`});
     } else {
-        document.querySelector('#vmSummary').innerHTML='<div class="empty">Sem telemetria para a VM.</div>';
+        document.querySelector('#vmSummary').innerHTML=`<div class="empty">Sem telemetria para a VM.</div>${reliabilityNote?`<div style="margin-top:10px">${reliabilityNote}</div>`:''}`;
         document.querySelector('#vmChart').innerHTML='<div class="empty">Sem telemetria para a VM.</div>';
     }
 
@@ -160,8 +171,18 @@ if (!ex) {
     ];
     document.querySelector('#evidence').innerHTML=evidence.map(x=>`<div class="evidence"><span>${U.esc(x[0])}</span><span class="mono">${U.esc(x[1])}</span></div>`).join('');
 
+    const errorStep = events.find(e=>e.status==='ERROR');
+    const codeRank = errorStep?.errorCode ? U.paretoRank('errorCode', errorStep.errorCode) : null;
+    const stepRank = errorStep ? U.paretoRank('step', errorStep.step) : null;
+    const paretoNote = [
+        codeRank ? `O código <strong class="mono">${U.esc(errorStep.errorCode)}</strong> é o <strong>#${codeRank.rank}</strong> mais recorrente do período (${codeRank.count} ocorrência(s) entre os top ${codeRank.of}).` : '',
+        stepRank ? `A etapa <strong>${U.esc(errorStep.step)}</strong> está em <strong>#${stepRank.rank}</strong> no Pareto de erros por etapa (${stepRank.count} ocorrência(s)).` : '',
+    ].filter(Boolean).join('<br>');
+
     const related=U.D.recurrenceByExecution[executionId]||[];
-    document.querySelector('#related').innerHTML=related.length?`<div class="mini-list">${related.map(x=>`<div class="mini-item clickable" onclick="RPAUI.openInvestigation('${x.executionId}')"><strong class="mono">${x.executionId}</strong><span class="muted">${U.fmtDateTime(x.start)} · ${U.esc(x.step)} · ${x.durationMin} min · ${U.esc(x.machine)}</span></div>`).join('')}</div>`:'<div class="empty">Não há recorrências equivalentes na janela analisada.</div>';
+    document.querySelector('#related').innerHTML =
+        (paretoNote ? `<div class="callout warning" style="margin-bottom:10px">${paretoNote}</div>` : '') +
+        (related.length?`<div class="mini-list">${related.map(x=>`<div class="mini-item clickable" onclick="RPAUI.openInvestigation('${x.executionId}')"><strong class="mono">${x.executionId}</strong><span class="muted">${U.fmtDateTime(x.start)} · ${U.esc(x.step)} · ${x.durationMin} min · ${U.esc(x.machine)}</span></div>`).join('')}</div>`:'<div class="empty">Não há recorrências equivalentes na janela analisada.</div>');
 
     // Arquivos de dependência da RPA (base cadastral, não log): cruza a data
     // de última alteração com a linha do tempo de erros da própria RPA.
