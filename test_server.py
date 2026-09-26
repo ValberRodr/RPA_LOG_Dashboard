@@ -30,6 +30,9 @@ O que é coberto:
                             bate nas rotas HTTP principais (estáticas, API
                             de status e a integração AA) — a checagem mais
                             próxima de "abri o navegador e funcionou".
+- TestRpaRegistryStore      CRUD do cadastro de RPAs (criar/editar/remover),
+                            sempre contra um arquivo JSON temporário — nunca
+                            toca config/rpa_metadata.json real do projeto.
 
 Este é um script de teste local (unittest da biblioteca padrão), não uma
 pipeline de CI hospedada — decisão tomada explicitamente para não introduzir
@@ -42,6 +45,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -85,6 +89,161 @@ def _fake_dataset():
     }
     idx = {'vms': vms}
     return obs, idx
+
+
+def _seed_registry_file(meta_file: Path):
+    """Escreve um cadastro mínimo (1 RPA + 1 regra de agenda) num arquivo
+    temporário — os testes de RpaRegistryStore nunca leem/escrevem
+    config/rpa_metadata.json real."""
+    data = {
+        'rpas': [{
+            'rpaId': 'RPA001', 'process': 'VND_Teste', 'name': 'RPA de Teste',
+            'businessArea': 'Comercial', 'businessProcess': 'Testes', 'criticality': 'ALTA',
+            'supportPriority': 'P2', 'application': 'App', 'supportTeam': 'Time',
+            'businessImpact': 'Impacto', 'primaryVm': 'VM-01', 'backupVm': 'VM-02',
+            'orchestrator': 'ORQ', 'robotName': 'BOT-01', 'schedule': ['08:00'], 'calendar': 'weekdays',
+            'expectedDurationMin': 10, 'warningDurationMin': 15, 'maxDurationMin': 20,
+            'startToleranceMin': 5, 'maxRetries': 2, 'volumeMin': 1, 'volumeMax': 10,
+            'steps': [], 'runbook': '', 'benefits': [], 'owners': [], 'dependencyFiles': [],
+        }],
+        'schedules': [{
+            'scheduleId': 'SCH-RPA001-01', 'rpaId': 'RPA001', 'process': 'VND_Teste',
+            'calendar': 'weekdays', 'scheduledTime': '08:00', 'latestStartTime': '08:05',
+            'warningFinishTime': '08:15', 'deadlineTime': '08:20',
+            'expectedDurationMin': 10, 'warningDurationMin': 15, 'maxDurationMin': 20, 'maxRetries': 2,
+        }],
+    }
+    meta_file.write_text(json.dumps(data), encoding='utf-8')
+
+
+def _valid_registry_payload(**overrides):
+    payload = {
+        'process': 'FIN_Novo_Processo', 'name': 'Novo Processo', 'businessArea': 'Financeiro',
+        'businessProcess': 'Processo novo', 'criticality': 'MEDIA', 'supportPriority': 'P3',
+        'application': 'SAP', 'supportTeam': 'Time Financeiro', 'businessImpact': 'Impacto qualquer',
+        'primaryVm': 'VM-10', 'backupVm': 'VM-11', 'orchestrator': 'ORQ2', 'robotName': 'BOT-10',
+        'schedule': ['09:00', '15:00'], 'calendar': 'daily',
+        'expectedDurationMin': 10, 'warningDurationMin': 15, 'maxDurationMin': 20,
+        'startToleranceMin': 5, 'maxRetries': 2,
+    }
+    payload.update(overrides)
+    return payload
+
+
+class TestRpaRegistryStore(unittest.TestCase):
+    """CRUD do cadastro de RPAs — sempre contra um arquivo JSON temporário,
+    nunca config/rpa_metadata.json real do projeto (setUp/tearDown criam e
+    destroem um diretório temporário isolado a cada teste)."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.meta_file = Path(self.tmp_dir.name) / 'rpa_metadata.json'
+        _seed_registry_file(self.meta_file)
+        self.store = server.RpaRegistryStore(self.meta_file)
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def test_create_rpa_generates_sequential_id_and_regenerates_schedules(self):
+        rpa = self.store.create_rpa(_valid_registry_payload())
+        self.assertEqual(rpa['rpaId'], 'RPA002')
+
+        data = json.loads(self.meta_file.read_text(encoding='utf-8'))
+        self.assertEqual(len(data['rpas']), 2)
+        new_schedules = [s for s in data['schedules'] if s['rpaId'] == 'RPA002']
+        self.assertEqual(len(new_schedules), 2)  # um por horário informado
+        first = next(s for s in new_schedules if s['scheduledTime'] == '09:00')
+        self.assertEqual(first['latestStartTime'], '09:05')
+        self.assertEqual(first['warningFinishTime'], '09:15')
+        self.assertEqual(first['deadlineTime'], '09:20')
+
+    def test_create_rpa_fills_optional_list_defaults(self):
+        rpa = self.store.create_rpa(_valid_registry_payload())
+        for field in ('steps', 'benefits', 'owners', 'dependencyFiles'):
+            self.assertEqual(rpa[field], [])
+
+    def test_create_rpa_missing_required_field_raises(self):
+        payload = _valid_registry_payload()
+        del payload['name']
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.create_rpa(payload)
+
+    def test_create_rpa_duplicate_process_raises(self):
+        payload = _valid_registry_payload(process='VND_Teste')  # mesmo process do seed
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.create_rpa(payload)
+
+    def test_create_rpa_invalid_time_format_raises(self):
+        payload = _valid_registry_payload(schedule=['25:99'])
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.create_rpa(payload)
+
+    def test_create_rpa_duplicate_schedule_times_raises(self):
+        payload = _valid_registry_payload(schedule=['09:00', '09:00'])
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.create_rpa(payload)
+
+    def test_create_rpa_duration_ordering_violation_raises(self):
+        payload = _valid_registry_payload(expectedDurationMin=30, warningDurationMin=15, maxDurationMin=20)
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.create_rpa(payload)
+
+    def test_create_rpa_invalid_criticality_raises(self):
+        payload = _valid_registry_payload(criticality='URGENTISSIMA')
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.create_rpa(payload)
+
+    def test_create_rpa_invalid_calendar_raises(self):
+        payload = _valid_registry_payload(calendar='mensal')
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.create_rpa(payload)
+
+    def test_create_rpa_negative_numeric_field_raises(self):
+        payload = _valid_registry_payload(maxRetries=-1)
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.create_rpa(payload)
+
+    def test_update_rpa_changes_fields_and_regenerates_schedules(self):
+        updated = self.store.update_rpa('RPA001', _valid_registry_payload(process='VND_Teste', name='RPA Atualizada', schedule=['10:00']))
+        self.assertEqual(updated['rpaId'], 'RPA001')  # rpaId nunca muda numa edição
+        self.assertEqual(updated['name'], 'RPA Atualizada')
+
+        data = json.loads(self.meta_file.read_text(encoding='utf-8'))
+        schedules = [s for s in data['schedules'] if s['rpaId'] == 'RPA001']
+        self.assertEqual(len(schedules), 1)
+        self.assertEqual(schedules[0]['scheduledTime'], '10:00')
+
+    def test_update_rpa_unknown_id_raises(self):
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.update_rpa('RPA999', _valid_registry_payload())
+
+    def test_update_rpa_duplicate_process_with_another_rpa_raises(self):
+        self.store.create_rpa(_valid_registry_payload())  # cria RPA002 com process='FIN_Novo_Processo'
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.update_rpa('RPA001', _valid_registry_payload(process='FIN_Novo_Processo'))
+
+    def test_delete_rpa_removes_rpa_and_its_schedules(self):
+        self.store.delete_rpa('RPA001')
+        data = json.loads(self.meta_file.read_text(encoding='utf-8'))
+        self.assertEqual(data['rpas'], [])
+        self.assertEqual(data['schedules'], [])
+
+    def test_delete_rpa_unknown_id_raises(self):
+        with self.assertRaises(server.RpaRegistryValidationError):
+            self.store.delete_rpa('RPA999')
+
+    def test_add_minutes_wraps_past_midnight(self):
+        self.assertEqual(server.RpaRegistryStore._add_minutes('23:50', 20), '00:10')
+
+    def test_add_minutes_same_day(self):
+        self.assertEqual(server.RpaRegistryStore._add_minutes('08:00', 25), '08:25')
+
+    def test_next_rpa_id_from_mixed_existing_ids(self):
+        rpas = [{'rpaId': 'RPA001'}, {'rpaId': 'RPA010'}, {'rpaId': 'RPA003'}]
+        self.assertEqual(self.store._next_rpa_id(rpas), 'RPA011')
+
+    def test_next_rpa_id_when_empty(self):
+        self.assertEqual(self.store._next_rpa_id([]), 'RPA001')
 
 
 class TestLogFilenamePatterns(unittest.TestCase):
@@ -299,6 +458,15 @@ class TestHttpServerRoutes(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertFalse(json.loads(body)['ok'])
+
+    def test_registry_rpas_route_lists_real_cadastro(self):
+        # Só leitura (GET) — nunca chama create/update/delete aqui, para não
+        # mutar config/rpa_metadata.json real do projeto neste teste.
+        status, body = self._get('/api/registry/rpas')
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertTrue(data['ok'])
+        self.assertGreaterEqual(len(data['rpas']), 1)
 
     def test_unknown_aa_route_returns_404(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:

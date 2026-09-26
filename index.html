@@ -509,6 +509,110 @@
         }
 
         /* ---------------------------------------------------------------------
+           Cadastro de RPAs — modal de criação/edição e diálogo de confirmação
+           de exclusão (RegistryPage, em assets/dashboard-app.js).
+           ------------------------------------------------------------------ */
+        .registry-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(6, 7, 10, .6);
+            z-index: 500;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            padding: 40px 16px;
+            overflow-y: auto;
+        }
+
+        .registry-modal {
+            background: var(--panel);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            width: 100%;
+            max-width: 760px;
+            padding: 22px 24px 24px;
+        }
+
+        .registry-modal h3 {
+            margin: 0 0 4px;
+            font-size: 17px;
+        }
+
+        .registry-modal .sub {
+            color: var(--text-2);
+            font-size: 12px;
+            margin-bottom: 16px;
+        }
+
+        .registry-form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px 16px;
+        }
+
+        .registry-form-grid .full {
+            grid-column: 1 / -1;
+        }
+
+        .registry-form-grid label {
+            display: block;
+            font-size: 11px;
+            color: var(--text-2);
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+
+        .registry-form-grid input.select-control,
+        .registry-form-grid select.select-control {
+            width: 100%;
+        }
+
+        .registry-form-grid textarea.select-control {
+            height: auto;
+            min-height: 68px;
+            width: 100%;
+            padding: 8px 12px;
+            resize: vertical;
+            font: inherit;
+        }
+
+        .registry-form-section-title {
+            grid-column: 1 / -1;
+            font-size: 10.5px;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            color: var(--text-3);
+            font-weight: 800;
+            margin: 10px 0 -2px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+        }
+
+        .registry-form-section-title:first-child {
+            border-top: none;
+            padding-top: 0;
+            margin-top: 0;
+        }
+
+        .registry-modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .registry-error {
+            background: var(--danger-soft);
+            border: 1px solid rgba(240, 100, 100, .35);
+            color: var(--danger);
+            padding: 9px 12px;
+            border-radius: 8px;
+            font-size: 12.5px;
+            margin-bottom: 14px;
+        }
+
+        /* ---------------------------------------------------------------------
            Grids e cards
            ------------------------------------------------------------------ */
         .grid {
@@ -1959,6 +2063,8 @@
         <symbol id="i-box" viewBox="0 0 24 24"><path d="m21 8-9 5-9-5 9-5 9 5Z"/><path d="m3 8 9 5 9-5v8l-9 5-9-5V8Z"/></symbol>
         <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
         <symbol id="i-users" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+        <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+        <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></symbol>
     </svg>
 
     <div class="app-shell">
@@ -2007,6 +2113,10 @@
                 <button class="nav-link" data-page="catalog">
                     <svg class="icon"><use href="#i-box"></use></svg>
                     <span>Catálogo das RPAs</span>
+                </button>
+                <button class="nav-link" data-page="registry">
+                    <svg class="icon"><use href="#i-edit"></use></svg>
+                    <span>Cadastro de RPAs</span>
                 </button>
             </div>
 
@@ -2627,6 +2737,32 @@
                     </div>
 
                     <div class="catalog-list" id="catalogTable"></div>
+                </section>
+
+                <section class="page" id="page-registry">
+                    <div class="page-heading">
+                        <div>
+                            <div class="eyebrow">BASE MESTRE · EDITÁVEL</div>
+                            <h1>Cadastro de RPAs</h1>
+                            <p>Cria, edita e remove RPAs do arquivo <span class="mono">config/rpa_metadata.json</span>. As regras de agenda de cada RPA são recalculadas automaticamente a partir dos horários e limites informados.</p>
+                        </div>
+                        <button class="action-button primary" id="registryNewBtn" type="button">
+                            <svg class="icon"><use href="#i-edit"></use></svg> Nova RPA
+                        </button>
+                    </div>
+
+                    <article class="card">
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>RPA</th><th>Criticidade</th><th>Aplicação</th><th>VM primária</th><th>Agenda</th><th>Ações</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="registryTable"></tbody>
+                            </table>
+                        </div>
+                    </article>
                 </section>
             </main>
         </div>

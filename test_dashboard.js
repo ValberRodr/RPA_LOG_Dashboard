@@ -15,7 +15,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-const { Fmt, ChartService } = require(path.join(__dirname, 'assets', 'dashboard-app.js'));
+const { Fmt, ChartService, RegistryPage } = require(path.join(__dirname, 'assets', 'dashboard-app.js'));
 
 test('Fmt.escapeHtml escapa os cinco caracteres perigosos', () => {
     assert.equal(Fmt.escapeHtml(`<a href="x">'&'</a>`), '&lt;a href=&quot;x&quot;&gt;&#039;&amp;&#039;&lt;/a&gt;');
@@ -116,4 +116,47 @@ test('ChartService.lineChart gera um círculo por linha e nenhum NaN nas coorden
     const circles = svg.match(/<circle/g) || [];
     assert.equal(circles.length, 3);
     assert.doesNotMatch(svg, /NaN/);
+});
+
+/* ----------------------------------------------------------------------
+   RegistryPage — só _serializeField/_parseField não tocam o DOM; o resto
+   (render, openForm, submitForm) manipula elementos da página diretamente
+   e é verificado manualmente no navegador, como as demais classes *Page.
+   ---------------------------------------------------------------------- */
+
+test('RegistryPage._parseField converte lista separada por vírgula (schedule)', () => {
+    const field = { list: 'commas' };
+    assert.deepEqual(RegistryPage._parseField(field, '08:00, 09:00 ,10:00'), ['08:00', '09:00', '10:00']);
+});
+
+test('RegistryPage._parseField converte lista separada por vírgula vazia em array vazio', () => {
+    assert.deepEqual(RegistryPage._parseField({ list: 'commas' }, ''), []);
+});
+
+test('RegistryPage._parseField converte textarea em lista de linhas (steps/benefits)', () => {
+    const field = { list: 'lines' };
+    assert.deepEqual(RegistryPage._parseField(field, 'Etapa 1\n\nEtapa 2\n  Etapa 3  '), ['Etapa 1', 'Etapa 2', 'Etapa 3']);
+});
+
+test('RegistryPage._parseField converte textarea de pares (owners: "Nome — Papel")', () => {
+    const field = { list: 'pairs', pairSep: '—', pairKeys: ['name', 'role'] };
+    const parsed = RegistryPage._parseField(field, 'Fernanda Duarte — Business Owner\nLucas Prado — Process Owner');
+    assert.deepEqual(parsed, [
+        { name: 'Fernanda Duarte', role: 'Business Owner' },
+        { name: 'Lucas Prado', role: 'Process Owner' },
+    ]);
+});
+
+test('RegistryPage._parseField converte campo numérico', () => {
+    assert.equal(RegistryPage._parseField({ type: 'number' }, '25'), 25);
+});
+
+test('RegistryPage._serializeField/_parseField fazem round-trip sem alterar o valor', () => {
+    const scheduleField = { list: 'commas' };
+    const original = ['08:00', '14:30'];
+    assert.deepEqual(RegistryPage._parseField(scheduleField, RegistryPage._serializeField(scheduleField, original)), original);
+
+    const ownersField = { list: 'pairs', pairSep: '—', pairKeys: ['name', 'role'] };
+    const owners = [{ name: 'Ana', role: 'Owner' }, { name: 'Bruno', role: 'Suporte' }];
+    assert.deepEqual(RegistryPage._parseField(ownersField, RegistryPage._serializeField(ownersField, owners)), owners);
 });

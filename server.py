@@ -1170,6 +1170,186 @@ get_data = DataCache.get_data
 
 
 # =============================================================================
+# CADASTRO DE RPAS — CRUD sobre config/rpa_metadata.json
+# -----------------------------------------------------------------------------
+# Permite criar, editar e remover RPAs a partir do próprio dashboard (menu
+# "Cadastro de RPAs"), sem editar o JSON manualmente. Cada mutação regenera
+# automaticamente as regras de `schedules` daquela RPA a partir dos horários e
+# limites informados — ninguém precisa calcular latestStartTime/warningFinish
+# Time/deadlineTime à mão. `DataCache.get_data` já invalida seu cache sozinho
+# quando o arquivo muda (o fingerprint inclui o mtime de META_FILE), então o
+# próximo carregamento do dataset reflete a mudança automaticamente.
+# =============================================================================
+
+class RpaRegistryValidationError(ValueError):
+    """Erro de validação de payload de cadastro — a mensagem já é pronta para
+    ser exibida ao usuário (nunca expõe stacktrace nem detalhe interno)."""
+
+
+class RpaRegistryStore:
+    """CRUD do cadastro de RPAs. Recebe o caminho do arquivo por injeção
+    (`meta_file`) para que os testes leiam/escrevam um arquivo temporário em
+    vez do cadastro real do projeto — o mesmo padrão de injeção de dependência
+    já usado por `AutomationAnywhereGateway(get_data_fn=...)`."""
+
+    REQUIRED_FIELDS = (
+        'process', 'name', 'businessArea', 'businessProcess', 'criticality',
+        'supportPriority', 'application', 'supportTeam', 'businessImpact',
+        'primaryVm', 'backupVm', 'orchestrator', 'robotName', 'schedule', 'calendar',
+        'expectedDurationMin', 'warningDurationMin', 'maxDurationMin',
+        'startToleranceMin', 'maxRetries',
+    )
+    NUMERIC_FIELDS = ('expectedDurationMin', 'warningDurationMin', 'maxDurationMin', 'startToleranceMin', 'maxRetries')
+    CRITICALITIES = ('BAIXA', 'MEDIA', 'ALTA', 'CRITICA')
+    CALENDARS = ('daily', 'weekdays')
+    TIME_RE = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
+
+    def __init__(self, meta_file: Path):
+        self.meta_file = meta_file
+
+    # ---- leitura/escrita cruas -------------------------------------------
+    def _load(self):
+        return json.loads(self.meta_file.read_text(encoding='utf-8'))
+
+    def _save(self, data):
+        """Escrita atômica: grava num arquivo temporário e só então substitui
+        o cadastro real — uma falha no meio da escrita nunca deixa um JSON
+        corrompido/parcial no lugar do arquivo original."""
+        tmp_path = Path(str(self.meta_file) + '.tmp')
+        tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        tmp_path.replace(self.meta_file)
+
+    def list_rpas(self):
+        return self._load()['rpas']
+
+    def get_rpa(self, rpa_id):
+        return next((r for r in self._load()['rpas'] if r['rpaId'] == rpa_id), None)
+
+    # ---- validação ---------------------------------------------------------
+    @classmethod
+    def validate_payload(cls, payload, existing_rpas, editing_rpa_id=None):
+        """Levanta RpaRegistryValidationError na primeira violação encontrada
+        — cada mensagem já é o texto exibido na UI, então deve ser específica
+        o bastante para o usuário corrigir sem precisar olhar o console."""
+        for field in cls.REQUIRED_FIELDS:
+            value = payload.get(field)
+            if value is None or value == '' or value == []:
+                raise RpaRegistryValidationError(f'Campo obrigatório ausente: {field}.')
+
+        if payload['criticality'] not in cls.CRITICALITIES:
+            raise RpaRegistryValidationError(
+                f"Criticidade inválida: \"{payload['criticality']}\" (use {', '.join(cls.CRITICALITIES)}).")
+        if payload['calendar'] not in cls.CALENDARS:
+            raise RpaRegistryValidationError(
+                f"Calendário inválido: \"{payload['calendar']}\" (use {', '.join(cls.CALENDARS)}).")
+
+        schedule = payload['schedule']
+        if not isinstance(schedule, list) or not schedule:
+            raise RpaRegistryValidationError('Informe ao menos um horário de agenda.')
+        for t in schedule:
+            if not isinstance(t, str) or not cls.TIME_RE.match(t):
+                raise RpaRegistryValidationError(f'Horário de agenda inválido: "{t}" (use o formato HH:MM).')
+        if len(set(schedule)) != len(schedule):
+            raise RpaRegistryValidationError('Há horários duplicados na agenda.')
+
+        numeric = {}
+        for field in cls.NUMERIC_FIELDS:
+            try:
+                numeric[field] = float(payload[field])
+            except (TypeError, ValueError):
+                raise RpaRegistryValidationError(f'O campo {field} precisa ser numérico.')
+            if numeric[field] < 0:
+                raise RpaRegistryValidationError(f'O campo {field} não pode ser negativo.')
+        if not (numeric['expectedDurationMin'] <= numeric['warningDurationMin'] <= numeric['maxDurationMin']):
+            raise RpaRegistryValidationError(
+                'É preciso que duração esperada ≤ duração de atenção ≤ duração máxima.')
+
+        process = payload['process']
+        for r in existing_rpas:
+            if r['rpaId'] == editing_rpa_id:
+                continue
+            if r['process'] == process:
+                raise RpaRegistryValidationError(f'Já existe uma RPA cadastrada com o processo "{process}".')
+
+    # ---- geração de agenda ---------------------------------------------
+    @staticmethod
+    def _add_minutes(hhmm, minutes):
+        """Soma minutos a um horário HH:MM, envolvendo a virada de dia (o
+        resultado pode "voltar" para a madrugada — quem consome isso em
+        datetime, como ScheduleMatcher._build_expected_runs, já soma +1 dia
+        quando o horário resultante é menor que o horário de referência)."""
+        h, m = map(int, hhmm.split(':'))
+        total = (h * 60 + m + int(round(minutes))) % (24 * 60)
+        return f'{total // 60:02d}:{total % 60:02d}'
+
+    @classmethod
+    def build_schedules_for(cls, rpa):
+        """Deriva as regras de `schedules` (uma por horário de `rpa['schedule']`)
+        a partir dos próprios campos da RPA — mesma convenção já observada no
+        cadastro atual: latestStartTime = scheduledTime + startToleranceMin,
+        warningFinishTime = scheduledTime + warningDurationMin, deadlineTime =
+        scheduledTime + maxDurationMin."""
+        rows = []
+        for i, t in enumerate(rpa['schedule'], start=1):
+            rows.append({
+                'scheduleId': f"SCH-{rpa['rpaId']}-{i:02d}",
+                'rpaId': rpa['rpaId'], 'process': rpa['process'], 'calendar': rpa['calendar'],
+                'scheduledTime': t,
+                'latestStartTime': cls._add_minutes(t, rpa['startToleranceMin']),
+                'warningFinishTime': cls._add_minutes(t, rpa['warningDurationMin']),
+                'deadlineTime': cls._add_minutes(t, rpa['maxDurationMin']),
+                'expectedDurationMin': rpa['expectedDurationMin'], 'warningDurationMin': rpa['warningDurationMin'],
+                'maxDurationMin': rpa['maxDurationMin'], 'maxRetries': rpa['maxRetries'],
+            })
+        return rows
+
+    def _next_rpa_id(self, rpas):
+        nums = [int(r['rpaId'][3:]) for r in rpas if r['rpaId'][:3] == 'RPA' and r['rpaId'][3:].isdigit()]
+        return f'RPA{(max(nums) + 1) if nums else 1:03d}'
+
+    # ---- CRUD ---------------------------------------------------------
+    def create_rpa(self, payload):
+        data = self._load()
+        self.validate_payload(payload, data['rpas'])
+        rpa = dict(payload)
+        rpa['rpaId'] = self._next_rpa_id(data['rpas'])
+        rpa.setdefault('steps', [])
+        rpa.setdefault('benefits', [])
+        rpa.setdefault('owners', [])
+        rpa.setdefault('dependencyFiles', [])
+        rpa.setdefault('runbook', '')
+        rpa.setdefault('volumeMin', 0)
+        rpa.setdefault('volumeMax', 0)
+        data['rpas'].append(rpa)
+        data['schedules'] = [s for s in data['schedules'] if s['rpaId'] != rpa['rpaId']] + self.build_schedules_for(rpa)
+        self._save(data)
+        return rpa
+
+    def update_rpa(self, rpa_id, payload):
+        data = self._load()
+        existing = next((r for r in data['rpas'] if r['rpaId'] == rpa_id), None)
+        if existing is None:
+            raise RpaRegistryValidationError(f'RPA {rpa_id} não encontrada no cadastro.')
+        self.validate_payload(payload, data['rpas'], editing_rpa_id=rpa_id)
+        updated = {**existing, **payload, 'rpaId': rpa_id}
+        data['rpas'] = [updated if r['rpaId'] == rpa_id else r for r in data['rpas']]
+        data['schedules'] = [s for s in data['schedules'] if s['rpaId'] != rpa_id] + self.build_schedules_for(updated)
+        self._save(data)
+        return updated
+
+    def delete_rpa(self, rpa_id):
+        data = self._load()
+        if not any(r['rpaId'] == rpa_id for r in data['rpas']):
+            raise RpaRegistryValidationError(f'RPA {rpa_id} não encontrada no cadastro.')
+        data['rpas'] = [r for r in data['rpas'] if r['rpaId'] != rpa_id]
+        data['schedules'] = [s for s in data['schedules'] if s['rpaId'] != rpa_id]
+        self._save(data)
+
+
+rpa_registry = RpaRegistryStore(META_FILE)
+
+
+# =============================================================================
 # INTEGRAÇÃO OPCIONAL — AUTOMATION ANYWHERE 360 CONTROL ROOM (aa-integration)
 # -----------------------------------------------------------------------------
 # Módulo aditivo e removível: nada aqui é chamado pelo pipeline de dados do
@@ -1558,6 +1738,9 @@ class Handler(SimpleHTTPRequestHandler):
             mode = 'full' if qs.get('mode',['90d'])[0] == 'full' else '90d'
             threading.Thread(target=get_data, args=(mode,), daemon=True).start()
             return self._send(json.dumps({'ok':True,'mode':mode},ensure_ascii=False),'application/json; charset=utf-8')
+        # ---- Cadastro de RPAs (CRUD sobre config/rpa_metadata.json) ----
+        if path == '/api/registry/rpas':
+            return self._send_json({'ok': True, 'rpas': rpa_registry.list_rpas()})
         # ---- Automation Anywhere (opcional) — só responde a rotas /api/aa/*,
         # nunca é consultado pelo pipeline de dados existente acima. ----
         if path == '/api/aa/config':
@@ -1571,7 +1754,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
-        if not path.startswith('/api/aa/'):
+        if not (path.startswith('/api/aa/') or path.startswith('/api/registry/')):
             self.send_response(404); self.end_headers(); return
         length = int(self.headers.get('Content-Length') or 0)
         raw_body = self.rfile.read(length) if length else b''
@@ -1579,6 +1762,8 @@ class Handler(SimpleHTTPRequestHandler):
             payload = json.loads(raw_body.decode('utf-8')) if raw_body else {}
         except ValueError:
             payload = {}
+        if path.startswith('/api/registry/rpas'):
+            return self._handle_registry_post(path, payload)
         if path == '/api/aa/authenticate':
             base_url = (payload.get('baseUrl') or '').rstrip('/')
             return self._send_json(aa_gateway.authenticate(base_url, payload.get('username') or '', payload.get('apiKey') or ''))
@@ -1589,6 +1774,26 @@ class Handler(SimpleHTTPRequestHandler):
             return self._send_json(aa_gateway.activity_list(base_url, token, payload.get('filters') or {}))
         if path == '/api/aa/proxy':
             return self._send_json(aa_gateway.generic_proxy(base_url, token, payload.get('method') or 'GET', payload.get('path') or '', payload.get('body')))
+        self.send_response(404); self.end_headers()
+
+    def _handle_registry_post(self, path, payload):
+        """POST /api/registry/rpas (criar), /api/registry/rpas/{id}/update e
+        /api/registry/rpas/{id}/delete — sempre POST, mesmo para editar/
+        remover, seguindo a mesma convenção já usada pelo proxy da integração
+        Automation Anywhere (verbo lógico dentro do caminho/corpo, não o verbo
+        HTTP) para não precisar implementar do_PUT/do_DELETE."""
+        try:
+            if path == '/api/registry/rpas':
+                return self._send_json({'ok': True, 'rpa': rpa_registry.create_rpa(payload)})
+            if path.startswith('/api/registry/rpas/') and path.endswith('/update'):
+                rpa_id = path[len('/api/registry/rpas/'):-len('/update')]
+                return self._send_json({'ok': True, 'rpa': rpa_registry.update_rpa(rpa_id, payload)})
+            if path.startswith('/api/registry/rpas/') and path.endswith('/delete'):
+                rpa_id = path[len('/api/registry/rpas/'):-len('/delete')]
+                rpa_registry.delete_rpa(rpa_id)
+                return self._send_json({'ok': True})
+        except RpaRegistryValidationError as exc:
+            return self._send_json({'ok': False, 'error': str(exc)})
         self.send_response(404); self.end_headers()
 
     def _aa_ctx_from_headers(self):

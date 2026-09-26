@@ -43,7 +43,8 @@ assets/dashboard-app.js        todo o JavaScript de index.html, organizado em
                                 RpaDataStore, e uma classe *Page por página:
                                 OverviewPage, AlertsPage, ExecutionsPage,
                                 IncidentsPage, InfrastructurePage, AuditPage,
-                                DiagnosticPage, CatalogPage, RpaOpsApp).
+                                DiagnosticPage, CatalogPage, RegistryPage,
+                                RpaOpsApp).
 investigacao.html              investigação forense por execution_id —
                                 lógica na classe InvestigacaoPage (um método
                                 por seção renderizada).
@@ -76,7 +77,11 @@ assets/observability-data.js   fallback estático (window.OBS_DATA) usado só
 assets/index-data.js           idem, mas a versão agregada (window.INDEX_DATA).
 config/rpa_metadata.json       cadastro das RPAs: agenda, criticidade,
                                 VM primária/contingência, benefícios,
-                                responsáveis, arquivos de dependência.
+                                responsáveis, arquivos de dependência. Editável
+                                pelo próprio dashboard (menu "Cadastro de
+                                RPAs" → RegistryPage no frontend,
+                                RpaRegistryStore em server.py) — ver seção
+                                CADASTRO DE RPAS mais abaixo.
 config/aa_config.json          config NÃO-SENSÍVEL da integração AA
                                 (URL/usuário) — nunca contém API Key/token.
 config/dependencies/           arquivos de dependência fictícios usados pela
@@ -203,6 +208,45 @@ consigam chamar `this.renderCharts()`/`this.renderTable()` sem variáveis
 globais soltas.
 
 --------------------------------------------------------------------------------
+CADASTRO DE RPAS (CRUD do config/rpa_metadata.json)
+--------------------------------------------------------------------------------
+Menu "Cadastro de RPAs" (item novo em Contexto, ao lado de Catálogo): cria,
+edita e remove RPAs sem editar o JSON manualmente. Ao contrário do Catálogo
+(read-only, decorativo), esta tela grava de volta em
+config/rpa_metadata.json.
+
+Frontend: classe RegistryPage em assets/dashboard-app.js. `FIELD_GROUPS`
+descreve o formulário inteiro em dados (grupo → campos → tipo) — o mesmo
+array monta os inputs/selects/textareas e serializa/parseia os valores ao
+abrir e salvar (`_serializeField`/`_parseField`, as únicas duas funções da
+classe sem DOM, cobertas por test_dashboard.js). O modal é construído em
+JS (não em index.html) e usa suas próprias classes CSS
+(.registry-modal-overlay etc.) — nunca depende de aa-integration.css, que é
+opcional e removível. Exclusão pede confirmação num modal próprio, nunca
+`window.confirm()` (bloquearia o refresh incremental em andamento).
+
+Backend: classe RpaRegistryStore em server.py, recebendo o caminho do
+arquivo por injeção (mesmo padrão de AutomationAnywhereGateway) para os
+testes usarem um arquivo temporário. `validate_payload` levanta
+RpaRegistryValidationError com uma mensagem já pronta para a UI na primeira
+violação (campo obrigatório ausente, processo duplicado, horário fora do
+formato HH:MM, duração esperada > atenção > máxima, etc.). Toda mutação usa
+escrita atômica (grava em .tmp e substitui o arquivo original) e
+regenera automaticamente as regras de `schedules` daquela RPA a partir de
+`schedule`/`calendar`/`startToleranceMin`/`warningDurationMin`/
+`maxDurationMin` — ninguém precisa calcular latestStartTime/
+warningFinishTime/deadlineTime à mão.
+
+Rotas (sempre POST, mesmo para editar/remover — mesma convenção do proxy da
+integração AA, verbo lógico no caminho em vez de PUT/DELETE reais):
+GET /api/registry/rpas, POST /api/registry/rpas (criar),
+POST /api/registry/rpas/{id}/update, POST /api/registry/rpas/{id}/delete.
+
+Toda mutação bem-sucedida dispara `RpaDataStore.reloadData()` no frontend —
+o dataset inteiro é recarregado e todas as páginas (KPIs, Catálogo,
+Auditoria etc.) refletem a mudança na hora, sem reload do navegador.
+
+--------------------------------------------------------------------------------
 INTEGRAÇÃO AUTOMATION ANYWHERE (módulo opcional)
 --------------------------------------------------------------------------------
 assets/aa-integration.js/.css implementam uma camada OPCIONAL de conexão com
@@ -245,24 +289,31 @@ SEGURANÇA
   descartadas ao desconectar ou fechar a aba.
 - O proxy genérico da integração (`/api/aa/proxy`) só encaminha caminhos
   que comecem com /v2, /v3 ou /v4 — nunca uma URL arbitrária.
+- O Cadastro de RPAs valida todo payload antes de gravar (campos
+  obrigatórios, formato de horário, unicidade de processo, ordenação de
+  duração) e escreve via arquivo temporário + substituição atômica — uma
+  falha no meio da escrita nunca deixa config/rpa_metadata.json corrompido.
 
 --------------------------------------------------------------------------------
 TESTES
 --------------------------------------------------------------------------------
 `python3 test_server.py` roda uma suíte local (unittest da biblioteca
 padrão, sem dependências) cobrindo: os regex de nome de arquivo de log, a
-integração Automation Anywhere em modo mock (sem tocar em ./logs), um smoke
-test de `build_dataset()` contra os logs reais do projeto, e as rotas HTTP
+integração Automation Anywhere em modo mock (sem tocar em ./logs), o CRUD
+completo do Cadastro de RPAs (RpaRegistryStore, sempre contra um arquivo
+JSON temporário — nunca config/rpa_metadata.json real), um smoke test de
+`build_dataset()` contra os logs reais do projeto, e as rotas HTTP
 principais contra um servidor de verdade numa porta livre. Rodar uma classe
-específica: `python3 -m unittest test_server.TestAutomationAnywhereGatewayMock -v`
+específica: `python3 -m unittest test_server.TestRpaRegistryStore -v`
 
 `node --test test_dashboard.js` roda os testes das partes puras (sem DOM)
 de assets/dashboard-app.js: `Fmt` inteira (formatação de datas, badges,
-classificação de faixas de heatmap/métrica) e os dois mini-charts SVG de
-`ChartService` (sparkline/lineChart). O resto do front-end (as classes
-*Page, NavigationController, RpaDataStore, e as páginas avulsas) manipula
-o DOM diretamente e continua verificado manualmente no navegador a cada
-mudança, como sempre foi neste projeto.
+classificação de faixas de heatmap/métrica), os dois mini-charts SVG de
+`ChartService` (sparkline/lineChart) e a serialização/parsing de campos do
+formulário de `RegistryPage`. O resto do front-end (as classes *Page,
+NavigationController, RpaDataStore, e as páginas avulsas) manipula o DOM
+diretamente e continua verificado manualmente no navegador a cada mudança,
+como sempre foi neste projeto.
 
 --------------------------------------------------------------------------------
 CARREGAMENTO E ATUALIZAÇÃO DOS DADOS

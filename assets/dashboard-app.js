@@ -1813,6 +1813,251 @@ class CatalogPage {
 }
 
 /* =========================================================================
+   RegistryPage — "Cadastro de RPAs": CRUD completo sobre
+   config/rpa_metadata.json via /api/registry/rpas/* (server.py,
+   RpaRegistryStore). Cada criação/edição/exclusão dispara um refresh
+   incremental completo (RpaDataStore.reloadData) para que todas as outras
+   páginas (Catálogo, Visão Operacional, etc.) reflitam a mudança sem exigir
+   um reload do navegador.
+
+   FIELD_GROUPS descreve o formulário inteiro em dados (grupo → campos), em
+   vez de HTML escrito à mão campo a campo — o mesmo array é usado tanto para
+   montar os <input>/<select>/<textarea> quanto para serializar/parsear os
+   valores ao abrir e salvar o formulário. `_serializeField`/`_parseField`
+   são as únicas duas funções desta classe que não tocam o DOM — são o que
+   test_dashboard.js exercita (o resto é só verificado manualmente, como
+   todo o restante do frontend).
+   ========================================================================= */
+class RegistryPage {
+    static FIELD_GROUPS = [
+        { title: 'Identificação', fields: [
+            { key: 'process', label: 'Processo (chave técnica, única)', type: 'text', required: true },
+            { key: 'name', label: 'Nome', type: 'text', required: true },
+            { key: 'businessArea', label: 'Área de negócio', type: 'text', required: true },
+            { key: 'businessProcess', label: 'Processo de negócio', type: 'text', required: true },
+        ] },
+        { title: 'Operação', fields: [
+            { key: 'criticality', label: 'Criticidade', type: 'select', options: ['BAIXA', 'MEDIA', 'ALTA', 'CRITICA'], required: true },
+            { key: 'supportPriority', label: 'Prioridade de suporte', type: 'select', options: ['P1', 'P2', 'P3'], required: true },
+            { key: 'application', label: 'Aplicação', type: 'text', required: true },
+            { key: 'supportTeam', label: 'Time de sustentação', type: 'text', required: true },
+            { key: 'businessImpact', label: 'Impacto de negócio', type: 'textarea', full: true, required: true },
+        ] },
+        { title: 'Infraestrutura', fields: [
+            { key: 'primaryVm', label: 'VM primária', type: 'text', required: true },
+            { key: 'backupVm', label: 'VM contingência', type: 'text', required: true },
+            { key: 'orchestrator', label: 'Orquestrador', type: 'text', required: true },
+            { key: 'robotName', label: 'Nome do robô', type: 'text', required: true },
+        ] },
+        { title: 'Agenda e limites', fields: [
+            { key: 'schedule', label: 'Horários (HH:MM, separados por vírgula)', type: 'text', full: true, required: true, list: 'commas' },
+            { key: 'calendar', label: 'Calendário', type: 'select', options: ['daily', 'weekdays'], required: true },
+            { key: 'expectedDurationMin', label: 'Duração esperada (min)', type: 'number', required: true },
+            { key: 'warningDurationMin', label: 'Duração de atenção (min)', type: 'number', required: true },
+            { key: 'maxDurationMin', label: 'Duração máxima / deadline (min)', type: 'number', required: true },
+            { key: 'startToleranceMin', label: 'Tolerância de início (min)', type: 'number', required: true },
+            { key: 'maxRetries', label: 'Máximo de retries', type: 'number', required: true },
+            { key: 'volumeMin', label: 'Volume mínimo esperado', type: 'number' },
+            { key: 'volumeMax', label: 'Volume máximo esperado', type: 'number' },
+        ] },
+        { title: 'Documentação', fields: [
+            { key: 'runbook', label: 'Caminho do runbook', type: 'text', full: true },
+            { key: 'steps', label: 'Etapas (uma por linha)', type: 'textarea', full: true, list: 'lines' },
+            { key: 'benefits', label: 'Benefícios de negócio (um por linha)', type: 'textarea', full: true, list: 'lines' },
+            { key: 'owners', label: 'Responsáveis (um por linha: Nome — Papel)', type: 'textarea', full: true, list: 'pairs', pairSep: '—', pairKeys: ['name', 'role'] },
+            { key: 'dependencyFiles', label: 'Arquivos de dependência (um por linha: caminho | rótulo)', type: 'textarea', full: true, list: 'pairs', pairSep: '|', pairKeys: ['path', 'label'] },
+        ] },
+    ];
+
+    static _rows = [];
+    static _editing = null;
+
+    /** Busca o cadastro atual e (re)desenha a tabela. Chamado no boot e a
+     * cada refresh de dados, para acompanhar mudanças feitas por qualquer
+     * outra sessão do servidor local. */
+    static async render() {
+        let rows = [];
+        try {
+            const resp = await fetch('/api/registry/rpas', { cache: 'no-store' }).then(r => r.json());
+            if (resp && resp.ok) rows = resp.rpas;
+        } catch (exc) {
+            // Servidor indisponível (ex.: painel aberto via file://) — cai no
+            // cadastro já carregado em DATA, só para exibição; o CRUD real
+            // exige o servidor local, como o resto do refresh incremental.
+            rows = (DATA.rpas || []).map(r => ({ ...r, rpaId: r.id, schedule: r.schedule || [] }));
+        }
+        RegistryPage._rows = rows;
+        RegistryPage.renderTable();
+    }
+
+    static renderTable() {
+        const rows = [...RegistryPage._rows].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+        DomUtils.$('#registryTable').innerHTML = rows.map(r => `
+            <tr data-rpa-id="${Fmt.escapeHtml(r.rpaId)}">
+                <td><span class="cell-title">${Fmt.escapeHtml(r.name)}</span><span class="cell-subtitle mono">${Fmt.escapeHtml(r.rpaId)} · ${Fmt.escapeHtml(r.process)}</span></td>
+                <td>${Fmt.criticalityBadge(r.criticality)}</td>
+                <td>${Fmt.escapeHtml(r.application)}</td>
+                <td class="mono">${Fmt.escapeHtml(r.primaryVm)}</td>
+                <td>${Fmt.escapeHtml((r.schedule || []).join(' · '))}</td>
+                <td style="white-space:nowrap">
+                    <button class="action-button js-registry-edit" type="button"><svg class="icon"><use href="#i-edit"></use></svg> Editar</button>
+                    <button class="action-button js-registry-delete" type="button" style="color:var(--danger)"><svg class="icon"><use href="#i-trash"></use></svg> Excluir</button>
+                </td>
+            </tr>
+        `).join('') || `<tr><td colspan="6"><div class="empty-state">Nenhuma RPA cadastrada.</div></td></tr>`;
+
+        DomUtils.$$('#registryTable tr[data-rpa-id]').forEach(row => {
+            const rpaId = row.dataset.rpaId;
+            row.querySelector('.js-registry-edit').addEventListener('click', () => RegistryPage.openForm(RegistryPage._rows.find(r => r.rpaId === rpaId)));
+            row.querySelector('.js-registry-delete').addEventListener('click', () => RegistryPage.confirmDelete(rpaId));
+        });
+    }
+
+    /** RPA → texto de formulário. Não toca o DOM — puro por construção, para
+     * ser testável isoladamente (ver test_dashboard.js). */
+    static _serializeField(field, value) {
+        if (field.list === 'commas') return (value || []).join(', ');
+        if (field.list === 'lines') return (value || []).join('\n');
+        if (field.list === 'pairs') return (value || []).map(o => `${o[field.pairKeys[0]] ?? ''} ${field.pairSep} ${o[field.pairKeys[1]] ?? ''}`).join('\n');
+        return value ?? '';
+    }
+
+    /** Texto de formulário → valor pronto para o payload da API. Espelho de
+     * `_serializeField` — junto, as duas garantem que abrir e salvar uma RPA
+     * sem alterar nada produz o mesmo dado (round-trip). */
+    static _parseField(field, raw) {
+        if (field.type === 'number') return Number(raw);
+        if (field.list === 'commas') return raw.split(',').map(s => s.trim()).filter(Boolean);
+        if (field.list === 'lines') return raw.split('\n').map(s => s.trim()).filter(Boolean);
+        if (field.list === 'pairs') {
+            return raw.split('\n').map(s => s.trim()).filter(Boolean).map(line => {
+                const [a, b] = line.split(field.pairSep).map(s => s.trim());
+                return { [field.pairKeys[0]]: a || '', [field.pairKeys[1]]: b || '' };
+            });
+        }
+        return raw;
+    }
+
+    static _fieldMarkup(f, rpa) {
+        const current = RegistryPage._serializeField(f, rpa ? rpa[f.key] : (f.list ? [] : ''));
+        if (f.type === 'select') {
+            return `<select class="select-control" id="reg_${f.key}">${f.options.map(o => `<option value="${o}" ${rpa && rpa[f.key] === o ? 'selected' : ''}>${o}</option>`).join('')}</select>`;
+        }
+        if (f.type === 'textarea') {
+            return `<textarea class="select-control" id="reg_${f.key}">${Fmt.escapeHtml(current)}</textarea>`;
+        }
+        return `<input class="select-control" id="reg_${f.key}" type="${f.type === 'number' ? 'number' : 'text'}" value="${Fmt.escapeHtml(current)}">`;
+    }
+
+    /** Abre o formulário — sem `rpa`, cria; com `rpa`, edita (o rpaId nunca é
+     * editável). Modal construído em JS, não em index.html, porque este
+     * arquivo não pode depender de aa-integration.css (módulo opcional,
+     * removível) para nenhum estilo essencial. */
+    static openForm(rpa) {
+        RegistryPage._editing = rpa || null;
+        const overlay = document.createElement('div');
+        overlay.className = 'registry-modal-overlay';
+        overlay.id = 'registryModalOverlay';
+        const groupsHtml = RegistryPage.FIELD_GROUPS.map(group => `
+            <div class="registry-form-section-title">${Fmt.escapeHtml(group.title)}</div>
+            ${group.fields.map(f => `
+                <div class="${f.full ? 'full' : ''}">
+                    <label for="reg_${f.key}">${Fmt.escapeHtml(f.label)}${f.required ? ' *' : ''}</label>
+                    ${RegistryPage._fieldMarkup(f, rpa)}
+                </div>
+            `).join('')}
+        `).join('');
+        overlay.innerHTML = `
+            <div class="registry-modal">
+                <h3>${rpa ? 'Editar RPA' : 'Nova RPA'}</h3>
+                <div class="sub">${rpa ? `<span class="mono">${Fmt.escapeHtml(rpa.rpaId)}</span> — o ID não pode ser alterado.` : 'O ID é gerado automaticamente ao salvar.'}</div>
+                <div id="registryFormError"></div>
+                <div class="registry-form-grid">${groupsHtml}</div>
+                <div class="registry-modal-actions">
+                    <button class="action-button" id="registryCancelBtn" type="button">Cancelar</button>
+                    <button class="action-button primary" id="registrySaveBtn" type="button">Salvar</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        overlay.addEventListener('mousedown', ev => { if (ev.target === overlay) RegistryPage.closeForm(); });
+        DomUtils.$('#registryCancelBtn').addEventListener('click', RegistryPage.closeForm);
+        DomUtils.$('#registrySaveBtn').addEventListener('click', RegistryPage.submitForm);
+    }
+
+    static closeForm() {
+        DomUtils.$('#registryModalOverlay')?.remove();
+    }
+
+    static _collectPayload() {
+        const payload = {};
+        RegistryPage.FIELD_GROUPS.forEach(group => group.fields.forEach(f => {
+            payload[f.key] = RegistryPage._parseField(f, DomUtils.$(`#reg_${f.key}`).value);
+        }));
+        return payload;
+    }
+
+    static async submitForm() {
+        const payload = RegistryPage._collectPayload();
+        const editing = RegistryPage._editing;
+        const url = editing ? `/api/registry/rpas/${encodeURIComponent(editing.rpaId)}/update` : '/api/registry/rpas';
+        const saveBtn = DomUtils.$('#registrySaveBtn');
+        saveBtn.disabled = true;
+        try {
+            const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(r => r.json());
+            if (!resp.ok) {
+                DomUtils.$('#registryFormError').innerHTML = `<div class="registry-error">${Fmt.escapeHtml(resp.error || 'Não foi possível salvar.')}</div>`;
+                saveBtn.disabled = false;
+                return;
+            }
+            RegistryPage.closeForm();
+            showToast(editing ? 'RPA atualizada.' : 'RPA cadastrada.');
+            await reloadData(DATA.loadStats?.mode || '90d');
+            await RegistryPage.render();
+        } catch (exc) {
+            DomUtils.$('#registryFormError').innerHTML = `<div class="registry-error">Falha de comunicação com o servidor local. O Cadastro de RPAs exige o servidor local (server.py).</div>`;
+            saveBtn.disabled = false;
+        }
+    }
+
+    /** Diálogo de confirmação próprio (não usa window.confirm — bloquearia
+     * o carregamento incremental em andamento e é inconsistente com o
+     * restante da UI, que sempre usa modais próprios para ações destrutivas). */
+    static confirmDelete(rpaId) {
+        const rpa = RegistryPage._rows.find(r => r.rpaId === rpaId);
+        const overlay = document.createElement('div');
+        overlay.className = 'registry-modal-overlay';
+        overlay.innerHTML = `
+            <div class="registry-modal" style="max-width:420px">
+                <h3>Excluir RPA</h3>
+                <p style="color:var(--text-2);font-size:13px">Remover <strong style="color:var(--text)">${Fmt.escapeHtml(rpa?.name || rpaId)}</strong> do cadastro? As regras de agenda associadas também serão removidas. Execuções já registradas nos logs não são apagadas.</p>
+                <div class="registry-modal-actions">
+                    <button class="action-button" id="registryDeleteCancel" type="button">Cancelar</button>
+                    <button class="action-button primary" id="registryDeleteConfirm" type="button" style="background:var(--danger);border-color:var(--danger)">Excluir</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        overlay.addEventListener('mousedown', ev => { if (ev.target === overlay) overlay.remove(); });
+        overlay.querySelector('#registryDeleteCancel').addEventListener('click', () => overlay.remove());
+        overlay.querySelector('#registryDeleteConfirm').addEventListener('click', () => RegistryPage._runDelete(rpaId, overlay));
+    }
+
+    static async _runDelete(rpaId, overlay) {
+        overlay.remove();
+        try {
+            const resp = await fetch(`/api/registry/rpas/${encodeURIComponent(rpaId)}/delete`, { method: 'POST' }).then(r => r.json());
+            if (!resp.ok) { showToast(resp.error || 'Não foi possível excluir.'); return; }
+            showToast('RPA removida do cadastro.');
+            await reloadData(DATA.loadStats?.mode || '90d');
+            await RegistryPage.render();
+        } catch (exc) {
+            showToast('Falha de comunicação com o servidor local.');
+        }
+    }
+}
+
+/* =========================================================================
    RpaOpsApp — orquestrador de topo: renderiza tudo (idempotente; chamado no
    boot e a cada refresh) e faz a inicialização única.
    ========================================================================= */
@@ -1852,6 +2097,7 @@ class RpaOpsApp {
 
         DiagnosticPage.renderDiagnostic(DATA.executionDetail);
         CatalogPage.renderCatalog();
+        RegistryPage.render();
 
         NavigationController.refreshOverflowHints();
     }
@@ -1870,6 +2116,8 @@ class RpaOpsApp {
         DomUtils.$('#reloadButton').addEventListener('click', () => {
             RpaDataStore.reloadData(DomUtils.$('#fullHistoryToggle').checked ? 'full' : '90d');
         });
+
+        DomUtils.$('#registryNewBtn').addEventListener('click', () => RegistryPage.openForm(null));
 
         let resizeTimer;
         window.addEventListener('resize', () => {
@@ -2013,5 +2261,5 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 /* Exporta as classes puras (sem DOM) para o test_dashboard.js via Node —
    no navegador `module` não existe, então este bloco é um no-op ali. */
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { Fmt, ChartService };
+    module.exports = { Fmt, ChartService, RegistryPage };
 }
