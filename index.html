@@ -1690,6 +1690,36 @@
             }
         }
 
+        .audit-history-list {
+            display: grid;
+            gap: 4px;
+        }
+
+        .audit-history-row {
+            display: grid;
+            grid-template-columns: minmax(220px, 1.6fr) minmax(120px, 1fr) minmax(190px, 1fr);
+            gap: 16px;
+            align-items: center;
+            padding: 11px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .audit-history-row:last-child {
+            border-bottom: 0;
+        }
+
+        .audit-history-step {
+            font-weight: 650;
+            overflow-wrap: anywhere;
+        }
+
+        @media (max-width: 720px) {
+            .audit-history-row {
+                grid-template-columns: 1fr;
+                gap: 6px;
+            }
+        }
+
         /* ---------------------------------------------------------------------
            Empty states, tooltip e toast
            ------------------------------------------------------------------ */
@@ -2362,6 +2392,19 @@
                         </div>
                     </div>
 
+                    <article class="card" id="auditPicker" style="margin-bottom:14px">
+                        <div class="card-body" style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">
+                            <div style="min-width:240px;flex:1">
+                                <label class="cell-subtitle" for="auditRpaSelect" style="display:block;margin-bottom:6px">RPA</label>
+                                <select class="select-control" id="auditRpaSelect" style="width:100%" aria-label="Selecionar RPA para auditoria"></select>
+                            </div>
+                            <div style="min-width:280px;flex:1.4">
+                                <label class="cell-subtitle" for="auditExecutionSelect" style="display:block;margin-bottom:6px">Execução</label>
+                                <select class="select-control" id="auditExecutionSelect" style="width:100%" aria-label="Selecionar execução para auditoria"></select>
+                            </div>
+                        </div>
+                    </article>
+
                     <article class="card" id="auditExecutionHero"></article>
 
                     <div class="grid grid-main" style="margin-top:14px">
@@ -2400,6 +2443,18 @@
                             </article>
                         </div>
                     </div>
+
+                    <article class="card" style="margin-top:14px">
+                        <div class="card-header">
+                            <div>
+                                <h2>Comparativo histórico por etapa</h2>
+                                <p>Duração e recorrência de erro de cada etapa nas demais execuções desta RPA no período carregado. Quatro ou mais erros históricos indicam, pela evidência disponível, que a etapa deve ser refeita.</p>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="audit-history-list" id="auditStepHistory"></div>
+                        </div>
+                    </article>
                 </section>
 
                 <!-- =========================================================
@@ -2513,7 +2568,7 @@
             const r = obs.rpas.find(item => item.rpaId === e.rpaId);
             const steps = (obs.eventsByExecution[e.executionId] || []).map(step => ({...step}));
             return {
-                executionId: e.executionId, rpa: r?.name || e.process, process: e.process,
+                executionId: e.executionId, rpaId: e.rpaId, rpa: r?.name || e.process, process: e.process,
                 robotName: e.robotName, orchestrator: e.orchestrator, environment: e.environment,
                 status: e.status, start: e.start, end: e.end, durationMin: e.durationMin, machine: e.machine, version: e.version,
                 totalItems: e.totalItems, processedItems: e.processedItems, successItems: e.successItems, warningItems: e.warningItems,
@@ -2902,6 +2957,14 @@
             $('#overviewStatusFilter').addEventListener('change', renderRpaOpsTable);
             $('#alertSeverityFilter')?.addEventListener('change', renderAlerts);
             $('#paretoDimensionSelect')?.addEventListener('change', renderErrorPareto);
+            $('#auditRpaSelect')?.addEventListener('change', (ev) => {
+                populateAuditExecutionSelect(ev.target.value);
+                const nextExecution = $('#auditExecutionSelect')?.value;
+                if (nextExecution) openAuditExecution(nextExecution);
+            });
+            $('#auditExecutionSelect')?.addEventListener('change', (ev) => {
+                if (ev.target.value) openAuditExecution(ev.target.value);
+            });
         }
 
         function renderRpaOpsTable() {
@@ -3750,6 +3813,103 @@
             return `<span class="badge danger">${escapeHtml(value.replaceAll('_', ' '))}</span>`;
         }
 
+        function populateAuditRpaSelect(selectedRpaId) {
+            const select = $('#auditRpaSelect');
+            if (!select) return;
+            const rpas = [...DATA.rpas].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+            select.innerHTML = rpas.map(r => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}</option>`).join('');
+            if (selectedRpaId) select.value = selectedRpaId;
+        }
+
+        function populateAuditExecutionSelect(rpaId, selectedExecutionId) {
+            const select = $('#auditExecutionSelect');
+            if (!select) return;
+            const execs = window.OBS_DATA.executions
+                .filter(e => e.rpaId === rpaId)
+                .sort((a, b) => b.start.localeCompare(a.start));
+            select.innerHTML = execs.map(e => `<option value="${escapeHtml(e.executionId)}">${fmtDateTime(e.start)} · ${e.status}${e.status === 'ERROR' ? ' ⚠' : ''}</option>`).join('')
+                || '<option value="">Sem execuções no período</option>';
+            if (selectedExecutionId) select.value = selectedExecutionId;
+        }
+
+        function initAuditPicker(rpaId, executionId) {
+            populateAuditRpaSelect(rpaId);
+            populateAuditExecutionSelect(rpaId, executionId);
+        }
+
+        /* Reconstrói, para cada etapa da RPA selecionada, a duração e a
+           recorrência de erro nas DEMAIS execuções do período carregado —
+           nunca inclui a execução em auditoria no próprio histórico. */
+        function computeStepHistory(rpaId, currentExecutionId) {
+            const obs = window.OBS_DATA;
+            const byStep = new Map();
+            obs.executions
+                .filter(e => e.rpaId === rpaId && e.executionId !== currentExecutionId)
+                .sort((a, b) => a.start.localeCompare(b.start))
+                .forEach(e => {
+                    (obs.eventsByExecution[e.executionId] || []).forEach(s => {
+                        if (!byStep.has(s.step)) byStep.set(s.step, { durations: [], errors: 0, total: 0, lastError: null });
+                        const rec = byStep.get(s.step);
+                        rec.total++;
+                        rec.durations.push(Number(s.durationSec || 0));
+                        if (s.status === 'ERROR') {
+                            rec.errors++;
+                            if (!rec.lastError || e.start > rec.lastError.date) {
+                                rec.lastError = { executionId: e.executionId, date: e.start, message: s.errorMessage || s.message || '' };
+                            }
+                        }
+                    });
+                });
+            return byStep;
+        }
+
+        function renderAuditStepHistory(detail) {
+            const container = $('#auditStepHistory');
+            if (!container) return;
+            if (!detail.rpaId) { container.innerHTML = '<div class="empty-state">Sem dados históricos disponíveis.</div>'; return; }
+
+            const history = computeStepHistory(detail.rpaId, detail.executionId);
+            const orderedNames = [];
+            const seen = new Set();
+            (detail.steps || []).forEach(s => { if (!seen.has(s.step)) { seen.add(s.step); orderedNames.push(s.step); } });
+            history.forEach((_, name) => { if (!seen.has(name)) { seen.add(name); orderedNames.push(name); } });
+
+            if (!orderedNames.length) {
+                container.innerHTML = '<div class="empty-state">Sem etapas históricas para esta RPA no período carregado.</div>';
+                return;
+            }
+
+            container.innerHTML = orderedNames.map(name => {
+                const rec = history.get(name);
+                if (!rec || rec.total === 0) {
+                    return `
+                        <div class="audit-history-row">
+                            <div class="audit-history-step">${escapeHtml(name)}</div>
+                            <div class="cell-subtitle">Sem histórico anterior</div>
+                            <div class="cell-subtitle">—</div>
+                        </div>
+                    `;
+                }
+                const avg = rec.durations.reduce((a, b) => a + b, 0) / rec.durations.length;
+                const needsRework = rec.errors >= 4;
+                return `
+                    <div class="audit-history-row">
+                        <div class="audit-history-step">
+                            <div>${escapeHtml(name)}</div>
+                            <div class="cell-subtitle">${rec.total} execuções históricas · média ${formatAuditDuration(avg)}</div>
+                        </div>
+                        <div>${sparkline(rec.durations.slice(-24), 'var(--primary)')}</div>
+                        <div>
+                            <span class="badge ${needsRework ? 'danger' : rec.errors > 0 ? 'warning' : 'success'}">
+                                <span class="dot"></span>${rec.errors} erro${rec.errors === 1 ? '' : 's'}
+                            </span>
+                            ${needsRework ? '<div class="cell-subtitle" style="margin-top:5px;color:var(--danger)">≥4 falhas — evidência sugere refazer a etapa</div>' : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
         function renderAuditExecution(detail) {
             if (!detail) return;
 
@@ -3833,6 +3993,9 @@
                     <div class="audit-evidence-row"><span>version</span><span>${escapeHtml(detail.version || '—')}</span></div>
                 </div>
             `;
+
+            initAuditPicker(detail.rpaId, detail.executionId);
+            renderAuditStepHistory(detail);
         }
 
         function openAuditExecution(executionId) {

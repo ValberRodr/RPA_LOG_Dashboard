@@ -934,7 +934,7 @@ def build_index(obs, vm_history, expected_runs, exec_by_id):
                           'severity':x['severity'],'durationSec':x['durationSec'],'message':x['message'],'application':x.get('application'),
                           'errorCode':x.get('errorCode'),'errorType':x.get('errorType'),'errorMessage':x.get('errorMessage')})
         ctx=obs['vmContextByExecution'].get(e['executionId'],[]); snap=min(ctx,key=lambda x:abs((dt(x['data'])-dt(e['start'])).total_seconds())) if ctx else None
-        return {'executionId':e['executionId'],'rpa':r['name'],'process':e['process'],'status':e['status'],'start':e['start'],'end':e['end'],
+        return {'executionId':e['executionId'],'rpaId':e['rpaId'],'rpa':r['name'],'process':e['process'],'status':e['status'],'start':e['start'],'end':e['end'],
                 'durationMin':e['durationMin'],'machine':e['machine'],'version':e['version'],'totalItems':e['totalItems'],
                 'processedItems':e['processedItems'],'successItems':e['successItems'],'warningItems':e['warningItems'],'errorItems':e['errorItems'],
                 'retries':e['retryCount'],'robotName':e['robotName'],'orchestrator':e['orchestrator'],'environment':e['environment'],
