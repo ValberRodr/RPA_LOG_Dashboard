@@ -233,6 +233,10 @@
             <a class="toc-link" href="#padrao-alias">Padrão de alias + boot</a>
         </div>
         <div class="toc-group">
+            <div class="toc-group-title">Cadastro de RPAs</div>
+            <a class="toc-link" href="#cadastro-rpas-visao-geral">CRUD do rpa_metadata.json</a>
+        </div>
+        <div class="toc-group">
             <div class="toc-group-title">Frontend · Páginas avulsas</div>
             <a class="toc-link" href="#kit-ui-compartilhado">Kit de UI (RPAUI)</a>
             <a class="toc-link" href="#paginas-avulsas">Investigação / Diagnóstico / Dashboard da RPA</a>
@@ -350,7 +354,7 @@ node --test test_dashboard.js</code></pre>
 ├── <span class="d">docs/</span>
 │   └── documentacao.html          <span class="c"># ESTE arquivo</span>
 ├── <span class="d">assets/</span>
-│   ├── dashboard-app.js           <span class="c"># toda a lógica de index.html, 14 classes</span>
+│   ├── dashboard-app.js           <span class="c"># toda a lógica de index.html, 15 classes</span>
 │   ├── observability-core.js      <span class="c"># kit de UI (window.RPAUI) das 3 páginas avulsas</span>
 │   ├── observability.css          <span class="c"># CSS compartilhado pelas 3 páginas avulsas</span>
 │   ├── aa-integration.js          <span class="c"># integração opcional Automation Anywhere (14 classes)</span>
@@ -611,7 +615,7 @@ X-AA-Token: &lt;token em memória, nunca persistido&gt;
             <!-- ================================================================ -->
             <section class="section" id="config-cadastro">
                 <h2>Cadastro — rpa_metadata.json<a class="anchor-link" href="#config-cadastro">#</a></h2>
-                <p>Fonte de verdade de tudo que <strong>não</strong> vem do log: identidade da RPA, criticidade, agenda esperada, benefícios de negócio, responsáveis e dependências. Hoje contém <strong>10 RPAs</strong> e <strong>44 regras de agenda</strong>.</p>
+                <p>Fonte de verdade de tudo que <strong>não</strong> vem do log: identidade da RPA, criticidade, agenda esperada, benefícios de negócio, responsáveis e dependências. Hoje contém <strong>10 RPAs</strong> e <strong>44 regras de agenda</strong>. Este é o schema bruto do arquivo — para criar/editar/remover uma RPA sem tocar no JSON diretamente, use o menu "Cadastro de RPAs" do próprio dashboard (ver <a href="#cadastro-rpas-visao-geral">Cadastro de RPAs</a>), que valida o payload e regenera <code>schedules</code> automaticamente.</p>
                 <pre class="code-block"><span class="lang-tag">json</span><code>{
   "rpaId": "RPA001",
   "process": "VND_Integracao_Pedidos_Salesforce",
@@ -699,6 +703,7 @@ X-AA-Token: &lt;token em memória, nunca persistido&gt;
                     <tr><td><code>vms</code></td><td><code>InfrastructurePage</code></td><td>KPIs de infraestrutura, grade de VMs com uso real (não nominal).</td></tr>
                     <tr><td><code>audit</code></td><td><code>AuditPage</code></td><td>Seletor RPA/execução, trilha de etapas, comparativo histórico por etapa, evidências.</td></tr>
                     <tr><td><code>catalog</code></td><td><code>CatalogPage</code></td><td>Um card por RPA — agenda, VM, benefícios de negócio, responsáveis.</td></tr>
+                    <tr><td><code>registry</code></td><td><code>RegistryPage</code></td><td>Cadastro de RPAs — CRUD completo (criar/editar/remover) sobre <code>config/rpa_metadata.json</code>. Ver <a href="#cadastro-rpas-visao-geral">seção dedicada</a>.</td></tr>
                     <tr><td><code>diagnostic</code> <span class="badge neutral">sem item de menu</span></td><td><code>DiagnosticPage</code></td><td>Seção pré-renderizada no boot (<code>RpaOpsApp.renderAll</code> chama <code>renderDiagnostic(DATA.executionDetail)</code>), mas não há botão de navegação visível nesta versão do <code>index.html</code> que leve até ela — o drill-down técnico completo hoje é feito pela página avulsa <code>diagnostico.html</code> (aberta em nova aba pelo botão "Diagnóstico ↗"). Ver nota de sustentação abaixo.</td></tr>
                 </table></div>
                 <div class="callout callout-warn">
@@ -710,7 +715,7 @@ X-AA-Token: &lt;token em memória, nunca persistido&gt;
             <!-- ================================================================ -->
             <section class="section" id="referencia-classes-frontend">
                 <h2>Frontend · Dashboard — referência de classes<a class="anchor-link" href="#referencia-classes-frontend">#</a></h2>
-                <p><code>assets/dashboard-app.js</code> (~2000 linhas) organiza as antigas ~63 funções soltas de <code>index.html</code> em 14 classes por responsabilidade. Nenhuma lógica mudou nessa conversão — cada método é a função original, movida verbatim para dentro de um <code>static</code>.</p>
+                <p><code>assets/dashboard-app.js</code> organiza as antigas ~63 funções soltas de <code>index.html</code> em 14 classes por responsabilidade. Nenhuma lógica mudou nessa conversão — cada método é a função original, movida verbatim para dentro de um <code>static</code>. Uma 15ª classe, <code>RegistryPage</code>, foi adicionada depois como código genuinamente novo (o Cadastro de RPAs) — não é uma função convertida, por isso não segue o padrão de alias descrito adiante (ver <a href="#cadastro-rpas-visao-geral">Cadastro de RPAs</a>).</p>
 
                 <h3>Fmt — formatação pura (testável isoladamente)</h3>
                 <p>Nenhum método toca o DOM. É a única parte de <code>dashboard-app.js</code> coberta por <code>test_dashboard.js</code>, junto com os mini-charts SVG de <code>ChartService</code>.</p>
@@ -769,7 +774,7 @@ X-AA-Token: &lt;token em memória, nunca persistido&gt;
                     <tr><td><code>reloadData(mode)</code></td><td>Orquestra o refresh incremental completo — ver <a href="#cache-invalidacao">Cache e invalidação</a>.</td></tr>
                 </table></div>
 
-                <h3>As 7 classes de página (uma por item de menu)</h3>
+                <h3>As 8 classes de página (uma por item de menu)</h3>
                 <p>Cada uma só tem métodos <code>render*()</code> — leem <code>DATA</code>/<code>window.OBS_DATA</code> e escrevem <code>innerHTML</code> no elemento correspondente. Referência completa por classe:</p>
                 <div class="table-wrap"><table>
                     <tr><th>Classe</th><th>Métodos</th></tr>
@@ -781,6 +786,7 @@ X-AA-Token: &lt;token em memória, nunca persistido&gt;
                     <tr><td><code>AuditPage</code></td><td><code>populateAuditRpaSelect</code>, <code>populateAuditExecutionSelect</code>, <code>initAuditPicker</code>, <code>renderAuditStepHistory</code>, <code>renderAuditExecution</code>, <code>openAuditExecution</code>, <code>renderExecutionAuditTable</code></td></tr>
                     <tr><td><code>DiagnosticPage</code></td><td><code>renderDiagnostic</code>, <code>renderIncidentDiagnostic</code>, <code>renderGenericDiagnostic</code></td></tr>
                     <tr><td><code>CatalogPage</code></td><td><code>renderCatalog</code></td></tr>
+                    <tr><td><code>RegistryPage</code></td><td>CRUD do Cadastro de RPAs — <code>render</code>, <code>renderTable</code>, <code>openForm</code>, <code>closeForm</code>, <code>submitForm</code>, <code>confirmDelete</code>. Referência completa (inclusive backend) na <a href="#cadastro-rpas-visao-geral">seção dedicada</a>, não repetida aqui por já ter métodos de mutação (não só <code>render*</code>) e uma API HTTP própria.</td></tr>
                     <tr><td><code>RpaOpsApp</code></td><td><code>renderAll()</code> — chama, em ordem, todo método de render acima; idempotente, roda no boot e a cada refresh. <code>init()</code> — liga filtros, restaura a página salva em <code>sessionStorage</code>, liga o botão de reload e o debounce de resize.</td></tr>
                 </table></div>
                 <div class="callout callout-info">
@@ -815,13 +821,61 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
 // export para test_dashboard.js via Node — no-op no navegador
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { Fmt, ChartService };
+    module.exports = { Fmt, ChartService, RegistryPage };
 }</code></pre>
                 <div class="callout callout-danger">
                     <div class="icon-dot">!</div>
                     <p><code>DATA</code> é uma <code>let</code> de topo genuína — <strong>não</strong> uma propriedade de classe — de propósito: é reatribuída por nome (<code>DATA = window.INDEX_DATA</code>) em <code>RpaDataStore.reloadData</code> e lida por nome em dezenas de métodos das classes <code>*Page</code>. Movê-la para dentro de uma classe (mesmo como <code>static</code>) quebraria essa reatribuição silenciosamente, porque os métodos continuariam lendo o identificador de topo <code>DATA</code>, não a propriedade da classe.</p>
                 </div>
                 <p><strong>Regra prática:</strong> ao adicionar uma função de topo nova em <code>dashboard-app.js</code>, decida se ela pertence a uma classe existente (o caso comum) e adicione o alias correspondente logo no bloco de aliases — nunca crie uma função solta fora desse padrão, ou <code>aa-integration.js</code> pode perder acesso a ela silenciosamente caso venha a depender dela no futuro.</p>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="cadastro-rpas-visao-geral">
+                <h2>Cadastro de RPAs — CRUD de config/rpa_metadata.json<a class="anchor-link" href="#cadastro-rpas-visao-geral">#</a></h2>
+                <p>Item de menu "Cadastro de RPAs" (grupo Contexto, ao lado de Catálogo): cria, edita e remove RPAs sem precisar editar o JSON manualmente. Diferente do Catálogo — que é só leitura/decorativo — esta tela grava de volta em <code>config/rpa_metadata.json</code> através de uma API própria no backend.</p>
+                <div class="pipeline">
+                    <div class="pipe-box"><div class="t">RegistryPage (frontend)</div><div class="s">Formulário descrito como dados (<code>FIELD_GROUPS</code>), modal de criar/editar, diálogo de confirmação de exclusão — tudo construído em JS, sem depender de <code>aa-integration.css</code></div></div>
+                    <div class="pipe-arrow"><div class="line"></div><div class="tri"></div><span><code>fetch('/api/registry/rpas/...', {'{'} headers: {'{'} 'X-CSRF-Token' {'}'} {'}'})</code></span></div>
+                    <div class="pipe-box"><div class="t">Handler (server.py)</div><div class="s">Valida CSRF/Origin, limite de corpo, delega a <code>RpaRegistryStore</code> — ver <a href="#seguranca">Segurança</a></div></div>
+                    <div class="pipe-arrow"><div class="line"></div><div class="tri"></div><span><code>validate_payload → _extract_editable_fields → build_schedules_for → _save</code></span></div>
+                    <div class="pipe-box"><div class="t">config/rpa_metadata.json</div><div class="s">Escrita atômica (arquivo temporário + substituição) — o fingerprint em <code>DataCache.get_data</code> já inclui o mtime deste arquivo, então o próximo carregamento do dataset reflete a mudança sozinho</div></div>
+                    <div class="pipe-arrow"><div class="line"></div><div class="tri"></div><span><code>RpaDataStore.reloadData()</code></span></div>
+                    <div class="pipe-box"><div class="t">Resto do app</div><div class="s">KPIs, Catálogo, Auditoria etc. refletem a RPA nova/editada/removida sem reload do navegador</div></div>
+                </div>
+
+                <h3>RpaRegistryStore (backend)</h3>
+                <p>Recebe o caminho do arquivo por injeção (<code>meta_file</code>) — mesmo padrão de <code>AutomationAnywhereGateway(get_data_fn=...)</code> — para que os testes leiam/escrevam um arquivo temporário em vez do cadastro real.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Método</th><th>Descrição</th></tr>
+                    <tr><td><code>list_rpas()</code> / <code>get_rpa(rpa_id)</code></td><td>Leitura crua do arquivo.</td></tr>
+                    <tr><td><code>validate_payload(payload, existing_rpas, editing_rpa_id=None)</code></td><td><code>@classmethod</code>. Levanta <code>RpaRegistryValidationError</code> (mensagem já pronta para a UI) na primeira violação: campo obrigatório ausente, <code>criticality</code>/<code>calendar</code> fora do enum, horário de agenda fora do formato HH:MM ou duplicado, ordenação <code>expectedDurationMin ≤ warningDurationMin ≤ maxDurationMin</code> violada, <code>process</code> duplicado, ou um <code>dependencyFiles[].path</code> absoluto/fora da pasta do projeto (ver <a href="#seguranca">Segurança</a>).</td></tr>
+                    <tr><td><code>_extract_editable_fields(payload)</code></td><td>Copia <strong>só</strong> as chaves conhecidas (<code>REQUIRED_FIELDS</code> + <code>OPTIONAL_FIELDS</code>) do payload — nunca <code>dict(payload)</code> puro, para não permitir mass assignment via uma chamada direta à API.</td></tr>
+                    <tr><td><code>build_schedules_for(rpa)</code></td><td><code>@classmethod</code>. Deriva as regras de <code>schedules</code> (uma por horário) a partir dos próprios campos da RPA: <code>latestStartTime = scheduledTime + startToleranceMin</code>, <code>warningFinishTime = scheduledTime + warningDurationMin</code>, <code>deadlineTime = scheduledTime + maxDurationMin</code> — mesma convenção já usada no cadastro original.</td></tr>
+                    <tr><td><code>_next_rpa_id(rpas)</code></td><td>Próximo <code>RPA{n:03d}</code> sequencial a partir do maior ID numérico existente.</td></tr>
+                    <tr><td><code>create_rpa(payload)</code> / <code>update_rpa(rpa_id, payload)</code> / <code>delete_rpa(rpa_id)</code></td><td>CRUD completo. Toda escrita passa por <code>_save</code> (arquivo temporário + <code>Path.replace</code> — atômico) e regenera <code>schedules</code> daquela RPA por inteiro.</td></tr>
+                </table></div>
+
+                <h3>RegistryPage (frontend)</h3>
+                <p><code>FIELD_GROUPS</code> descreve o formulário inteiro como dados — 5 grupos (Identificação, Operação, Infraestrutura, Agenda e limites, Documentação), cada campo com <code>key</code>/<code>label</code>/<code>type</code>/<code>required</code>/<code>list</code>. O mesmo array monta os <code>&lt;input&gt;</code>/<code>&lt;select&gt;</code>/<code>&lt;textarea&gt;</code> (<code>_fieldMarkup</code>) e serializa/parseia os valores ao abrir e salvar.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Campo <code>list</code></th><th>Formato no textarea/input</th><th>Exemplo</th></tr>
+                    <tr><td><code>'commas'</code></td><td>Lista separada por vírgula, numa linha só</td><td><code>schedule</code>: <code>08:00, 14:00</code></td></tr>
+                    <tr><td><code>'lines'</code></td><td>Um item por linha</td><td><code>steps</code>, <code>benefits</code></td></tr>
+                    <tr><td><code>'pairs'</code></td><td>Um par por linha, separado por <code>pairSep</code></td><td><code>owners</code> ("Nome — Papel"), <code>dependencyFiles</code> ("caminho \| rótulo")</td></tr>
+                </table></div>
+                <div class="table-wrap"><table>
+                    <tr><th>Método</th><th>Descrição</th></tr>
+                    <tr><td><code>render()</code></td><td>Busca <code>GET /api/registry/rpas</code> e (re)desenha a tabela. Chamado no boot (<code>RpaOpsApp.renderAll</code>) e após toda mutação bem-sucedida.</td></tr>
+                    <tr><td><code>_serializeField(field, value)</code> / <code>_parseField(field, raw)</code></td><td>As duas únicas funções da classe sem DOM — round-trip RPA↔texto do formulário. Cobertas por <code>test_dashboard.js</code>.</td></tr>
+                    <tr><td><code>openForm(rpa)</code> / <code>closeForm()</code></td><td>Sem <code>rpa</code>, cria; com <code>rpa</code>, edita (<code>rpaId</code> nunca é editável). Modal construído em JS e anexado a <code>document.body</code>.</td></tr>
+                    <tr><td><code>submitForm()</code></td><td>Coleta o payload (<code>_collectPayload</code>), busca o token CSRF (<code>CsrfTokenStore.get()</code>) e faz <code>POST</code> para criar/atualizar. Em sucesso: fecha o modal, <code>reloadData()</code>, re-renderiza.</td></tr>
+                    <tr><td><code>confirmDelete(rpaId)</code> / <code>_runDelete(rpaId, overlay)</code></td><td>Diálogo de confirmação próprio — nunca <code>window.confirm()</code> (bloquearia o refresh incremental em andamento e é inconsistente com o resto da UI).</td></tr>
+                </table></div>
+                <div class="callout callout-ok">
+                    <div class="icon-dot">✓</div>
+                    <p>Diferente do restante de <code>dashboard-app.js</code>, <code>RegistryPage</code> <strong>não</strong> tem alias de topo (<code>const registryX = RegistryPage.x</code>) — é código novo, não uma conversão de função solta pré-existente, então não há nenhum ponto de chamada legado (nem <code>aa-integration.js</code>) que dependa do nome bare. Chamada sempre como <code>RegistryPage.metodo(...)</code>.</p>
+                </div>
             </section>
 
             <!-- ================================================================ -->
@@ -1009,30 +1063,34 @@ if (typeof module !== 'undefined' && module.exports) {
             <!-- ================================================================ -->
             <section class="section" id="testes">
                 <h2>Testes automatizados<a class="anchor-link" href="#testes">#</a></h2>
-                <h3>test_server.py — 26 testes (unittest, stdlib)</h3>
+                <h3>test_server.py — 72 testes (unittest, stdlib)</h3>
                 <div class="table-wrap"><table>
                     <tr><th>Classe de teste</th><th>Cobre</th></tr>
                     <tr><td><code>TestLogFilenamePatterns</code></td><td><code>EXEC_FNAME_RE</code>/<code>VM_FNAME_RE</code> — aceita nome válido (com e sem sufixo de execução), rejeita prefixo/extensão errados.</td></tr>
-                    <tr><td><code>TestAutomationAnywhereGatewayMock</code></td><td>Todo o modo mock do gateway: <code>is_mock</code>, autenticação (rejeita chave curta, aceita válida), discovery fixo, Activity List (derivação + paginação), detalhe (encontrado/não encontrado), proxy genérico (devices a partir das VMs fake, allowlist de path, policy FORBIDDEN, toggle de schedule sem tocar na agenda real) — usa <code>get_data_fn</code> fake, nunca lê <code>./logs</code>.</td></tr>
+                    <tr><td><code>TestAutomationAnywhereGatewayMock</code></td><td>Todo o modo mock do gateway: <code>is_mock</code>, autenticação (rejeita chave curta, aceita válida, token determinístico via <code>hashlib</code>), discovery fixo, Activity List (derivação + paginação), detalhe (encontrado/não encontrado), proxy genérico (devices a partir das VMs fake, allowlist de path, policy FORBIDDEN, toggle de schedule sem tocar na agenda real) — usa <code>get_data_fn</code> fake, nunca lê <code>./logs</code>.</td></tr>
+                    <tr><td><code>TestAutomationAnywhereSsrfGuard</code></td><td>Guard de SSRF de <code>_forward</code>/<code>_is_blocked_target</code> — loopback (IPv4 e IPv6) e link-local/metadata (<code>169.254.169.254</code>) bloqueados, rede privada (<code>10/8</code>) e IP público liberados, <code>_forward</code> retorna erro sem tentar nenhuma conexão de rede quando bloqueado. Sempre com IPs literais — nunca depende de DNS/rede real no ambiente de teste.</td></tr>
+                    <tr><td><code>TestRpaRegistryStore</code></td><td>CRUD completo (criar/editar/remover), geração de <code>schedules</code> (inclusive virada de meia-noite), validações (campo obrigatório, horário inválido/duplicado, ordenação de duração, criticidade/calendário fora do enum, processo duplicado), path traversal em <code>dependencyFiles</code> (absoluto e <code>../</code>, ambos rejeitados) e mass assignment (chave desconhecida no payload nunca chega ao disco) — sempre contra um arquivo JSON temporário, nunca <code>config/rpa_metadata.json</code> real.</td></tr>
                     <tr><td><code>TestDatasetBuilds</code></td><td>Smoke test de <code>build_dataset('90d')</code> contra os logs reais do projeto — chaves de topo esperadas presentes, pelo menos 1 RPA no resultado.</td></tr>
-                    <tr><td><code>TestHttpServerRoutes</code></td><td>Servidor real numa porta livre: fluxo mock de autenticação AA de ponta a ponta, rota <code>/api/aa/config</code>, <code>/api/status</code>, <code>index.html</code> serve, <code>observability-data.js</code> é JSON prefixado válido, proxy rejeita path fora da allowlist mesmo via HTTP real, rota AA desconhecida devolve 404.</td></tr>
+                    <tr><td><code>TestHttpServerRoutes</code></td><td>Servidor real numa porta livre: fluxo mock de autenticação AA de ponta a ponta, rotas de leitura (<code>/api/aa/config</code>, <code>/api/status</code>, <code>/api/registry/rpas</code>, <code>/api/csrf-token</code>), <code>index.html</code> serve, <code>observability-data.js</code> é JSON prefixado válido, proxy rejeita path fora da allowlist — e a camada de segurança inteira: POST sem/com token CSRF errado é rejeitado (403), <code>Origin</code> cross-site é rejeitado mesmo com token válido, <code>/api/reload</code> só aceita POST (GET dá 404), corpo acima de 2&nbsp;MB é rejeitado (413), <code>.git/HEAD</code> e listagem de diretório (<code>/config/</code>) dão 404, e toda resposta <code>.html</code> carrega um nonce de CSP que bate exatamente com o <code>&lt;script nonce="..."&gt;</code> injetado no corpo.</td></tr>
                 </table></div>
-                <h3>test_dashboard.js — 18 testes (node --test, sem dependências)</h3>
-                <p>Cobre só <code>Fmt</code> e os dois métodos SVG-puros de <code>ChartService</code> (<code>sparkline</code>, <code>lineChart</code>) — as únicas partes de <code>dashboard-app.js</code> que não tocam <code>window</code>/<code>document</code>. O restante (as classes <code>*Page</code>, <code>NavigationController</code>, <code>RpaDataStore</code>, e as 3 páginas avulsas) manipula o DOM diretamente e é verificado manualmente no navegador a cada mudança — disciplina mantida deliberadamente neste projeto em vez de introduzir jsdom/Puppeteer como dependência.</p>
+                <h3>test_dashboard.js — 25 testes (node --test, sem dependências)</h3>
+                <p>Cobre <code>Fmt</code> inteira, os dois métodos SVG-puros de <code>ChartService</code> (<code>sparkline</code>, <code>lineChart</code>) e a serialização/parsing de campos de <code>RegistryPage</code> — as únicas partes de <code>dashboard-app.js</code> que não tocam <code>window</code>/<code>document</code>. O restante (as classes <code>*Page</code>, <code>NavigationController</code>, <code>RpaDataStore</code>, e as 3 páginas avulsas) manipula o DOM diretamente e é verificado manualmente no navegador a cada mudança — disciplina mantida deliberadamente neste projeto em vez de introduzir jsdom/Puppeteer como dependência.</p>
                 <div class="table-wrap"><table>
                     <tr><th>Área testada</th><th>Casos</th></tr>
                     <tr><td><code>Fmt.escapeHtml</code></td><td>Os 5 caracteres perigosos; <code>null</code>/<code>undefined</code> → string vazia.</td></tr>
                     <tr><td><code>Fmt.clamp</code></td><td>Limita nos dois sentidos.</td></tr>
                     <tr><td><code>Fmt.fmtHoursMinutes</code> / <code>formatAuditDuration</code></td><td>Formatos abaixo e acima do limiar de 1h/1min.</td></tr>
                     <tr><td><code>Fmt.statusBadge</code></td><td>Os 12 status conhecidos não caem no fallback "neutral"; desconhecido cai e não lança erro.</td></tr>
-                    <tr><td><code>Fmt.criticalityBadge</code> / <code>auditComplianceBadge</code></td><td>Mapeamento correto de classe CSS por valor; ausência de regra não lança erro.</td></tr>
+                    <tr><td><code>Fmt.criticalityBadge</code></td><td>Mapeamento correto de classe CSS por valor <strong>e</strong> escape de HTML (regressão da correção de XSS — era a única badge do arquivo sem <code>escapeHtml</code>).</td></tr>
+                    <tr><td><code>Fmt.auditComplianceBadge</code></td><td>Ausência de regra não lança erro.</td></tr>
                     <tr><td><code>Fmt.heatClass</code></td><td>As 5 faixas (0–4), incluindo os limites exatos das fronteiras (.25/.5/.75).</td></tr>
                     <tr><td><code>Fmt.metricClass</code></td><td>Ordem correta dos limiares warning/critical.</td></tr>
                     <tr><td><code>ChartService.sparkline</code></td><td>Lista vazia/<code>null</code> não lança (evita <code>Math.min</code> de array vazio); 1 ponto por valor; range zero (todos os valores iguais) não gera <code>NaN</code>.</td></tr>
                     <tr><td><code>ChartService.lineChart</code></td><td>1 círculo por linha de dado; nenhum <code>NaN</code> nas coordenadas geradas.</td></tr>
+                    <tr><td><code>RegistryPage._serializeField</code> / <code>_parseField</code></td><td>Round-trip dos 3 formatos de lista (<code>'commas'</code>, <code>'lines'</code>, <code>'pairs'</code>) e de campo numérico, incluindo lista vazia.</td></tr>
                 </table></div>
                 <h3>Como estender</h3>
-                <p>Ao adicionar uma função pura nova (sem <code>document</code>/<code>window</code>) a <code>dashboard-app.js</code>, adicione-a ao objeto exportado no fim do arquivo (<code>module.exports = { Fmt, ChartService, MinhaClasseNova }</code>) e um teste correspondente em <code>test_dashboard.js</code>. Para lógica nova no pipeline Python, adicione um teste em <code>test_server.py</code> na classe temática mais próxima (ou crie uma nova <code>class TestX(unittest.TestCase)</code>).</p>
+                <p>Ao adicionar uma função pura nova (sem <code>document</code>/<code>window</code>) a <code>dashboard-app.js</code>, adicione-a ao objeto exportado no fim do arquivo (<code>module.exports = { Fmt, ChartService, RegistryPage, MinhaClasseNova }</code>) e um teste correspondente em <code>test_dashboard.js</code>. Para lógica nova no pipeline Python, adicione um teste em <code>test_server.py</code> na classe temática mais próxima (ou crie uma nova <code>class TestX(unittest.TestCase)</code>) — para qualquer coisa que toque rede real (SSRF, timeouts), prefira IPs literais como nos testes de <code>TestAutomationAnywhereSsrfGuard</code>, nunca um hostname de verdade.</p>
             </section>
 
             <!-- ================================================================ -->
@@ -1042,7 +1100,7 @@ if (typeof module !== 'undefined' && module.exports) {
                 <div class="table-wrap"><table>
                     <tr><th>Controle</th><th>Onde / como</th></tr>
                     <tr><td>Servidor só local</td><td><code>HOST = '127.0.0.1'</code> em <code>server.py</code> — nunca escuta na rede.</td></tr>
-                    <tr><td>CSRF em rotas de mutação</td><td>Toda rota POST que muda estado exige o header <code>X-CSRF-Token</code> (<code>Handler._csrf_token_is_valid</code>, comparação em tempo constante via <code>hmac.compare_digest</code>), obtido em <code>GET /api/csrf-token</code> — token gerado uma vez por processo. Camada 2: <code>Handler._origin_is_allowed</code> rejeita qualquer <code>Origin</code> presente que não seja a própria origem do app. <code>/api/reload</code> deixou de ser GET por causa disso (uma GET com efeito colateral é disparável só com uma <code>&lt;img&gt;</code>).</td></tr>
+                    <tr><td>CSRF em rotas de mutação</td><td>Toda rota POST que muda estado exige o header <code>X-CSRF-Token</code> (<code>Handler._csrf_token_is_valid</code>, comparação em tempo constante via <code>hmac.compare_digest</code>), obtido em <code>GET /api/csrf-token</code> — token gerado uma vez por processo. No frontend, a classe <code>CsrfTokenStore</code> (dashboard-app.js) busca e cacheia esse token uma única vez (<code>CsrfTokenStore.get()</code>); o alias de topo <code>getCsrfToken</code> deixa <code>aa-integration.js</code> reaproveitá-lo pelo mesmo padrão de escopo compartilhado do resto do arquivo (ver <a href="#escopo-compartilhado">Escopo léxico compartilhado</a>). Camada 2: <code>Handler._origin_is_allowed</code> rejeita qualquer <code>Origin</code> presente que não seja a própria origem do app. <code>/api/reload</code> deixou de ser GET por causa disso (uma GET com efeito colateral é disparável só com uma <code>&lt;img&gt;</code>).</td></tr>
                     <tr><td>Bloqueio de dotfiles e directory listing</td><td><code>Handler._path_has_dotfile_segment</code> devolve 404 para qualquer segmento de caminho começando com "." (nunca mais serve <code>.git/</code>, <code>.DS_Store</code>) e <code>Handler.list_directory</code> é sobrescrito para nunca listar o conteúdo de uma pasta.</td></tr>
                     <tr><td>Content-Security-Policy</td><td><code>Handler.end_headers()</code>: <code>script-src</code> usa um <strong>nonce por requisição</strong> em vez de <code>'unsafe-inline'</code> — toda resposta <code>.html</code> passa por <code>_serve_html_with_nonce</code>, que injeta o nonce em cada <code>&lt;script&gt;</code> inline daquela página. <code>style-src</code> mantém <code>'unsafe-inline'</code> por trade-off deliberado (documentado no próprio código): remover exigiria reescrever toda a geração de <code>style="..."</code> dinâmico do frontend, e CSS injetado não executa JavaScript arbitrário.</td></tr>
                     <tr><td>Path traversal no Cadastro de RPAs</td><td><code>RpaRegistryStore.validate_payload</code> rejeita qualquer <code>dependencyFiles[].path</code> absoluto ou que escape da pasta do projeto (checado com <code>resolve()</code> + <code>relative_to()</code>); <code>DependencyAnalyzer._dependency_file_status</code> repete a mesma checagem no ponto de uso, como defesa em profundidade.</td></tr>
@@ -1089,7 +1147,7 @@ if (typeof module !== 'undefined' && module.exports) {
                 <h2>Como estender<a class="anchor-link" href="#extensao">#</a></h2>
                 <div class="table-wrap"><table>
                     <tr><th>Quero…</th><th>Onde mexer</th></tr>
-                    <tr><td>Adicionar uma RPA nova</td><td><code>config/rpa_metadata.json</code> (entrada em <code>rpas</code> + uma em <code>schedules</code> por horário) + criar a pasta de logs correspondente. Ver <a href="#config-cadastro">Cadastro</a>.</td></tr>
+                    <tr><td>Adicionar uma RPA nova</td><td>Pelo menu "Cadastro de RPAs" no próprio dashboard (cria a entrada em <code>rpas</code> e as regras de <code>schedules</code> automaticamente — ver <a href="#cadastro-rpas-visao-geral">Cadastro de RPAs</a>), ou editando <code>config/rpa_metadata.json</code> manualmente (ver <a href="#config-cadastro">schema do cadastro</a>). Em ambos os casos, ainda é preciso criar a pasta de logs correspondente para a RPA passar a ter execuções reais.</td></tr>
                     <tr><td>Adicionar uma página nova ao dashboard principal</td><td><code>&lt;section class="page"&gt;</code> + botão <code>.nav-link</code> em <code>index.html</code>, um método <code>renderNome()</code> numa classe <code>*Page</code> de <code>dashboard-app.js</code>, chamado a partir de <code>RpaOpsApp.renderAll()</code>.</td></tr>
                     <tr><td>Adicionar um indicador/KPI novo</td><td>Calcular no backend (dentro de <code>DatasetBuilder</code> ou <code>IndexBuilder</code>, conforme se for "de detalhe" ou "agregado") e expor no dicionário retornado — o frontend só precisa ler a chave nova, os dois arquivos são gerados juntos e sempre consistentes.</td></tr>
                     <tr><td>Mudar um limiar de alerta/severidade</td><td><code>STATE_SEVERITY</code> (severidade por estado) ou os parâmetros de <code>VmReliabilityClassifier._classify_vm_reliability</code>/lógica de <code>ScheduleMatcher._run_state</code>, em <code>server.py</code>.</td></tr>
