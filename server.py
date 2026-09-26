@@ -1112,313 +1112,336 @@ def get_data(mode=None):
 # basta apontar aaBaseUrl para ele: o mesmo código passa a fazer proxy real.
 # =============================================================================
 
-AA_PROXY_ALLOWED_PREFIXES = ('/v2/', '/v3/', '/v4/')
-AA_UPSTREAM_TIMEOUT = 8
+class AutomationAnywhereGateway:
+    """Encapsula toda a integração opcional com o Automation Anywhere 360
+    Control Room: config, autenticação, discovery de capability, Activity
+    List/detalhe e o proxy genérico para as demais capacidades.
 
-AA_MOCK_CAPABILITIES = {
-    'activity':    'AVAILABLE',
-    'audit':       'AVAILABLE',
-    'repository':  'AVAILABLE',
-    'scheduler':   'AVAILABLE',
-    'devices':     'AVAILABLE',
-    'packages':    'AVAILABLE',
-    'policy':      'FORBIDDEN',
-    'wlm':         'UNAVAILABLE',
-    'acc':         'UNAVAILABLE',
-    'botInsight':  'UNSUPPORTED',
-    'deploy':      'FORBIDDEN',
-}
+    Recebe `get_data_fn` por injeção (em vez de chamar `get_data()` global
+    diretamente) para que o script de teste local (test_server.py) possa
+    passar uma função fake e validar toda a lógica de mock sem depender do
+    parsing real de logs em disco.
 
-# Rotas reais (best-effort) usadas apenas para *discovery* de capacidade em
-# modo não-mock — a Automation Anywhere não documenta uma única rota "ping"
-# por módulo, então isso é uma aproximação razoável: qualquer resposta que
-# não seja 200 (403/404/5xx/timeout/formato inesperado) é classificada sem
-# derrubar a conexão. Ajuste aqui se a versão do Control Room do cliente usar
-# caminhos diferentes — o restante da integração não depende dos valores
-# exatos, só da classificação resultante.
-AA_CAPABILITY_PROBE = {
-    'audit':      ('GET', '/v2/audit/logs?page=0&size=1'),
-    'repository': ('GET', '/v2/repository/workspaces'),
-    'scheduler':  ('GET', '/v2/schedule/rules/list?page=0&size=1'),
-    'devices':    ('GET', '/v2/devices/list?page=0&size=1'),
-    'packages':   ('GET', '/v2/packages/list?page=0&size=1'),
-    'policy':     ('GET', '/v3/policies?page=0&size=1'),
-    'wlm':        ('GET', '/v2/wlm/queues?page=0&size=1'),
-    'acc':        ('GET', '/v2/acc/summary'),
-    'botInsight': ('GET', '/v2/insight/summary'),
-}
+    Nunca grava API Key, token ou header de autorização em disco, log ou
+    resposta de erro — eles trafegam só dentro da chamada, em memória, e são
+    descartados assim que ela termina. Sem Control Room real disponível para
+    testes, os métodos com "mock" no nome simulam respostas plausíveis da
+    API a partir dos próprios dados locais já carregados; quando uma Control
+    Room de verdade existir, basta apontar `aaBaseUrl` para ela — os mesmos
+    métodos passam a fazer proxy real (ver `is_mock`).
+    """
 
+    PROXY_ALLOWED_PREFIXES = ('/v2/', '/v3/', '/v4/')
+    UPSTREAM_TIMEOUT = 8
 
-def _aa_load_config():
-    """Config não-sensível (URL/usuário). Nunca lê/escreve segredo algum."""
-    base_url = os.environ.get('AA_BASE_URL', '')
-    username = os.environ.get('AA_USERNAME', '')
-    try:
-        raw = json.loads(AA_CONFIG_FILE.read_text(encoding='utf-8'))
-        base_url = base_url or raw.get('aaBaseUrl', '') or ''
-        username = username or raw.get('aaUsername', '') or ''
-    except (OSError, ValueError):
-        pass
-    return {'baseUrl': base_url.rstrip('/'), 'username': username}
+    MOCK_CAPABILITIES = {
+        'activity':    'AVAILABLE',
+        'audit':       'AVAILABLE',
+        'repository':  'AVAILABLE',
+        'scheduler':   'AVAILABLE',
+        'devices':     'AVAILABLE',
+        'packages':    'AVAILABLE',
+        'policy':      'FORBIDDEN',
+        'wlm':         'UNAVAILABLE',
+        'acc':         'UNAVAILABLE',
+        'botInsight':  'UNSUPPORTED',
+        'deploy':      'FORBIDDEN',
+    }
 
+    # Rotas reais (best-effort) usadas apenas para *discovery* de capacidade
+    # em modo não-mock — a Automation Anywhere não documenta uma única rota
+    # "ping" por módulo, então isso é uma aproximação razoável: qualquer
+    # resposta que não seja 200 (403/404/5xx/timeout/formato inesperado) é
+    # classificada sem derrubar a conexão. Ajuste aqui se a versão do
+    # Control Room do cliente usar caminhos diferentes — o restante da
+    # integração não depende dos valores exatos, só da classificação.
+    CAPABILITY_PROBE = {
+        'audit':      ('GET', '/v2/audit/logs?page=0&size=1'),
+        'repository': ('GET', '/v2/repository/workspaces'),
+        'scheduler':  ('GET', '/v2/schedule/rules/list?page=0&size=1'),
+        'devices':    ('GET', '/v2/devices/list?page=0&size=1'),
+        'packages':   ('GET', '/v2/packages/list?page=0&size=1'),
+        'policy':     ('GET', '/v3/policies?page=0&size=1'),
+        'wlm':        ('GET', '/v2/wlm/queues?page=0&size=1'),
+        'acc':        ('GET', '/v2/acc/summary'),
+        'botInsight': ('GET', '/v2/insight/summary'),
+    }
 
-def _aa_is_mock(base_url):
-    return not base_url or base_url.strip().lower() in ('mock', 'http://mock', 'mock://local')
+    def __init__(self, config_file, get_data_fn):
+        self.config_file = config_file
+        self.get_data_fn = get_data_fn
 
+    # ---- config -------------------------------------------------------
+    def load_config(self):
+        """Config não-sensível (URL/usuário). Nunca lê/escreve segredo algum."""
+        base_url = os.environ.get('AA_BASE_URL', '')
+        username = os.environ.get('AA_USERNAME', '')
+        try:
+            raw = json.loads(self.config_file.read_text(encoding='utf-8'))
+            base_url = base_url or raw.get('aaBaseUrl', '') or ''
+            username = username or raw.get('aaUsername', '') or ''
+        except (OSError, ValueError):
+            pass
+        return {'baseUrl': base_url.rstrip('/'), 'username': username}
 
-def _aa_mock_activities():
-    """Deriva um Activity List plausível a partir das execuções locais já
-    carregadas — o bastante para exercitar o motor de correlação com casos
-    reais de EXACT/HIGH_CONFIDENCE/PROBABLE/UNMATCHED sem inventar um Control
-    Room inteiro do zero."""
-    obs, _ = get_data()
-    rpas_by_id = {r['rpaId']: r for r in obs['rpas']}
-    status_map = {'SUCCESS': 'COMPLETED', 'WARNING': 'COMPLETED', 'ERROR': 'RUN_FAILED'}
-    sample = sorted(obs['executions'], key=lambda e: e['start'], reverse=True)[:180]
-    activities = []
-    for i, e in enumerate(sample):
-        rpa = rpas_by_id.get(e['rpaId'])
-        # O ID da atividade é deliberadamente independente do execution_id do
-        # log local — a maioria das integrações reais não compartilha uma
-        # chave única entre os dois sistemas, então o motor de correlação
-        # precisa mesmo cair no fallback (automação + janela de tempo + VM),
-        # exatamente como a Seção 13 do pedido prevê. Sem isso, todo par
-        # bateria como EXACT de forma artificial e nada testaria de verdade
-        # HIGH_CONFIDENCE/PROBABLE.
-        activity_device = e['machine']
-        if i % 25 == 24:
-            # ~4% dos casos: mesma automação, VM diferente da que rodou
-            # localmente — gera PROBABLE em vez de HIGH_CONFIDENCE.
-            other_vms = [v for v in obs['rpas'] if v['primaryVm'] != e['machine']]
-            activity_device = other_vms[0]['primaryVm'] if other_vms else e['machine']
-        activities.append({
-            'id': f"AA-{i:06d}",
-            'automationId': e['rpaId'],
-            'automationName': rpa['name'] if rpa else e['process'],
-            'deploymentId': f"DEP-{i:06d}",
-            'status': status_map.get(e['status'], 'COMPLETED'),
-            'progress': 100,
-            'currentLine': None,
-            'created': e['start'], 'started': e['start'], 'ended': e['end'], 'modified': e['end'],
-            'durationMs': int(round(e['durationMin'] * 60000)),
-            'device': activity_device, 'runner': activity_device,
-            'priority': 'MEDIUM', 'executionType': 'SCHEDULED',
-            'error': None if e['status'] != 'ERROR' else {
-                'code': 'BOT_ERROR',
-                'message': 'Falha reportada pelo Control Room (simulado — Activity API real traria o erro oficial).',
-            },
-        })
-    # Entradas só-Control-Room (sem log local correspondente) para exercitar
-    # o estado UNMATCHED do motor de correlação de forma honesta.
-    snap = obs['snapshot']
-    for j in range(3):
-        activities.append({
-            'id': f"AA-SYN-{j}", 'automationId': 'RPA-PILOTO', 'automationName': 'Bot Piloto (somente Control Room)',
-            'deploymentId': f"DEP-SYN-{j}", 'status': 'COMPLETED', 'progress': 100, 'currentLine': None,
-            'created': snap, 'started': snap, 'ended': snap, 'modified': snap,
-            'durationMs': 60000, 'device': 'GBS02I356857N99', 'runner': 'GBS02I356857N99',
-            'priority': 'LOW', 'executionType': 'MANUAL', 'error': None,
-        })
-    return activities
+    def is_mock(self, base_url):
+        return not base_url or base_url.strip().lower() in ('mock', 'http://mock', 'mock://local')
 
+    # ---- transporte HTTP com a Control Room real -----------------------
+    def _forward(self, method, url, headers, body_bytes):
+        """Encaminha uma chamada ao Control Room real. Nunca loga
+        headers/corpo (podem conter o token) — só o código de status e, em
+        erro, uma mensagem genérica sem o payload original."""
+        req = urllib.request.Request(url, data=body_bytes, method=method)
+        for k, v in headers.items():
+            req.add_header(k, v)
+        try:
+            with urllib.request.urlopen(req, timeout=self.UPSTREAM_TIMEOUT) as resp:
+                return resp.status, resp.read(), None
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read(), None
+        except urllib.error.URLError as exc:
+            return 0, None, f'NETWORK_ERROR: {exc.reason}'
+        except TimeoutError:
+            return 0, None, 'NETWORK_ERROR: timeout'
 
-def _aa_forward(method, url, headers, body_bytes):
-    """Encaminha uma chamada ao Control Room real. Nunca loga headers/corpo
-    (podem conter o token) — só o código de status e, em erro, uma mensagem
-    genérica sem o payload original."""
-    req = urllib.request.Request(url, data=body_bytes, method=method)
-    for k, v in headers.items():
-        req.add_header(k, v)
-    try:
-        with urllib.request.urlopen(req, timeout=AA_UPSTREAM_TIMEOUT) as resp:
-            return resp.status, resp.read(), None
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read(), None
-    except urllib.error.URLError as exc:
-        return 0, None, f'NETWORK_ERROR: {exc.reason}'
-    except TimeoutError:
-        return 0, None, 'NETWORK_ERROR: timeout'
+    def _classify_status(self, status, network_error):
+        if network_error:
+            return 'TEMPORARY_ERROR'
+        if 200 <= status < 300:
+            return 'AVAILABLE'
+        if status == 403:
+            return 'FORBIDDEN'
+        if status in (404, 501):
+            return 'UNAVAILABLE'
+        if 500 <= status < 600:
+            return 'TEMPORARY_ERROR'
+        return 'UNSUPPORTED'
 
+    # ---- mock: deriva dados plausíveis do dataset local -----------------
+    def _mock_activities(self):
+        """Deriva um Activity List plausível a partir das execuções locais
+        já carregadas — o bastante para exercitar o motor de correlação com
+        casos reais de EXACT/HIGH_CONFIDENCE/PROBABLE/UNMATCHED sem inventar
+        um Control Room inteiro do zero."""
+        obs, _ = self.get_data_fn()
+        rpas_by_id = {r['rpaId']: r for r in obs['rpas']}
+        status_map = {'SUCCESS': 'COMPLETED', 'WARNING': 'COMPLETED', 'ERROR': 'RUN_FAILED'}
+        sample = sorted(obs['executions'], key=lambda e: e['start'], reverse=True)[:180]
+        activities = []
+        for i, e in enumerate(sample):
+            rpa = rpas_by_id.get(e['rpaId'])
+            # O ID da atividade é deliberadamente independente do
+            # execution_id do log local — a maioria das integrações reais
+            # não compartilha uma chave única entre os dois sistemas, então
+            # o motor de correlação precisa mesmo cair no fallback
+            # (automação + janela de tempo + VM), exatamente como a Seção 13
+            # do pedido de upgrade prevê. Sem isso, todo par bateria como
+            # EXACT de forma artificial e nada testaria de verdade
+            # HIGH_CONFIDENCE/PROBABLE.
+            activity_device = e['machine']
+            if i % 25 == 24:
+                # ~4% dos casos: mesma automação, VM diferente da que rodou
+                # localmente — gera PROBABLE em vez de HIGH_CONFIDENCE.
+                other_vms = [v for v in obs['rpas'] if v['primaryVm'] != e['machine']]
+                activity_device = other_vms[0]['primaryVm'] if other_vms else e['machine']
+            activities.append({
+                'id': f"AA-{i:06d}",
+                'automationId': e['rpaId'],
+                'automationName': rpa['name'] if rpa else e['process'],
+                'deploymentId': f"DEP-{i:06d}",
+                'status': status_map.get(e['status'], 'COMPLETED'),
+                'progress': 100,
+                'currentLine': None,
+                'created': e['start'], 'started': e['start'], 'ended': e['end'], 'modified': e['end'],
+                'durationMs': int(round(e['durationMin'] * 60000)),
+                'device': activity_device, 'runner': activity_device,
+                'priority': 'MEDIUM', 'executionType': 'SCHEDULED',
+                'error': None if e['status'] != 'ERROR' else {
+                    'code': 'BOT_ERROR',
+                    'message': 'Falha reportada pelo Control Room (simulado — Activity API real traria o erro oficial).',
+                },
+            })
+        # Entradas só-Control-Room (sem log local correspondente) para
+        # exercitar o estado UNMATCHED do motor de correlação de forma honesta.
+        snap = obs['snapshot']
+        for j in range(3):
+            activities.append({
+                'id': f"AA-SYN-{j}", 'automationId': 'RPA-PILOTO', 'automationName': 'Bot Piloto (somente Control Room)',
+                'deploymentId': f"DEP-SYN-{j}", 'status': 'COMPLETED', 'progress': 100, 'currentLine': None,
+                'created': snap, 'started': snap, 'ended': snap, 'modified': snap,
+                'durationMs': 60000, 'device': 'GBS02I356857N99', 'runner': 'GBS02I356857N99',
+                'priority': 'LOW', 'executionType': 'MANUAL', 'error': None,
+            })
+        return activities
 
-def _aa_classify_status(status, network_error):
-    if network_error:
-        return 'TEMPORARY_ERROR'
-    if 200 <= status < 300:
-        return 'AVAILABLE'
-    if status == 403:
-        return 'FORBIDDEN'
-    if status in (404, 501):
-        return 'UNAVAILABLE'
-    if 500 <= status < 600:
-        return 'TEMPORARY_ERROR'
-    return 'UNSUPPORTED'
-
-
-def _aa_authenticate(base_url, username, api_key):
-    if _aa_is_mock(base_url):
-        if not api_key or len(api_key.strip()) < 6:
-            return {'ok': False, 'error': 'AUTH_ERROR', 'message': 'API Key simulada precisa ter ao menos 6 caracteres.'}
-        return {
-            'ok': True,
-            'token': f'MOCK-TOKEN-{abs(hash(api_key)) % 1_000_000:06d}',
-            'mock': True,
-            'controlRoom': 'MOCK · ambiente de simulação local',
-            'username': username or 'svc_rpa_observability',
-        }
-    url = f'{base_url}/v2/authentication'
-    body = json.dumps({'username': username, 'apiKey': api_key}).encode('utf-8')
-    status, raw, net_err = _aa_forward('POST', url, {'Content-Type': 'application/json'}, body)
-    if net_err:
-        return {'ok': False, 'error': 'NETWORK_ERROR', 'message': 'Não foi possível alcançar a Control Room.'}
-    if status == 403 or status == 401:
-        return {'ok': False, 'error': 'AUTH_ERROR', 'message': 'API Key ou usuário inválidos.'}
-    if status < 200 or status >= 300:
-        return {'ok': False, 'error': 'NETWORK_ERROR', 'message': f'Control Room retornou HTTP {status}.'}
-    try:
-        data = json.loads(raw.decode('utf-8'))
-    except (ValueError, AttributeError):
-        return {'ok': False, 'error': 'AUTH_ERROR', 'message': 'Resposta inesperada da Control Room.'}
-    token = data.get('token')
-    if not token:
-        return {'ok': False, 'error': 'AUTH_ERROR', 'message': 'Control Room não retornou token.'}
-    return {'ok': True, 'token': token, 'mock': False, 'controlRoom': base_url, 'username': username}
-
-
-def _aa_discover(base_url, token):
-    if _aa_is_mock(base_url):
-        return {'ok': True, 'capabilities': dict(AA_MOCK_CAPABILITIES)}
-    capabilities = {'activity': 'AVAILABLE'}  # já validado pela autenticação + Activity List
-    for name, (method, path) in AA_CAPABILITY_PROBE.items():
-        status, _raw, net_err = _aa_forward(method, base_url + path, {'X-Authorization': token}, None)
-        capabilities[name] = _aa_classify_status(status, net_err)
-    return {'ok': True, 'capabilities': capabilities}
-
-
-def _aa_activity_list(base_url, token, filters):
-    if _aa_is_mock(base_url):
-        rows = _aa_mock_activities()
-        status_filter = (filters or {}).get('status')
-        if status_filter:
-            rows = [r for r in rows if r['status'] == status_filter]
-        page = int((filters or {}).get('page') or 0)
-        size = int((filters or {}).get('size') or 50)
-        start = page * size
-        return {'ok': True, 'total': len(rows), 'page': page, 'size': size, 'list': rows[start:start + size]}
-    url = f'{base_url}/v3/activity/list'
-    body = json.dumps(filters or {}).encode('utf-8')
-    status, raw, net_err = _aa_forward('POST', url, {'Content-Type': 'application/json', 'X-Authorization': token}, body)
-    if net_err:
-        return {'ok': False, 'error': 'NETWORK_ERROR'}
-    if status in (401, 403):
-        return {'ok': False, 'error': 'SESSION_EXPIRED'}
-    if status < 200 or status >= 300:
-        return {'ok': False, 'error': 'TEMPORARY_ERROR'}
-    try:
-        data = json.loads(raw.decode('utf-8'))
-    except (ValueError, AttributeError):
-        return {'ok': False, 'error': 'UNSUPPORTED'}
-    return {'ok': True, 'total': data.get('page', {}).get('totalElements', len(data.get('list', []))), 'list': data.get('list', [])}
-
-
-def _aa_activity_detail(base_url, token, activity_id):
-    if _aa_is_mock(base_url):
-        rows = _aa_mock_activities()
-        found = next((r for r in rows if r['id'] == activity_id), None)
-        if not found:
-            return {'ok': False, 'error': 'UNAVAILABLE'}
-        return {'ok': True, 'activity': found}
-    url = f'{base_url}/v3/activity/execution/{activity_id}'
-    status, raw, net_err = _aa_forward('GET', url, {'X-Authorization': token}, None)
-    if net_err:
-        return {'ok': False, 'error': 'NETWORK_ERROR'}
-    if status in (401, 403):
-        return {'ok': False, 'error': 'SESSION_EXPIRED'}
-    if status == 404:
+    def _mock_generic(self, path, method='GET', body=None):
+        """Simula as capacidades além de Activity a partir dos próprios
+        dados locais já carregados, para permitir testar cada nova tela de
+        ponta a ponta sem um Control Room real. Classificações (policy
+        FORBIDDEN, wlm/acc UNAVAILABLE) ficam coerentes com MOCK_CAPABILITIES."""
+        obs, idx = self.get_data_fn()
+        if method in ('PATCH', 'PUT', 'POST') and 'schedule' in path:
+            # Simula o ack de habilitar/desabilitar um schedule — não altera
+            # nenhuma agenda real local (Seção 15: "não substituir a agenda atual").
+            enabled = bool((body or {}).get('enabled', True))
+            return {'ok': True, 'data': {'id': path.rsplit('/', 1)[-1], 'status': 'ENABLED' if enabled else 'DISABLED', 'simulated': True}}
+        if method == 'POST' and 'deploy' in path:
+            return {'ok': False, 'error': 'FORBIDDEN', 'message': 'Bot Deploy não permitido para esta API Key simulada.'}
+        if 'device' in path:
+            rows = [{
+                'id': f"DEV-{v['name']}", 'hostName': v['name'],
+                'status': 'CONNECTED' if v['rdp'] == 'CONNECTED' else 'DISCONNECTED',
+                'poolName': 'Pool Produção', 'cpuPercent': v['cpu'], 'memoryPercent': v['memory'], 'diskPercent': v['disk'],
+            } for v in idx['vms']]
+            return {'ok': True, 'data': {'list': rows}}
+        if 'schedul' in path:
+            rid_map = {r['rpaId']: r for r in obs['rpas']}
+            rows = [{
+                'id': s['scheduleId'], 'automationId': s['rpaId'],
+                'automationName': rid_map.get(s['rpaId'], {}).get('name', s['process']),
+                'scheduledTime': s['scheduledTime'], 'calendar': s['calendar'], 'status': 'ENABLED',
+            } for s in obs['schedules']]
+            return {'ok': True, 'data': {'list': rows}}
+        if 'repositor' in path or 'package' in path:
+            rows = []
+            for r in obs['rpas']:
+                for dep in r.get('dependencyFiles', []):
+                    rows.append({'packageName': dep['label'], 'path': dep['path'], 'automationId': r['rpaId'], 'automationName': r['name']})
+            return {'ok': True, 'data': {'list': rows}}
+        if 'audit' in path:
+            rows = []
+            rid_map = {r['rpaId']: r for r in obs['rpas']}
+            for rid, deps in (obs.get('dependencyStatus') or {}).items():
+                rpa = rid_map.get(rid)
+                for d in deps:
+                    if not d.get('exists'):
+                        continue
+                    rows.append({
+                        'timestamp': d['lastModified'], 'user': 'automation-deploy-svc', 'action': 'PACKAGE_UPDATED',
+                        'target': d['label'], 'automationId': rid, 'automationName': rpa['name'] if rpa else rid,
+                        'signal': d.get('signal'), 'errorsBefore30d': d.get('errorsBefore30d'),
+                        'errorsAfter30d': d.get('errorsAfter30d'), 'firstErrorAfter': d.get('firstErrorAfter'),
+                    })
+            rows.sort(key=lambda r: r['timestamp'], reverse=True)
+            return {'ok': True, 'data': {'list': rows}}
+        if 'polic' in path:
+            return {'ok': False, 'error': 'FORBIDDEN'}
         return {'ok': False, 'error': 'UNAVAILABLE'}
-    if status < 200 or status >= 300:
-        return {'ok': False, 'error': 'TEMPORARY_ERROR'}
-    try:
-        return {'ok': True, 'activity': json.loads(raw.decode('utf-8'))}
-    except (ValueError, AttributeError):
-        return {'ok': False, 'error': 'UNSUPPORTED'}
+
+    # ---- API pública consumida pelo Handler ----------------------------
+    def authenticate(self, base_url, username, api_key):
+        if self.is_mock(base_url):
+            if not api_key or len(api_key.strip()) < 6:
+                return {'ok': False, 'error': 'AUTH_ERROR', 'message': 'API Key simulada precisa ter ao menos 6 caracteres.'}
+            return {
+                'ok': True,
+                'token': f'MOCK-TOKEN-{abs(hash(api_key)) % 1_000_000:06d}',
+                'mock': True,
+                'controlRoom': 'MOCK · ambiente de simulação local',
+                'username': username or 'svc_rpa_observability',
+            }
+        url = f'{base_url}/v2/authentication'
+        body = json.dumps({'username': username, 'apiKey': api_key}).encode('utf-8')
+        status, raw, net_err = self._forward('POST', url, {'Content-Type': 'application/json'}, body)
+        if net_err:
+            return {'ok': False, 'error': 'NETWORK_ERROR', 'message': 'Não foi possível alcançar a Control Room.'}
+        if status == 403 or status == 401:
+            return {'ok': False, 'error': 'AUTH_ERROR', 'message': 'API Key ou usuário inválidos.'}
+        if status < 200 or status >= 300:
+            return {'ok': False, 'error': 'NETWORK_ERROR', 'message': f'Control Room retornou HTTP {status}.'}
+        try:
+            data = json.loads(raw.decode('utf-8'))
+        except (ValueError, AttributeError):
+            return {'ok': False, 'error': 'AUTH_ERROR', 'message': 'Resposta inesperada da Control Room.'}
+        token = data.get('token')
+        if not token:
+            return {'ok': False, 'error': 'AUTH_ERROR', 'message': 'Control Room não retornou token.'}
+        return {'ok': True, 'token': token, 'mock': False, 'controlRoom': base_url, 'username': username}
+
+    def discover(self, base_url, token):
+        if self.is_mock(base_url):
+            return {'ok': True, 'capabilities': dict(self.MOCK_CAPABILITIES)}
+        capabilities = {'activity': 'AVAILABLE'}  # já validado pela autenticação + Activity List
+        for name, (method, path) in self.CAPABILITY_PROBE.items():
+            status, _raw, net_err = self._forward(method, base_url + path, {'X-Authorization': token}, None)
+            capabilities[name] = self._classify_status(status, net_err)
+        return {'ok': True, 'capabilities': capabilities}
+
+    def activity_list(self, base_url, token, filters):
+        if self.is_mock(base_url):
+            rows = self._mock_activities()
+            status_filter = (filters or {}).get('status')
+            if status_filter:
+                rows = [r for r in rows if r['status'] == status_filter]
+            page = int((filters or {}).get('page') or 0)
+            size = int((filters or {}).get('size') or 50)
+            start = page * size
+            return {'ok': True, 'total': len(rows), 'page': page, 'size': size, 'list': rows[start:start + size]}
+        url = f'{base_url}/v3/activity/list'
+        body = json.dumps(filters or {}).encode('utf-8')
+        status, raw, net_err = self._forward('POST', url, {'Content-Type': 'application/json', 'X-Authorization': token}, body)
+        if net_err:
+            return {'ok': False, 'error': 'NETWORK_ERROR'}
+        if status in (401, 403):
+            return {'ok': False, 'error': 'SESSION_EXPIRED'}
+        if status < 200 or status >= 300:
+            return {'ok': False, 'error': 'TEMPORARY_ERROR'}
+        try:
+            data = json.loads(raw.decode('utf-8'))
+        except (ValueError, AttributeError):
+            return {'ok': False, 'error': 'UNSUPPORTED'}
+        return {'ok': True, 'total': data.get('page', {}).get('totalElements', len(data.get('list', []))), 'list': data.get('list', [])}
+
+    def activity_detail(self, base_url, token, activity_id):
+        if self.is_mock(base_url):
+            rows = self._mock_activities()
+            found = next((r for r in rows if r['id'] == activity_id), None)
+            if not found:
+                return {'ok': False, 'error': 'UNAVAILABLE'}
+            return {'ok': True, 'activity': found}
+        url = f'{base_url}/v3/activity/execution/{activity_id}'
+        status, raw, net_err = self._forward('GET', url, {'X-Authorization': token}, None)
+        if net_err:
+            return {'ok': False, 'error': 'NETWORK_ERROR'}
+        if status in (401, 403):
+            return {'ok': False, 'error': 'SESSION_EXPIRED'}
+        if status == 404:
+            return {'ok': False, 'error': 'UNAVAILABLE'}
+        if status < 200 or status >= 300:
+            return {'ok': False, 'error': 'TEMPORARY_ERROR'}
+        try:
+            return {'ok': True, 'activity': json.loads(raw.decode('utf-8'))}
+        except (ValueError, AttributeError):
+            return {'ok': False, 'error': 'UNSUPPORTED'}
+
+    def generic_proxy(self, base_url, token, method, path, body):
+        """Proxy genérico para capacidades além de Activity (Repository,
+        Scheduler, Devices, Audit, Packages, Policy, WLM, ACC, BotInsight).
+        Restrito a prefixos /v2, /v3, /v4 — nunca repassa URL arbitrária."""
+        if not any(path.startswith(p) for p in self.PROXY_ALLOWED_PREFIXES):
+            return {'ok': False, 'error': 'UNSUPPORTED', 'message': 'Caminho fora da allowlist da integração.'}
+        if self.is_mock(base_url):
+            return self._mock_generic(path, method, body)
+        headers = {'X-Authorization': token}
+        body_bytes = None
+        if body is not None:
+            headers['Content-Type'] = 'application/json'
+            body_bytes = json.dumps(body).encode('utf-8')
+        status, raw, net_err = self._forward(method, base_url + path, headers, body_bytes)
+        classification = self._classify_status(status, net_err)
+        if classification != 'AVAILABLE':
+            return {'ok': False, 'error': classification}
+        try:
+            return {'ok': True, 'data': json.loads(raw.decode('utf-8'))}
+        except (ValueError, AttributeError):
+            return {'ok': False, 'error': 'UNSUPPORTED'}
 
 
-def _aa_mock_generic(path, method='GET', body=None):
-    """Simula as capacidades além de Activity a partir dos próprios dados
-    locais já carregados, para permitir testar cada nova tela de ponta a
-    ponta sem um Control Room real. Classificações (policy FORBIDDEN, wlm/acc
-    UNAVAILABLE) ficam coerentes com AA_MOCK_CAPABILITIES."""
-    obs, idx = get_data()
-    if method in ('PATCH', 'PUT', 'POST') and 'schedule' in path:
-        # Simula o ack de habilitar/desabilitar um schedule — não altera
-        # nenhuma agenda real local (Seção 15: "não substituir a agenda atual").
-        enabled = bool((body or {}).get('enabled', True))
-        return {'ok': True, 'data': {'id': path.rsplit('/', 1)[-1], 'status': 'ENABLED' if enabled else 'DISABLED', 'simulated': True}}
-    if method == 'POST' and 'deploy' in path:
-        return {'ok': False, 'error': 'FORBIDDEN', 'message': 'Bot Deploy não permitido para esta API Key simulada.'}
-    if 'device' in path:
-        rows = [{
-            'id': f"DEV-{v['name']}", 'hostName': v['name'],
-            'status': 'CONNECTED' if v['rdp'] == 'CONNECTED' else 'DISCONNECTED',
-            'poolName': 'Pool Produção', 'cpuPercent': v['cpu'], 'memoryPercent': v['memory'], 'diskPercent': v['disk'],
-        } for v in idx['vms']]
-        return {'ok': True, 'data': {'list': rows}}
-    if 'schedul' in path:
-        rid_map = {r['rpaId']: r for r in obs['rpas']}
-        rows = [{
-            'id': s['scheduleId'], 'automationId': s['rpaId'],
-            'automationName': rid_map.get(s['rpaId'], {}).get('name', s['process']),
-            'scheduledTime': s['scheduledTime'], 'calendar': s['calendar'], 'status': 'ENABLED',
-        } for s in obs['schedules']]
-        return {'ok': True, 'data': {'list': rows}}
-    if 'repositor' in path or 'package' in path:
-        rows = []
-        for r in obs['rpas']:
-            for dep in r.get('dependencyFiles', []):
-                rows.append({'packageName': dep['label'], 'path': dep['path'], 'automationId': r['rpaId'], 'automationName': r['name']})
-        return {'ok': True, 'data': {'list': rows}}
-    if 'audit' in path:
-        rows = []
-        rid_map = {r['rpaId']: r for r in obs['rpas']}
-        for rid, deps in (obs.get('dependencyStatus') or {}).items():
-            rpa = rid_map.get(rid)
-            for d in deps:
-                if not d.get('exists'):
-                    continue
-                rows.append({
-                    'timestamp': d['lastModified'], 'user': 'automation-deploy-svc', 'action': 'PACKAGE_UPDATED',
-                    'target': d['label'], 'automationId': rid, 'automationName': rpa['name'] if rpa else rid,
-                    'signal': d.get('signal'), 'errorsBefore30d': d.get('errorsBefore30d'),
-                    'errorsAfter30d': d.get('errorsAfter30d'), 'firstErrorAfter': d.get('firstErrorAfter'),
-                })
-        rows.sort(key=lambda r: r['timestamp'], reverse=True)
-        return {'ok': True, 'data': {'list': rows}}
-    if 'polic' in path:
-        return {'ok': False, 'error': 'FORBIDDEN'}
-    return {'ok': False, 'error': 'UNAVAILABLE'}
-
-
-def _aa_generic_proxy(base_url, token, method, path, body):
-    """Proxy genérico para capacidades além de Activity (Repository,
-    Scheduler, Devices, Audit, Packages, Policy, WLM, ACC, BotInsight).
-    Restrito a prefixos /v2, /v3, /v4 — nunca repassa URL arbitrária."""
-    if not any(path.startswith(p) for p in AA_PROXY_ALLOWED_PREFIXES):
-        return {'ok': False, 'error': 'UNSUPPORTED', 'message': 'Caminho fora da allowlist da integração.'}
-    if _aa_is_mock(base_url):
-        return _aa_mock_generic(path, method, body)
-    headers = {'X-Authorization': token}
-    body_bytes = None
-    if body is not None:
-        headers['Content-Type'] = 'application/json'
-        body_bytes = json.dumps(body).encode('utf-8')
-    status, raw, net_err = _aa_forward(method, base_url + path, headers, body_bytes)
-    classification = _aa_classify_status(status, net_err)
-    if classification != 'AVAILABLE':
-        return {'ok': False, 'error': classification}
-    try:
-        return {'ok': True, 'data': json.loads(raw.decode('utf-8'))}
-    except (ValueError, AttributeError):
-        return {'ok': False, 'error': 'UNSUPPORTED'}
+# Instância única do módulo — o Handler (stateless por natureza, uma
+# instância por requisição do http.server) delega a ela em vez de duplicar
+# lógica. test_server.py instancia sua própria cópia com get_data_fn fake.
+aa_gateway = AutomationAnywhereGateway(AA_CONFIG_FILE, get_data)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -1463,11 +1486,11 @@ class Handler(SimpleHTTPRequestHandler):
         # ---- Automation Anywhere (opcional) — só responde a rotas /api/aa/*,
         # nunca é consultado pelo pipeline de dados existente acima. ----
         if path == '/api/aa/config':
-            return self._send(json.dumps({'ok': True, **_aa_load_config()}, ensure_ascii=False), 'application/json; charset=utf-8')
+            return self._send(json.dumps({'ok': True, **aa_gateway.load_config()}, ensure_ascii=False), 'application/json; charset=utf-8')
         if path.startswith('/api/aa/activity/execution/'):
             activity_id = path.rsplit('/', 1)[-1]
             base_url, token = self._aa_ctx_from_headers()
-            return self._send_json(_aa_activity_detail(base_url, token, activity_id))
+            return self._send_json(aa_gateway.activity_detail(base_url, token, activity_id))
         return super().do_GET()
 
     def do_POST(self):
@@ -1483,14 +1506,14 @@ class Handler(SimpleHTTPRequestHandler):
             payload = {}
         if path == '/api/aa/authenticate':
             base_url = (payload.get('baseUrl') or '').rstrip('/')
-            return self._send_json(_aa_authenticate(base_url, payload.get('username') or '', payload.get('apiKey') or ''))
+            return self._send_json(aa_gateway.authenticate(base_url, payload.get('username') or '', payload.get('apiKey') or ''))
         base_url, token = self._aa_ctx_from_headers()
         if path == '/api/aa/discover':
-            return self._send_json(_aa_discover(base_url, token))
+            return self._send_json(aa_gateway.discover(base_url, token))
         if path == '/api/aa/activity/list':
-            return self._send_json(_aa_activity_list(base_url, token, payload.get('filters') or {}))
+            return self._send_json(aa_gateway.activity_list(base_url, token, payload.get('filters') or {}))
         if path == '/api/aa/proxy':
-            return self._send_json(_aa_generic_proxy(base_url, token, payload.get('method') or 'GET', payload.get('path') or '', payload.get('body')))
+            return self._send_json(aa_gateway.generic_proxy(base_url, token, payload.get('method') or 'GET', payload.get('path') or '', payload.get('body')))
         self.send_response(404); self.end_headers()
 
     def _aa_ctx_from_headers(self):
