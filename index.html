@@ -524,7 +524,7 @@
         /* Cada grade de KPIs tem uma contagem fixa de cards conhecida —
            coluna por coluna sem sobrar linha incompleta (que deixaria vão
            vazio, o mesmo problema já corrigido no .grid-main). */
-        #alertKpis, #alertContextKpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        #alertKpis, #alertContextKpis, #executionKpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
         #vmKpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 
         .grid-main {
@@ -806,6 +806,24 @@
         .progress-fill.success { background: var(--success); }
         .progress-fill.warning { background: var(--warning); }
         .progress-fill.danger { background: var(--danger); }
+
+        .composition-bar {
+            display: flex;
+            width: 100%;
+            height: 8px;
+            border-radius: 999px;
+            overflow: hidden;
+            background: var(--panel-3);
+        }
+
+        .composition-bar span {
+            display: block;
+            height: 100%;
+        }
+
+        .composition-bar span.success { background: var(--success); }
+        .composition-bar span.warning { background: var(--warning); }
+        .composition-bar span.danger { background: var(--danger); }
 
         /* ---------------------------------------------------------------------
            Timeline diária de execuções — grade hora a hora, caixas de
@@ -1451,31 +1469,6 @@
             font-size: 10px;
         }
 
-        .status-ring {
-            --value: 90;
-            width: 96px;
-            height: 96px;
-            border-radius: 50%;
-            display: grid;
-            place-items: center;
-            background: conic-gradient(var(--success) calc(var(--value) * 1%), var(--panel-3) 0);
-            position: relative;
-        }
-
-        .status-ring::after {
-            content: "";
-            position: absolute;
-            inset: 8px;
-            border-radius: 50%;
-            background: var(--panel);
-        }
-
-        .status-ring strong {
-            position: relative;
-            z-index: 1;
-            font-size: 18px;
-        }
-
 
 
         /* ---------------------------------------------------------------------
@@ -1923,7 +1916,7 @@
             .topbar { padding: 0 16px; }
             .snapshot-pill { display: none; }
             .search-box { flex: 1; width: auto; }
-            .grid-kpis, #alertKpis, #alertContextKpis, #vmKpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .grid-kpis, #alertKpis, #alertContextKpis, #vmKpis, #executionKpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .vm-grid { grid-template-columns: 1fr; }
             .page-heading { flex-direction: column; }
             .step-row { grid-template-columns: 28px 1fr 80px; }
@@ -1932,7 +1925,7 @@
         }
 
         @media (max-width: 480px) {
-            .grid-kpis, #alertKpis, #alertContextKpis, #vmKpis { grid-template-columns: 1fr; }
+            .grid-kpis, #alertKpis, #alertContextKpis, #vmKpis, #executionKpis { grid-template-columns: 1fr; }
             .detail-hero { grid-template-columns: 1fr; }
         }
     </style>
@@ -2319,28 +2312,18 @@
                         </div>
                     </div>
 
-                    <div class="grid grid-2">
-                        <article class="card">
-                            <div class="card-header">
-                                <div>
-                                    <h2>Taxa diária de sucesso</h2>
-                                    <p>Percentual de execuções SUCCESS por dia.</p>
-                                </div>
-                                <span class="badge success">Meta operacional ≥ 95%</span>
-                            </div>
-                            <div class="card-body chart-canvas-wrap"><canvas id="successTrendChart"></canvas></div>
-                        </article>
+                    <div class="grid grid-kpis" id="executionKpis"></div>
 
-                        <article class="card">
-                            <div class="card-header">
-                                <div>
-                                    <h2>Composição das execuções</h2>
-                                    <p>SUCCESS, WARNING e ERROR no período exibido.</p>
-                                </div>
+                    <article class="card" style="margin-top:14px">
+                        <div class="card-header">
+                            <div>
+                                <h2>Taxa diária de sucesso</h2>
+                                <p>Percentual de execuções SUCCESS por dia.</p>
                             </div>
-                            <div class="card-body" id="statusComposition"></div>
-                        </article>
-                    </div>
+                            <span class="badge success">Meta operacional ≥ 95%</span>
+                        </div>
+                        <div class="card-body chart-canvas-wrap"><canvas id="successTrendChart"></canvas></div>
+                    </article>
 
                     <div class="grid grid-2" style="margin-top:14px">
                         <article class="card">
@@ -2830,8 +2813,19 @@
             $$('.page').forEach(page => page.classList.toggle('active', page.id === `page-${pageName}`));
             document.body.classList.remove('sidebar-open');
             window.scrollTo({ top: 0, behavior: 'smooth' });
-            // Larguras só ficam mensuráveis depois que a página vira visível.
+            // Larguras só ficam mensuráveis depois que a página vira visível:
+            // gráficos Chart.js construídos enquanto a página estava oculta
+            // (display:none) herdam um tamanho de canvas obsoleto e nunca se
+            // realinham sozinhos — precisam de um resize() explícito aqui.
             refreshOverflowHints();
+            // Um único rAF às vezes ainda cai antes do reflow terminar (a
+            // troca de classe .active só é aplicada de fato no frame
+            // seguinte) — o duplo rAF garante que o layout já assentou.
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    Object.values(chartRegistry).forEach(chart => chart.resize());
+                });
+            });
         }
 
         /* macOS (e outros) esconde a barra de rolagem até o hover/gesto — sem
@@ -3400,32 +3394,56 @@
             });
         }
 
-        function renderStatusComposition() {
-            const total = DATA.trend.reduce((a, d) => a + d.success + d.warning + d.error, 0);
-            const success = DATA.trend.reduce((a, d) => a + d.success, 0);
-            const warning = DATA.trend.reduce((a, d) => a + d.warning, 0);
-            const error = DATA.trend.reduce((a, d) => a + d.error, 0);
-            const rows = [
-                ['SUCCESS', success, 'success'],
-                ['WARNING', warning, 'warning'],
-                ['ERROR', error, 'danger']
-            ];
-            $('#statusComposition').innerHTML = `
-                <div style="display:grid;grid-template-columns:130px 1fr;gap:20px;align-items:center">
-                    <div class="status-ring" style="--value:${Math.round(success/total*100)}">
-                        <strong>${Math.round(success/total*100)}%</strong>
+        function renderExecutionKpis() {
+            const trend = DATA.trend || [];
+            const total = trend.reduce((a, d) => a + d.success + d.warning + d.error, 0);
+            const success = trend.reduce((a, d) => a + d.success, 0);
+            const warning = trend.reduce((a, d) => a + d.warning, 0);
+            const error = trend.reduce((a, d) => a + d.error, 0);
+            const days = trend.length || 1;
+            const avgSuccessRate = trend.length ? trend.reduce((a, d) => a + d.successRate, 0) / trend.length : 0;
+            const problemCount = warning + error;
+            const pct = n => total ? Math.round(n / total * 100) : 0;
+            const onTarget = avgSuccessRate >= 95;
+
+            $('#executionKpis').innerHTML = `
+                <article class="card kpi-card">
+                    <div class="kpi-top">
+                        <div><div class="kpi-label">Composição das execuções</div><div class="kpi-value">${total}</div></div>
+                        <div class="kpi-icon info"><svg class="icon"><use href="#i-box"></use></svg></div>
                     </div>
                     <div>
-                        ${rows.map(([label, value, cls]) => `
-                            <div style="margin:12px 0">
-                                <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:11px">
-                                    <span>${label}</span><strong>${value}</strong>
-                                </div>
-                                <div class="progress-track"><div class="progress-fill ${cls}" style="width:${value/total*100}%"></div></div>
-                            </div>
-                        `).join('')}
+                        <div class="composition-bar">
+                            <span class="success" style="width:${pct(success)}%"></span>
+                            <span class="warning" style="width:${pct(warning)}%"></span>
+                            <span class="danger" style="width:${pct(error)}%"></span>
+                        </div>
+                        <div class="kpi-footer" style="margin-top:7px">
+                            <span>${success} sucesso</span><span>${warning} atenção</span><span>${error} erro</span>
+                        </div>
                     </div>
-                </div>
+                </article>
+                <article class="card kpi-card">
+                    <div class="kpi-top">
+                        <div><div class="kpi-label">Total de execuções</div><div class="kpi-value">${total}</div></div>
+                        <div class="kpi-icon"><svg class="icon"><use href="#i-activity"></use></svg></div>
+                    </div>
+                    <div class="kpi-footer"><span>Últimos ${days} dias</span><span>média ${(total / days).toFixed(1)}/dia</span></div>
+                </article>
+                <article class="card kpi-card">
+                    <div class="kpi-top">
+                        <div><div class="kpi-label">Taxa de sucesso média</div><div class="kpi-value">${avgSuccessRate.toFixed(1)}%</div></div>
+                        <div class="kpi-icon ${onTarget ? 'success' : 'warning'}"><svg class="icon"><use href="#i-check"></use></svg></div>
+                    </div>
+                    <div class="kpi-footer"><span>Meta ≥ 95%</span><span>${onTarget ? 'dentro da meta' : 'abaixo da meta'}</span></div>
+                </article>
+                <article class="card kpi-card">
+                    <div class="kpi-top">
+                        <div><div class="kpi-label">Execuções com problema</div><div class="kpi-value">${problemCount}</div></div>
+                        <div class="kpi-icon ${problemCount ? 'danger' : 'success'}"><svg class="icon"><use href="#i-alert"></use></svg></div>
+                    </div>
+                    <div class="kpi-footer"><span>${pct(problemCount)}% do total</span><span>${warning} warning · ${error} erro</span></div>
+                </article>
             `;
         }
 
@@ -4374,7 +4392,7 @@
             renderAlertContext();
 
             renderSuccessTrend();
-            renderStatusComposition();
+            renderExecutionKpis();
             renderDurationComparison();
             renderHourlyLoad();
             renderExecutionAuditTable();
