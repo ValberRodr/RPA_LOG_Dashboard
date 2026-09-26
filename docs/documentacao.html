@@ -149,7 +149,7 @@
     .fact-card .num { font: 800 22px/1 var(--sans); color: var(--text); }
     .fact-card .label { font-size: 11.5px; color: var(--text-3); margin-top: 5px; }
 
-    .file-tree { font-family: var(--mono); font-size: 12.3px; color: var(--text-2); background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px; overflow-x: auto; }
+    .file-tree { font-family: var(--mono); font-size: 12.3px; line-height: 1.65; color: var(--text-2); background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px; overflow-x: auto; white-space: pre; }
     .file-tree .d { color: var(--primary); font-weight: 700; }
     .file-tree .c { color: var(--text-3); }
 
@@ -336,8 +336,7 @@ node --test test_dashboard.js</code></pre>
             <!-- ================================================================ -->
             <section class="section" id="mapa-arquivos">
                 <h2>Mapa de arquivos<a class="anchor-link" href="#mapa-arquivos">#</a></h2>
-                <div class="file-tree">
-<span class="d">RPA_Observability_Package_v3/</span>
+                <div class="file-tree"><span class="d">RPA_Observability_Package_v3/</span>
 ├── server.py                      <span class="c"># backend: pipeline de dados + servidor HTTP + integração AA</span>
 ├── test_server.py                 <span class="c"># 26 testes do backend (unittest, stdlib)</span>
 ├── test_dashboard.js              <span class="c"># 18 testes das partes puras do frontend (node --test)</span>
@@ -366,8 +365,7 @@ node --test test_dashboard.js</code></pre>
 │   └── <span class="d">dependencies/</span>                <span class="c"># arquivos de dependência fictícios por RPA</span>
 └── <span class="d">logs/</span>Organizacao&amp;Processos/Melhoria_Continua/Monitoramento/
     ├── <span class="d">Logs/AAAA/MM/{processo}/</span>     <span class="c"># RPA_AAAA-MM-DD.log e RPA_AAAA-MM-DD_{execution_id}.log</span>
-    └── <span class="d">VMS/Historico/AAAA/MM/{maquina}/</span> <span class="c"># VM_AAAA-MM-DD.jsonl</span>
-                </div>
+    └── <span class="d">VMS/Historico/AAAA/MM/{maquina}/</span> <span class="c"># VM_AAAA-MM-DD.jsonl</span></div>
             </section>
 
             <!-- ================================================================ -->
