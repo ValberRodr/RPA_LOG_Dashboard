@@ -51,9 +51,12 @@
    da automação, mantendo drill-through para investigação e diagnóstico.
    ============================================================================ */
 const U=window.RPAUI;
-const rpaId=U.q.get('rpa_id')||U.D.rpas[0]?.rpaId;
-const rpa=U.getRpa(rpaId), agg=U.D.rpaAggregates[rpaId];
-if(!rpa){document.body.innerHTML='<main class="page"><div class="empty">RPA não encontrada.</div></main>'}else{
+/* Sem fallback para "primeira RPA do catálogo": abrir esta página sem um
+   rpa_id válido na URL não deve expor dados de nenhuma automação. */
+const rpaId=U.q.get('rpa_id');
+const rpa=rpaId ? U.getRpa(rpaId) : null;
+const agg=rpa ? U.D.rpaAggregates[rpaId] : null;
+if(!rpa){document.body.innerHTML='<main class="page"><div class="empty">Nenhuma RPA válida foi informada. Abra o dashboard a partir do catálogo ou de uma execução no monitor.</div></main>'}else{
     U.initToolbar(`Dashboard ${rpa.name}`);
     document.querySelector('#hero').innerHTML=`<section class="hero"><div class="hero-main"><span class="badge neutral">${U.esc(rpa.rpaId)}</span><h1>${U.esc(rpa.name)}</h1><p>${U.esc(rpa.businessArea)} · ${U.esc(rpa.businessProcess)} · ${U.esc(rpa.process)}</p></div><div class="stat"><span>Criticidade</span><strong>${U.esc(rpa.criticality)}</strong></div><div class="stat"><span>Aplicação</span><strong>${U.esc(rpa.application)}</strong></div><div class="stat"><span>VM primária</span><strong class="mono">${U.esc(rpa.primaryVm)}</strong></div><div class="stat"><span>Suporte</span><strong>${U.esc(rpa.supportTeam)}</strong></div></section>`;
     document.querySelector('#kpis').innerHTML=[

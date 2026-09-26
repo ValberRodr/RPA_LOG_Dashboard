@@ -76,11 +76,13 @@
    evidências suficientes para auditoria operacional, reprocessamento e análise.
    ============================================================================ */
 const U = window.RPAUI;
-const executionId = U.q.get('execution_id') || U.D.executions.at(-1)?.executionId;
+/* Sem fallback para "última execução": abrir esta página sem um
+   execution_id válido na URL não deve expor dados de nenhuma execução. */
+const executionId = U.q.get('execution_id');
 document.querySelector('#btnCounterpart')?.addEventListener('click',()=>U.openDiagnostic(executionId));
-const ex = U.getExecution(executionId);
+const ex = executionId ? U.getExecution(executionId) : null;
 if (!ex) {
-    document.body.innerHTML = '<main class="page"><div class="empty">Execução não encontrada.</div></main>';
+    document.body.innerHTML = '<main class="page"><div class="empty">Nenhuma execução válida foi informada. Abra a investigação a partir de uma execução no monitor.</div></main>';
 } else {
     U.initToolbar(`Investigação ${executionId}`);
     const rpa = U.getRpa(ex.rpaId);
