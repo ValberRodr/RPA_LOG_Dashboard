@@ -848,6 +848,37 @@ def build_index(obs, vm_history, expected_runs, exec_by_id):
         heat.append({'rpa':r['name'],'process':r['process'],'values':vals})
 
     # ------------------------------------------------------------------
+    # Pareto multi-dimensão de erros: todo o período carregado (não só os
+    # 30 dias de "incidents"), para a recorrência por VM/etapa na Central
+    # de Alertas e o pareto completo em Falhas por etapa.
+    # ------------------------------------------------------------------
+    dim_counters = {'step': Counter(), 'machine': Counter(), 'application': Counter(),
+                    'errorCode': Counter(), 'rpa': Counter(), 'errorType': Counter()}
+    errors_7d = errors_30d = 0
+    cutoff_7 = endd - timedelta(days=6)
+    for e in executions:
+        r = rid_map[e['rpaId']]
+        ex_errors = 0
+        for ev in evs.get(e['executionId'], []):
+            if ev['status'] != 'ERROR':
+                continue
+            ex_errors += 1
+            dim_counters['step'][ev.get('step') or 'desconhecida'] += 1
+            dim_counters['machine'][e['machine']] += 1
+            dim_counters['application'][ev.get('application') or r['application']] += 1
+            if ev.get('errorCode'): dim_counters['errorCode'][ev['errorCode']] += 1
+            dim_counters['rpa'][r['name']] += 1
+            if ev.get('errorType'): dim_counters['errorType'][ev['errorType']] += 1
+        if ex_errors:
+            start_dt = dt(e['start'])
+            if start_dt >= cutoff_7: errors_7d += ex_errors
+            if start_dt >= cutoff: errors_30d += ex_errors
+
+    error_paretos = {dim: [{'label': k, 'count': v} for k, v in counter.most_common(12)] for dim, counter in dim_counters.items()}
+    top_error_machine = error_paretos['machine'][0] if error_paretos['machine'] else None
+    top_error_rpa = error_paretos['rpa'][0] if error_paretos['rpa'] else None
+
+    # ------------------------------------------------------------------
     # Central de alertas: motor de regras único, com severidade e
     # deduplicação (mesma RPA + mesmo estado vira 1 alerta com contador,
     # não N linhas) — Seção 17.
@@ -1015,12 +1046,15 @@ def build_index(obs, vm_history, expected_runs, exec_by_id):
              'delayed':sum(r['state']=='ATRASADA' for r in idx_rpas),
              'vmDegraded':sum(r['vmDegraded'] for r in idx_rpas),
              'totalExecutionMinutes24h':total_exec_minutes_24h,'avgVmIdlePercent24h':avg_vm_idle_24h,
-             'maxConcurrencyVm':max_concurrency_overall}
+             'maxConcurrencyVm':max_concurrency_overall,
+             'errors7d':errors_7d,'errors30d':errors_30d,
+             'topErrorMachine':top_error_machine,'topErrorRpa':top_error_rpa}
     return {'snapshot':obs['snapshot'],'periodStart':obs['periodStart'],'periodEnd':obs['periodEnd'],'rpas':idx_rpas,'trend':trend,
             'timeline':timeline,'incidents':incidents,'errorPareto':error_pareto,'heatmapSteps':heat_steps,'heatmap':heat,
             'vms':vms,'executionDetail':execution_detail,'summary':summary,'alerts':alerts,'loadStats':obs['loadStats'],
             'vmUtilization':vm_utilization,'vmIdleTrend':vm_idle_trend,
-            'vmReliability':vm_reliability,'vmConsolidation':vm_consolidation}
+            'vmReliability':vm_reliability,'vmConsolidation':vm_consolidation,
+            'errorParetos':error_paretos}
 
 
 def get_data(mode=None):

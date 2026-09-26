@@ -524,7 +524,7 @@
         /* Cada grade de KPIs tem uma contagem fixa de cards conhecida —
            coluna por coluna sem sobrar linha incompleta (que deixaria vão
            vazio, o mesmo problema já corrigido no .grid-main). */
-        #alertKpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        #alertKpis, #alertContextKpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
         #vmKpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 
         .grid-main {
@@ -1083,6 +1083,26 @@
         .heatmap-wrap {
             overflow-x: auto;
         }
+
+        .recurrence-columns {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 24px;
+        }
+
+        .recurrence-subtitle {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 11.5px;
+            font-weight: 700;
+            color: var(--text-2);
+            margin: 0 0 12px;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+        }
+
+        .recurrence-subtitle .icon { width: 14px; height: 14px; }
 
         .heatmap {
             display: grid;
@@ -1743,7 +1763,8 @@
             .grid-main,
             .grid-2,
             .grid-3,
-            .grid-4 { grid-template-columns: 1fr; }
+            .grid-4,
+            .recurrence-columns { grid-template-columns: 1fr; }
             .detail-hero { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .detail-title { grid-column: 1 / -1; }
         }
@@ -1753,7 +1774,7 @@
             .topbar { padding: 0 16px; }
             .snapshot-pill { display: none; }
             .search-box { flex: 1; width: auto; }
-            .grid-kpis, #alertKpis, #vmKpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .grid-kpis, #alertKpis, #alertContextKpis, #vmKpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .vm-grid { grid-template-columns: 1fr; }
             .page-heading { flex-direction: column; }
             .step-row { grid-template-columns: 28px 1fr 80px; }
@@ -1762,7 +1783,7 @@
         }
 
         @media (max-width: 480px) {
-            .grid-kpis, #alertKpis, #vmKpis { grid-template-columns: 1fr; }
+            .grid-kpis, #alertKpis, #alertContextKpis, #vmKpis { grid-template-columns: 1fr; }
             .detail-hero { grid-template-columns: 1fr; }
         }
     </style>
@@ -2079,7 +2100,30 @@
 
                     <div class="grid grid-kpis" id="alertKpis"></div>
 
-                    <article class="card">
+                    <div class="grid grid-kpis" id="alertContextKpis" style="margin-top:14px"></div>
+
+                    <article class="card" style="margin-top:14px">
+                        <div class="card-header">
+                            <div>
+                                <h2>Recorrência de erros</h2>
+                                <p>Os mesmos incidentes se repetem na mesma VM ou na mesma etapa? Concentração aponta causa raiz mais rápido do que uma lista crua de eventos.</p>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="recurrence-columns">
+                                <div>
+                                    <h3 class="recurrence-subtitle"><svg class="icon"><use href="#i-server"></use></svg>Por VM</h3>
+                                    <div class="pareto-list" id="recurrenceByVm"></div>
+                                </div>
+                                <div>
+                                    <h3 class="recurrence-subtitle"><svg class="icon"><use href="#i-diagnostic"></use></svg>Por etapa</h3>
+                                    <div class="pareto-list" id="recurrenceByStep"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </article>
+
+                    <article class="card" style="margin-top:14px">
                         <div class="card-header">
                             <div>
                                 <h2>Fila de alertas</h2>
@@ -2214,12 +2258,20 @@
                         <article class="card">
                             <div class="card-header">
                                 <div>
-                                    <h2>Pareto de erros</h2>
-                                    <p>Códigos de erro dos últimos 30 dias.</p>
+                                    <h2>Pareto de erros — todas as dimensões</h2>
+                                    <p>Concentração histórica de erros em todo o período carregado; escolha a dimensão para direcionar o esforço de sustentação.</p>
                                 </div>
+                                <select class="select-control" id="paretoDimensionSelect" aria-label="Dimensão do pareto">
+                                    <option value="step">Por etapa</option>
+                                    <option value="machine">Por VM</option>
+                                    <option value="application">Por aplicação/sistema</option>
+                                    <option value="errorCode">Por código de erro</option>
+                                    <option value="rpa">Por RPA</option>
+                                    <option value="errorType">Por tipo de erro</option>
+                                </select>
                             </div>
                             <div class="card-body">
-                                <div class="pareto-list" id="errorPareto"></div>
+                                <div class="pareto-list" id="paretoDimensionList"></div>
                             </div>
                         </article>
 
@@ -2847,6 +2899,7 @@
             $('#overviewRpaFilter').addEventListener('change', renderRpaOpsTable);
             $('#overviewStatusFilter').addEventListener('change', renderRpaOpsTable);
             $('#alertSeverityFilter')?.addEventListener('change', renderAlerts);
+            $('#paretoDimensionSelect')?.addEventListener('change', renderErrorPareto);
         }
 
         function renderRpaOpsTable() {
@@ -3054,6 +3107,37 @@
         /* =====================================================================
            RENDER — CENTRAL DE ALERTAS (Seção 17)
            ===================================================================== */
+        function renderAlertContext() {
+            const s = DATA.summary;
+            const kpiTarget = $('#alertContextKpis');
+            if (kpiTarget) {
+                const kpis = [
+                    { icon: 'i-clock', iconClass: 'info', label: 'Erros últimos 7 dias', value: s.errors7d ?? 0, footer: 'Etapas com erro' },
+                    { icon: 'i-activity', iconClass: 'warning', label: 'Erros últimos 30 dias', value: s.errors30d ?? 0, footer: 'Etapas com erro' },
+                    { icon: 'i-box', iconClass: 'danger', label: 'RPA mais afetada', value: s.topErrorRpa ? s.topErrorRpa.count : '—', footer: s.topErrorRpa ? escapeHtml(s.topErrorRpa.label) : 'Sem dados no período' },
+                    { icon: 'i-server', iconClass: 'danger', label: 'VM mais afetada', value: s.topErrorMachine ? s.topErrorMachine.count : '—', footer: s.topErrorMachine ? escapeHtml(s.topErrorMachine.label) : 'Sem dados no período' },
+                ];
+                kpiTarget.innerHTML = kpis.map(k => `
+                    <article class="card kpi-card">
+                        <div class="kpi-top">
+                            <div><div class="kpi-label">${k.label}</div><div class="kpi-value">${k.value}</div></div>
+                            <div class="kpi-icon ${k.iconClass}"><svg class="icon"><use href="#${k.icon}"></use></svg></div>
+                        </div>
+                        <div class="kpi-footer"><span>${k.footer}</span><span></span></div>
+                    </article>
+                `).join('');
+            }
+
+            const byVm = (DATA.errorParetos || {}).machine || [];
+            const byStep = (DATA.errorParetos || {}).step || [];
+            $('#recurrenceByVm').innerHTML = paretoListHtml(byVm.slice(0, 8), 'VM');
+            $('#recurrenceByStep').innerHTML = paretoListHtml(byStep.slice(0, 8), 'etapa');
+            $$('#recurrenceByVm [data-tip], #recurrenceByStep [data-tip]').forEach(el => {
+                el.addEventListener('mousemove', e => showTooltip(e, el.dataset.tip));
+                el.addEventListener('mouseleave', hideTooltip);
+            });
+        }
+
         function renderAlerts() {
             const all = DATA.alerts || [];
             $('#navAlertCount').textContent = all.filter(a => a.severity === 'CRITICO' || a.severity === 'ALTO').length;
@@ -3228,15 +3312,31 @@
         /* =====================================================================
            RENDER — INCIDENTES
            ===================================================================== */
-        function renderErrorPareto() {
-            const max = Math.max(...DATA.errorPareto.map(x => x.count), 1);
-            $('#errorPareto').innerHTML = DATA.errorPareto.map(item => `
-                <div class="pareto-row">
-                    <div class="pareto-code" title="${escapeHtml(item.code)}">${escapeHtml(item.code)}</div>
-                    <div class="pareto-bar"><span style="width:${item.count/max*100}%"></span></div>
+        const PARETO_DIMENSION_LABELS = {
+            step: 'etapa', machine: 'VM', application: 'aplicação', errorCode: 'código', rpa: 'RPA', errorType: 'tipo',
+        };
+
+        function paretoListHtml(rows, dimLabel) {
+            if (!rows || !rows.length) return '<div class="empty-state">Sem ocorrências no período.</div>';
+            const max = Math.max(...rows.map(x => x.count), 1);
+            return rows.map(item => `
+                <div class="pareto-row" data-tip="${escapeHtml(item.label)}<br>${item.count} erro${item.count === 1 ? '' : 's'} · ${escapeHtml(dimLabel)}">
+                    <div class="pareto-code" title="${escapeHtml(item.label)}">${escapeHtml(item.label)}</div>
+                    <div class="pareto-bar"><span style="width:${item.count / max * 100}%"></span></div>
                     <div class="pareto-count">${item.count}</div>
                 </div>
             `).join('');
+        }
+
+        function renderErrorPareto() {
+            const select = $('#paretoDimensionSelect');
+            const dim = select ? select.value : 'step';
+            const rows = (DATA.errorParetos || {})[dim] || [];
+            $('#paretoDimensionList').innerHTML = paretoListHtml(rows, PARETO_DIMENSION_LABELS[dim] || dim);
+            $$('#paretoDimensionList [data-tip]').forEach(el => {
+                el.addEventListener('mousemove', e => showTooltip(e, el.dataset.tip));
+                el.addEventListener('mouseleave', hideTooltip);
+            });
         }
 
         function heatClass(value, max) {
@@ -3932,6 +4032,7 @@
             renderIncidentQueue();
             renderVmCompactList();
             renderAlerts();
+            renderAlertContext();
 
             renderSuccessTrend();
             renderStatusComposition();
