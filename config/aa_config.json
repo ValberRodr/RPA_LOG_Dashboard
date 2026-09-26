@@ -1,0 +1,5 @@
+{
+  "_readme": "Configuração não-sensível da integração opcional com Automation Anywhere Control Room. NUNCA coloque API Key ou token aqui — eles ficam somente em memória no navegador durante a sessão conectada. Deixe aaBaseUrl vazio (ou 'mock') para testar com o Control Room simulado embutido no server.py.",
+  "aaBaseUrl": "",
+  "aaUsername": ""
+}

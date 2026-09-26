@@ -1929,6 +1929,10 @@
             .detail-hero { grid-template-columns: 1fr; }
         }
     </style>
+    <!-- Integração opcional Automation Anywhere — módulo aditivo e removível
+         (ver assets/aa-integration.css / assets/aa-integration.js). Nada aqui
+         é exigido para o dashboard funcionar. -->
+    <link rel="stylesheet" href="assets/aa-integration.css">
 </head>
 <body>
     <!-- =====================================================================
@@ -4539,5 +4543,10 @@
 
         init();
     </script>
+    <!-- Integração opcional Automation Anywhere — carregada depois do script
+         principal para reaproveitar seus helpers globais ($, escapeHtml,
+         goToPage, DATA, etc.). Remover esta linha desliga o módulo inteiro
+         sem afetar nada acima. -->
+    <script src="assets/aa-integration.js"></script>
 </body>
 </html>
