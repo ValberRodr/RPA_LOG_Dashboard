@@ -1721,6 +1721,125 @@
         }
 
         /* ---------------------------------------------------------------------
+           Catálogo — cada RPA como um card de linha única
+           ------------------------------------------------------------------ */
+        .catalog-list {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .catalog-row {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 18px 20px;
+        }
+
+        .catalog-row-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+
+        .catalog-row-id-wrap {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .catalog-row-stats {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 10px;
+            margin: 16px 0;
+        }
+
+        .catalog-stat {
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 9px 11px;
+        }
+
+        .catalog-stat span {
+            display: block;
+            color: var(--text-3);
+            font-size: 9.5px;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+            margin-bottom: 4px;
+        }
+
+        .catalog-stat strong {
+            font-size: 12.5px;
+            color: var(--text-2);
+            overflow-wrap: anywhere;
+        }
+
+        .catalog-row-columns {
+            display: grid;
+            grid-template-columns: 1.4fr 1fr;
+            gap: 24px;
+            padding-top: 14px;
+            border-top: 1px solid var(--border);
+        }
+
+        .catalog-benefits {
+            margin: 8px 0 0;
+            padding-left: 18px;
+            display: grid;
+            gap: 6px;
+            color: var(--text-2);
+            font-size: 12px;
+        }
+
+        .catalog-owners {
+            margin-top: 8px;
+            display: grid;
+            gap: 10px;
+        }
+
+        .catalog-owner {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .catalog-owner-name {
+            font-weight: 650;
+            font-size: 12.5px;
+        }
+
+        .catalog-owner-role {
+            color: var(--text-3);
+            font-size: 10.5px;
+            margin-top: 2px;
+        }
+
+        @media (max-width: 1180px) {
+            .catalog-row-stats {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 900px) {
+            .catalog-row-columns {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 560px) {
+            .catalog-row-stats {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        /* ---------------------------------------------------------------------
            Empty states, tooltip e toast
            ------------------------------------------------------------------ */
         .empty-state {
@@ -2516,30 +2635,11 @@
                         <div>
                             <div class="eyebrow">BASE MESTRE</div>
                             <h1>Catálogo operacional das RPAs</h1>
-                            <p>Informações complementares aos logs: agenda, aplicação, VM primária, criticidade e versão.</p>
+                            <p>Agenda, aplicação, VM primária, criticidade, benefícios e responsáveis de cada automação.</p>
                         </div>
                     </div>
 
-                    <article class="card">
-                        <div class="table-wrap">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>ID</th>
-                                        <th>RPA</th>
-                                        <th>Criticidade</th>
-                                        <th>Aplicação</th>
-                                        <th>Agenda</th>
-                                        <th>Duração esperada</th>
-                                        <th>VM primária</th>
-                                        <th>Contingência</th>
-                                        <th>Versão</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="catalogTable"></tbody>
-                            </table>
-                        </div>
-                    </article>
+                    <div class="catalog-list" id="catalogTable"></div>
                 </section>
             </main>
         </div>
@@ -4191,23 +4291,64 @@
            RENDER — CATÁLOGO
            ===================================================================== */
         function renderCatalog() {
-            $('#catalogTable').innerHTML = DATA.rpas.map(r => `
-                <tr class="clickable-row catalog-rpa-row" data-rpa-id="${escapeHtml(r.id)}" data-search-text="${escapeHtml((r.id + ' ' + r.name + ' ' + r.process + ' ' + r.application + ' ' + r.primaryVm).toLowerCase())}">
-                    <td class="mono">${r.id}</td>
-                    <td><span class="cell-title">${escapeHtml(r.name)}</span><span class="cell-subtitle">${escapeHtml(r.process)}</span></td>
-                    <td>${criticalityBadge(r.criticality)}</td>
-                    <td>${escapeHtml(r.application)}</td>
-                    <td>${escapeHtml(r.schedule.join(' • '))}</td>
-                    <td>${r.expectedDurationMin} min</td>
-                    <td class="mono">${escapeHtml(r.primaryVm)}</td>
-                    <td class="mono">${escapeHtml(r.backupVm)}</td>
-                    <td>${escapeHtml(r.version)}</td>
-                </tr>
-            `).join('');
+            $('#catalogTable').innerHTML = DATA.rpas.map(r => {
+                const benefits = r.benefits || [];
+                const owners = r.owners || [];
+                return `
+                <div class="catalog-row" data-search-text="${escapeHtml((r.id + ' ' + r.name + ' ' + r.process + ' ' + r.application + ' ' + r.primaryVm + ' ' + (r.businessArea || '') + ' ' + owners.map(o => o.name).join(' ')).toLowerCase())}">
+                    <div class="catalog-row-head">
+                        <div class="catalog-row-id-wrap">
+                            <div class="reliability-icon neutral" style="width:34px;height:34px;flex:none"><svg class="icon" style="width:17px;height:17px"><use href="#i-box"></use></svg></div>
+                            <div>
+                                <div class="cell-title" style="font-size:14px">${escapeHtml(r.name)}</div>
+                                <div class="cell-subtitle mono">${escapeHtml(r.id)} · ${escapeHtml(r.process)}</div>
+                            </div>
+                        </div>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                            ${criticalityBadge(r.criticality)}
+                            ${r.businessArea ? `<span class="badge neutral">${escapeHtml(r.businessArea)}</span>` : ''}
+                            <button class="action-button catalog-open-btn" data-rpa-id="${escapeHtml(r.id)}">Dashboard ↗</button>
+                        </div>
+                    </div>
 
-            $$('#catalogTable .catalog-rpa-row').forEach(row => {
-                row.addEventListener('click', () => {
-                    window.open(`rpa-dashboard.html?rpa_id=${encodeURIComponent(row.dataset.rpaId)}`, '_blank');
+                    <div class="catalog-row-stats">
+                        <div class="catalog-stat"><span>Aplicação</span><strong>${escapeHtml(r.application)}</strong></div>
+                        <div class="catalog-stat"><span>Agenda</span><strong>${escapeHtml(r.schedule.join(' • '))}</strong></div>
+                        <div class="catalog-stat"><span>Duração esperada</span><strong>${r.expectedDurationMin} min</strong></div>
+                        <div class="catalog-stat"><span>VM primária</span><strong class="mono">${escapeHtml(r.primaryVm)}</strong></div>
+                        <div class="catalog-stat"><span>Contingência</span><strong class="mono">${escapeHtml(r.backupVm)}</strong></div>
+                        <div class="catalog-stat"><span>Versão</span><strong>${escapeHtml(r.version)}</strong></div>
+                    </div>
+
+                    <div class="catalog-row-columns">
+                        <div>
+                            <div class="cell-subtitle">BENEFÍCIOS DA RPA</div>
+                            <ul class="catalog-benefits">
+                                ${benefits.map(b => `<li>${escapeHtml(b)}</li>`).join('') || '<li class="cell-subtitle">Sem benefícios cadastrados.</li>'}
+                            </ul>
+                        </div>
+                        <div>
+                            <div class="cell-subtitle">RESPONSÁVEIS</div>
+                            <div class="catalog-owners">
+                                ${owners.map(o => `
+                                    <div class="catalog-owner">
+                                        <div class="reliability-icon neutral" style="width:26px;height:26px;flex:none"><svg class="icon" style="width:13px;height:13px"><use href="#i-users"></use></svg></div>
+                                        <div>
+                                            <div class="catalog-owner-name">${escapeHtml(o.name)}</div>
+                                            <div class="catalog-owner-role">${escapeHtml(o.role)}</div>
+                                        </div>
+                                    </div>
+                                `).join('') || '<div class="cell-subtitle">Sem responsáveis cadastrados.</div>'}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            }).join('');
+
+            $$('#catalogTable .catalog-open-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    window.open(`rpa-dashboard.html?rpa_id=${encodeURIComponent(btn.dataset.rpaId)}`, '_blank');
                 });
             });
         }

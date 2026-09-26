@@ -51,6 +51,21 @@
           "path": "config/dependencies/RPA001/mapeamento_campos_pedidos_salesforce.json",
           "label": "Mapeamento de campos Pedido → Salesforce"
         }
+      ],
+      "benefits": [
+        "Reduz em cerca de 70% o tempo de integração de pedidos entre Salesforce e o ERP",
+        "Elimina divergências manuais de status comercial entre os sistemas",
+        "Libera aproximadamente 18h/mês da equipe comercial para atividades de relacionamento"
+      ],
+      "owners": [
+        {
+          "name": "Fernanda Duarte",
+          "role": "Business Owner — Comercial"
+        },
+        {
+          "name": "Lucas Prado",
+          "role": "Process Owner — Sustentação RPA Comercial"
+        }
       ]
     },
     {
@@ -94,6 +109,21 @@
         {
           "path": "config/dependencies/RPA002/regras_conciliacao_bancaria.xlsx",
           "label": "Planilha de regras de conciliação bancária"
+        }
+      ],
+      "benefits": [
+        "Acelera o fechamento financeiro diário em cerca de 3 horas",
+        "Reduz divergências bancárias não tratadas antes do fechamento",
+        "Padroniza a conciliação entre contas e evita retrabalho manual"
+      ],
+      "owners": [
+        {
+          "name": "Camila Rezende",
+          "role": "Business Owner — Financeiro"
+        },
+        {
+          "name": "Diego Nascimento",
+          "role": "Process Owner — Sustentação RPA Financeiro"
         }
       ]
     },
@@ -140,6 +170,21 @@
           "path": "config/dependencies/RPA003/regras_validacao_documentos_admissao.json",
           "label": "Regras de validação de documentos de admissão"
         }
+      ],
+      "benefits": [
+        "Reduz o tempo de admissão cadastral de dias para minutos",
+        "Elimina erros de digitação em dados cadastrais de novos colaboradores",
+        "Garante rastreabilidade completa do processo admissional no Oracle"
+      ],
+      "owners": [
+        {
+          "name": "Patrícia Lemos",
+          "role": "Business Owner — Recursos Humanos"
+        },
+        {
+          "name": "Rafael Tavares",
+          "role": "Process Owner — Sustentação RPA Corporativo"
+        }
       ]
     },
     {
@@ -182,6 +227,21 @@
         {
           "path": "config/dependencies/RPA004/lista_pastas_backup_gsuite.json",
           "label": "Lista de pastas incluídas no backup"
+        }
+      ],
+      "benefits": [
+        "Garante backup diário sem intervenção manual da equipe de TI",
+        "Reduz o risco de perda de dados corporativos no Workspace",
+        "Padroniza a rotina de backup entre todas as áreas"
+      ],
+      "owners": [
+        {
+          "name": "Bruno Siqueira",
+          "role": "Business Owner — Tecnologia"
+        },
+        {
+          "name": "Juliana Matos",
+          "role": "Process Owner — Sustentação RPA Infraestrutura"
         }
       ]
     },
@@ -233,6 +293,21 @@
           "path": "config/dependencies/RPA005/parametros_sessao_mainframe.cfg",
           "label": "Parâmetros de sessão do mainframe"
         }
+      ],
+      "benefits": [
+        "Acelera o processamento de sinistros no mainframe em alta escala",
+        "Reduz o tempo de resposta ao segurado na abertura do sinistro",
+        "Diminui a dependência de digitação manual em sistema legado"
+      ],
+      "owners": [
+        {
+          "name": "Marcelo Andrade",
+          "role": "Business Owner — Sinistros"
+        },
+        {
+          "name": "Renata Costa",
+          "role": "Process Owner — Sustentação RPA Sinistros"
+        }
       ]
     },
     {
@@ -276,6 +351,21 @@
         {
           "path": "config/dependencies/RPA006/credenciais_conexao_crm.json",
           "label": "Credenciais e configuração de conexão com o CRM"
+        }
+      ],
+      "benefits": [
+        "Mantém dados cadastrais de clientes atualizados em tempo próximo ao real",
+        "Reduz reclamações por informação desatualizada no atendimento",
+        "Diminui retrabalho da equipe de relacionamento com correções manuais"
+      ],
+      "owners": [
+        {
+          "name": "Aline Ferreira",
+          "role": "Business Owner — Relacionamento com Cliente"
+        },
+        {
+          "name": "Thiago Moraes",
+          "role": "Process Owner — Sustentação RPA Clientes"
         }
       ]
     },
@@ -323,6 +413,21 @@
         {
           "path": "config/dependencies/RPA007/janela_concorrencia_faturamento.json",
           "label": "Regra de janela de concorrência de faturamento"
+        }
+      ],
+      "benefits": [
+        "Garante emissão pontual de faturas dentro do calendário fiscal",
+        "Reduz erros de faturamento por lançamento manual",
+        "Aumenta a previsibilidade do ciclo de faturamento mensal"
+      ],
+      "owners": [
+        {
+          "name": "Eduardo Barros",
+          "role": "Business Owner — Faturamento"
+        },
+        {
+          "name": "Vanessa Lima",
+          "role": "Process Owner — Sustentação RPA Financeiro"
         }
       ]
     },
@@ -376,6 +481,21 @@
           "path": "config/dependencies/RPA008/endpoints_portal_bancario.json",
           "label": "Endpoints do portal bancário homologados"
         }
+      ],
+      "benefits": [
+        "Acelera a baixa de pagamentos e a atualização de inadimplência",
+        "Reduz o tempo de conciliação entre portal bancário e contas a receber",
+        "Diminui o volume de chamados de clientes por pagamento não reconhecido"
+      ],
+      "owners": [
+        {
+          "name": "Priscila Gomes",
+          "role": "Business Owner — Cobrança"
+        },
+        {
+          "name": "Gustavo Farias",
+          "role": "Process Owner — Sustentação RPA Cobrança"
+        }
       ]
     },
     {
@@ -419,6 +539,21 @@
         {
           "path": "config/dependencies/RPA009/regras_lote_arquivamento_sharepoint.json",
           "label": "Regra de tamanho de lote no arquivamento"
+        }
+      ],
+      "benefits": [
+        "Organiza e arquiva documentos operacionais sem esforço manual",
+        "Reduz risco de perda de documentos por armazenamento disperso",
+        "Padroniza a estrutura de pastas conforme política de retenção"
+      ],
+      "owners": [
+        {
+          "name": "Roberta Almeida",
+          "role": "Business Owner — Operações"
+        },
+        {
+          "name": "Felipe Cardoso",
+          "role": "Process Owner — Sustentação RPA Corporativo"
         }
       ]
     },
@@ -464,6 +599,21 @@
         {
           "path": "config/dependencies/RPA010/template_dataset_powerbi_dashboard.json",
           "label": "Template do dataset do dashboard"
+        }
+      ],
+      "benefits": [
+        "Mantém dashboards executivos atualizados sem intervenção manual",
+        "Reduz o tempo entre o fechamento dos dados e a disponibilização dos relatórios",
+        "Aumenta a confiabilidade das informações usadas na tomada de decisão"
+      ],
+      "owners": [
+        {
+          "name": "Isabela Rocha",
+          "role": "Business Owner — Analytics"
+        },
+        {
+          "name": "André Nogueira",
+          "role": "Process Owner — Sustentação RPA Dados"
         }
       ]
     }

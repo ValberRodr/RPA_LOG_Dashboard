@@ -801,6 +801,9 @@ def build_index(obs, vm_history, expected_runs, exec_by_id):
             'machine':last['machine'] if last else r['primaryVm'],'processedItems':last['processedItems'] if last else 0,
             'errorItems':last['errorItems'] if last else 0,'attention':attention,'version':last['version'] if last else '—',
             'state': state, 'vmDegraded': vm_degraded,
+            'businessArea': r.get('businessArea'), 'businessProcess': r.get('businessProcess'),
+            'supportTeam': r.get('supportTeam'), 'businessImpact': r.get('businessImpact'),
+            'benefits': r.get('benefits', []), 'owners': r.get('owners', []),
         })
 
     # 14-day trend
