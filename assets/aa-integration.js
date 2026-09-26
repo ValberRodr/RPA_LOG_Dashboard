@@ -1053,6 +1053,7 @@
         const page = document.getElementById('page-' + btn.dataset.aaExport);
         if (!page) return;
         const w = window.open('', '_blank');
+        if (!w) { showToast('O navegador bloqueou a janela de exportação — permita pop-ups para este site e tente novamente.'); return; }
         w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(page.querySelector('h1')?.textContent || 'Automation Anywhere')}</title>
             <link rel="stylesheet" href="/assets/observability.css"></head><body class="page" style="padding:24px">${page.innerHTML}</body></html>`);
         w.document.close();
