@@ -525,7 +525,7 @@
            coluna por coluna sem sobrar linha incompleta (que deixaria vão
            vazio, o mesmo problema já corrigido no .grid-main). */
         #alertKpis, #alertContextKpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-        #vmKpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+        #vmKpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 
         .grid-main {
             grid-template-columns: minmax(0, 1.65fr) minmax(320px, 0.8fr);
@@ -1748,7 +1748,7 @@
            ------------------------------------------------------------------ */
         @media (max-width: 1280px) {
             :root { --sidebar-w: 214px; }
-            .grid-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .grid-kpis, #vmKpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .vm-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
 
@@ -1811,6 +1811,8 @@
         <symbol id="i-diagnostic" viewBox="0 0 24 24"><path d="M10 3H5a2 2 0 0 0-2 2v5"/><path d="M14 21h5a2 2 0 0 0 2-2v-5"/><path d="M21 10V5a2 2 0 0 0-2-2h-5"/><path d="M3 14v5a2 2 0 0 0 2 2h5"/><circle cx="12" cy="12" r="3"/></symbol>
         <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z"/></symbol>
         <symbol id="i-box" viewBox="0 0 24 24"><path d="m21 8-9 5-9-5 9-5 9 5Z"/><path d="m3 8 9 5 9-5v8l-9 5-9-5V8Z"/></symbol>
+        <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
+        <symbol id="i-users" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
     </svg>
 
     <div class="app-shell">
@@ -3636,10 +3638,12 @@
             const connected = DATA.vms.filter(v => v.rdp === 'CONNECTED').length;
             const avgCpu = (DATA.vms.reduce((a, v) => a + v.cpu, 0) / DATA.vms.length).toFixed(1);
             const avgMemory = (DATA.vms.reduce((a, v) => a + v.memory, 0) / DATA.vms.length).toFixed(1);
+            const shared = (DATA.vmUtilization || []).filter(u => u.byRpa.length > 1).length;
             $('#vmKpis').innerHTML = [
-                ['VMs conectadas', `${connected}/${DATA.vms.length}`, 'success', 'i-server'],
+                ['VMs conectadas', `${connected}/${DATA.vms.length}`, 'success', 'i-monitor'],
                 ['VMs críticas', critical, 'danger', 'i-alert'],
                 ['VMs em atenção', warning, 'warning', 'i-triangle'],
+                ['VMs compartilhadas', shared, shared ? 'info' : 'neutral', 'i-users'],
                 ['CPU média', `${avgCpu}%`, 'info', 'i-activity'],
                 ['RAM média', `${avgMemory}%`, 'info', 'i-activity']
             ].map(([label, value, cls, icon]) => `
@@ -3653,28 +3657,59 @@
             `).join('');
         }
 
+        /* Uma VM não é dedicada a uma única RPA por natureza — o cadastro só
+           define uma "primária" nominal (RPA.primaryVm). Aqui cruzamos com
+           vmUtilization (quem realmente rodou ali) e vmReliability (se o
+           histórico de erro daquela máquina é saudável ou não) para mostrar
+           o uso real, não a intenção de cadastro. */
         function renderVmGrid() {
-            $('#vmGrid').innerHTML = DATA.vms.map(vm => `
-                <div class="vm-card" data-search-text="${escapeHtml((vm.name + ' ' + vm.assignedRpas.join(' ') + ' ' + vm.rdp).toLowerCase())}">
-                    <div class="vm-card-head">
-                        <div>
-                            <div class="vm-name mono">${vm.name}</div>
-                            <div class="vm-rpas">${escapeHtml(vm.assignedRpas.join(', ') || 'VM de contingência')}</div>
+            const utilByMachine = new Map((DATA.vmUtilization || []).map(u => [u.machine, u]));
+            const relByMachine = new Map((DATA.vmReliability || []).map(r => [r.machine, r]));
+            $('#vmGrid').innerHTML = DATA.vms.map(vm => {
+                const util = utilByMachine.get(vm.name);
+                const byRpa = util ? util.byRpa : [];
+                const rpaSummary = byRpa.length === 0 ? 'Sem execuções no período'
+                    : byRpa.length === 1 ? escapeHtml(byRpa[0].rpaName)
+                    : `${byRpa.length} RPAs · principal: ${escapeHtml(byRpa[0].rpaName)} (${byRpa[0].percent}%)`;
+                const occupied = util ? Math.max(0, 100 - util.idlePercent) : null;
+                const rel = relByMachine.get(vm.name);
+                const relMeta = rel ? (RELIABILITY_META[rel.classification] || RELIABILITY_META.DADOS_INSUFICIENTES) : null;
+                const tip = `${escapeHtml(vm.name)}<br>${byRpa.map(r => `${escapeHtml(r.rpaName)}: ${r.percent}%`).join('<br>') || 'Sem execuções no período'}`;
+                return `
+                    <div class="vm-card" data-search-text="${escapeHtml((vm.name + ' ' + byRpa.map(r => r.rpaName).join(' ') + ' ' + vm.rdp).toLowerCase())}" data-tip="${tip}">
+                        <div class="vm-card-head">
+                            <div style="display:flex;align-items:flex-start;gap:8px">
+                                <div class="reliability-icon neutral" style="width:24px;height:24px;flex:none;margin-top:1px"><svg class="icon" style="width:13px;height:13px"><use href="#i-monitor"></use></svg></div>
+                                <div>
+                                    <div class="vm-name mono">${vm.name}</div>
+                                    <div class="vm-rpas">${rpaSummary}</div>
+                                </div>
+                            </div>
+                            ${statusBadge(vm.health)}
                         </div>
-                        ${statusBadge(vm.health)}
+                        <div class="vm-metrics">
+                            <div class="vm-metric"><span>CPU</span><strong class="trend-${vm.cpu >= 90 ? 'negative' : vm.cpu >= 75 ? 'warning' : 'positive'}">${vm.cpu}%</strong></div>
+                            <div class="vm-metric"><span>RAM</span><strong class="trend-${vm.memory >= 90 ? 'negative' : vm.memory >= 80 ? 'warning' : 'positive'}">${vm.memory}%</strong></div>
+                            <div class="vm-metric"><span>Disco</span><strong class="trend-${vm.disk >= 90 ? 'negative' : vm.disk >= 80 ? 'warning' : 'positive'}">${vm.disk}%</strong></div>
+                        </div>
+                        <div style="margin-top:10px">${sparkline(vm.history.cpu, 'var(--primary)')}</div>
+                        ${occupied !== null ? `
+                        <div style="margin-top:9px">
+                            <div style="display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-3);margin-bottom:3px"><span>Ocupação no período</span><strong style="color:var(--text-2)">${occupied.toFixed(1)}%</strong></div>
+                            <div class="progress-track" style="height:5px"><div class="progress-fill ${occupied >= 30 ? 'warning' : 'success'}" style="width:${occupied}%"></div></div>
+                        </div>` : ''}
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:9px">
+                            ${relMeta ? `<span class="badge ${relMeta.cls}" style="font-size:9px"><span class="dot"></span>${relMeta.label}</span>` : '<span></span>'}
+                            <span style="color:var(--text-3);font-size:10px">Uptime ${vm.uptime.toFixed(1)}h</span>
+                        </div>
+                        <div style="margin-top:8px">${statusBadge(vm.rdp)}</div>
                     </div>
-                    <div class="vm-metrics">
-                        <div class="vm-metric"><span>CPU</span><strong class="trend-${vm.cpu >= 90 ? 'negative' : vm.cpu >= 75 ? 'warning' : 'positive'}">${vm.cpu}%</strong></div>
-                        <div class="vm-metric"><span>RAM</span><strong class="trend-${vm.memory >= 90 ? 'negative' : vm.memory >= 80 ? 'warning' : 'positive'}">${vm.memory}%</strong></div>
-                        <div class="vm-metric"><span>Disco</span><strong class="trend-${vm.disk >= 90 ? 'negative' : vm.disk >= 80 ? 'warning' : 'positive'}">${vm.disk}%</strong></div>
-                    </div>
-                    <div style="margin-top:10px">${sparkline(vm.history.cpu, 'var(--primary)')}</div>
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;color:var(--text-3);font-size:10px">
-                        <span>${statusBadge(vm.rdp)}</span>
-                        <span>Uptime ${vm.uptime.toFixed(1)}h</span>
-                    </div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
+            $$('#vmGrid [data-tip]').forEach(el => {
+                el.addEventListener('mousemove', e => showTooltip(e, el.dataset.tip));
+                el.addEventListener('mouseleave', hideTooltip);
+            });
         }
 
 
