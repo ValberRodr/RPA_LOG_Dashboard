@@ -24,9 +24,18 @@ MAPA DE ARQUIVOS
 --------------------------------------------------------------------------------
 server.py                      parser dos logs + servidor HTTP local + a
                                 integração opcional com Automation Anywhere.
-test_server.py                 suíte de testes local (unittest, sem deps).
-index.html                     cockpit operacional — SPA de página única,
-                                todo o JS inline num único <script>.
+test_server.py                 suíte de testes local do back-end (unittest, sem deps).
+test_dashboard.js              suíte de testes local das partes puras do
+                                front-end (node --test, sem deps).
+index.html                     cockpit operacional — SPA de página única; o
+                                HTML só tem markup + <style>, a lógica está
+                                em assets/dashboard-app.js (ver abaixo).
+assets/dashboard-app.js        todo o JavaScript de index.html, organizado em
+                                classes (Fmt, ChartService, NavigationController,
+                                RpaDataStore, e uma classe *Page por página:
+                                OverviewPage, AlertsPage, ExecutionsPage,
+                                IncidentsPage, InfrastructurePage, AuditPage,
+                                DiagnosticPage, CatalogPage, RpaOpsApp).
 investigacao.html              investigação forense por execution_id.
 diagnostico.html               diagnóstico técnico-operacional por execution_id.
 rpa-dashboard.html             dashboard histórico individual da RPA.
@@ -87,30 +96,51 @@ ARQUITETURA — VISÃO GERAL
 só reconstrói quando o fingerprint dos arquivos (contagem/tamanho/mtime)
 muda — por isso um GET repetido não reprocessa os logs à toa.
 
-FRONT-END — index.html (o cockpit)
-É uma SPA de arquivo único: um <script> só, sem módulos, sem bundler. Todas
-as `function`/`const` de nível superior desse script viram globais
-acessíveis por qualquer <script> carregado depois no mesmo documento — é
-assim que assets/aa-integration.js consegue reaproveitar `$`, `$$`,
-`escapeHtml`, `showToast`, `goToPage`, `DATA`, `window.OBS_DATA` sem
-duplicá-los.
+FRONT-END — index.html + assets/dashboard-app.js (o cockpit)
+index.html carrega assets/dashboard-app.js como um <script src> clássico —
+SEM type="module" e SEM um IIFE envolvendo o arquivo inteiro, de propósito:
+assets/aa-integration.js (carregado depois, como <script> irmão) lê por
+nome `$`, `$$`, `escapeHtml`, `showToast`, `goToPage`, `DATA`,
+`window.OBS_DATA`, `chartRegistry`, `drawChart`, `chartPalette` — scripts
+clássicos sem módulo compartilham o mesmo ambiente léxico de topo, e é
+assim que a integração opcional reaproveita tudo isso sem duplicar código.
+Se envolver dashboard-app.js num IIFE ou convertê-lo para type="module",
+esses identificadores somem do escopo global e a integração AA quebra.
 
-Convenções que você precisa conhecer para mexer em index.html:
+dashboard-app.js organiza as antigas ~63 funções soltas em classes por
+responsabilidade (Fmt, ChartService, UiFeedback, NavigationController,
+RpaDataStore, e uma classe *Page por página do menu). Para não exigir
+reescrever centenas de pontos de chamada, CADA função também tem um alias
+solto de mesmo nome (`const renderTimeline = OverviewPage.renderTimeline;`
+etc.) — o comportamento é idêntico a antes, só a organização mudou. `DATA`
+continua uma variável solta reatribuível (nunca uma propriedade de classe)
+porque é lida e reatribuída em dezenas de pontos.
+
+Convenções que você precisa conhecer para mexer em dashboard-app.js:
 - `DATA` é reatribuída a cada refresh (`DATA = window.INDEX_DATA`) — nunca
   guarde uma cópia de `DATA` ou de um campo dela numa constante fora de uma
   função; leia sempre em tempo de chamada.
-- Cada página é uma `<section class="page" id="page-NOME">`; `goToPage(nome)`
-  só alterna a classe `.active` entre elas. Adicionar uma página nova =
-  criar a `<section>` + um botão `.nav-link` com `data-page="nome"` + uma
-  função `renderNome()` chamada a partir de `renderAll()`.
-- `renderAll()` roda uma vez no load e de novo a cada `reloadData()`
-  (refresh de 20 min ou botão "Recarregar dados") — qualquer função de
-  render nova precisa ser chamada a partir dali para se manter atualizada.
-- Gráficos usam Chart.js (`chartRegistry`, `drawChart()`, `chartPalette()`).
-  Charts construídos numa página ainda oculta (`display:none`) herdam um
-  canvas com tamanho errado; por isso `goToPage()` força um `resize()` de
-  todos os charts registrados, com duplo `requestAnimationFrame`, depois de
-  trocar a página ativa — não remova isso.
+- Cada página é uma `<section class="page" id="page-NOME">` em index.html;
+  `NavigationController.goToPage(nome)` só alterna a classe `.active` entre
+  elas. Adicionar uma página nova = criar a `<section>` em index.html + um
+  botão `.nav-link` com `data-page="nome"` + um método `renderNome()` na
+  classe *Page correspondente, chamado a partir de `RpaOpsApp.renderAll()`.
+- `RpaOpsApp.renderAll()` roda uma vez no load e de novo a cada
+  `RpaDataStore.reloadData()` (refresh de 20 min ou botão "Recarregar
+  dados") — qualquer método de render novo precisa ser chamado a partir
+  dali para se manter atualizado.
+- Gráficos usam Chart.js (`ChartService.registry`, `.drawChart()`,
+  `.chartPalette()`). Charts construídos numa página ainda oculta
+  (`display:none`) herdam um canvas com tamanho errado; por isso
+  `NavigationController.goToPage()` força um `resize()` de todos os charts
+  registrados, com duplo `requestAnimationFrame`, depois de trocar a página
+  ativa — não remova isso.
+- `Fmt` e os métodos SVG-puros de `ChartService` (`sparkline`, `lineChart`)
+  não tocam o DOM — são as únicas partes de dashboard-app.js testadas fora
+  do navegador (test_dashboard.js, via `node --test`). O resto (as *Page,
+  NavigationController, RpaDataStore) manipula elementos da página
+  diretamente e continua verificado manualmente no navegador, como sempre
+  foi neste projeto.
 
 FRONT-END — páginas avulsas (investigacao.html, diagnostico.html,
 rpa-dashboard.html)
@@ -175,8 +205,13 @@ test de `build_dataset()` contra os logs reais do projeto, e as rotas HTTP
 principais contra um servidor de verdade numa porta livre. Rodar uma classe
 específica: `python3 -m unittest test_server.TestAutomationAnywhereGatewayMock -v`
 
-Não há teste automatizado de front-end (index.html e as páginas avulsas) —
-a verificação delas até hoje foi manual, no navegador, a cada mudança.
+`node --test test_dashboard.js` roda os testes das partes puras (sem DOM)
+de assets/dashboard-app.js: `Fmt` inteira (formatação de datas, badges,
+classificação de faixas de heatmap/métrica) e os dois mini-charts SVG de
+`ChartService` (sparkline/lineChart). O resto do front-end (as classes
+*Page, NavigationController, RpaDataStore, e as páginas avulsas) manipula
+o DOM diretamente e continua verificado manualmente no navegador a cada
+mudança, como sempre foi neste projeto.
 
 --------------------------------------------------------------------------------
 CARREGAMENTO E ATUALIZAÇÃO DOS DADOS
