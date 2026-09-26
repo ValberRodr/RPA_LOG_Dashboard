@@ -24,6 +24,14 @@ MAPA DE ARQUIVOS
 --------------------------------------------------------------------------------
 server.py                      parser dos logs + servidor HTTP local + a
                                 integração opcional com Automation Anywhere.
+                                Pipeline de dataset organizado em classes
+                                (TimeMath, IntervalMath,
+                                VmReliabilityClassifier,
+                                VmConsolidationPlanner, LogFileDiscovery,
+                                LogFileReader, ScheduleMatcher,
+                                DependencyAnalyzer, DatasetBuilder,
+                                IndexBuilder, DataCache) — ver ARQUITETURA
+                                abaixo.
 test_server.py                 suíte de testes local do back-end (unittest, sem deps).
 test_dashboard.js              suíte de testes local das partes puras do
                                 front-end (node --test, sem deps).
@@ -36,9 +44,15 @@ assets/dashboard-app.js        todo o JavaScript de index.html, organizado em
                                 OverviewPage, AlertsPage, ExecutionsPage,
                                 IncidentsPage, InfrastructurePage, AuditPage,
                                 DiagnosticPage, CatalogPage, RpaOpsApp).
-investigacao.html              investigação forense por execution_id.
-diagnostico.html               diagnóstico técnico-operacional por execution_id.
-rpa-dashboard.html             dashboard histórico individual da RPA.
+investigacao.html              investigação forense por execution_id —
+                                lógica na classe InvestigacaoPage (um método
+                                por seção renderizada).
+diagnostico.html                diagnóstico técnico-operacional por execution_id
+                                — classe DiagnosticoPage.
+rpa-dashboard.html             dashboard histórico individual da RPA —
+                                classe RpaDashboardPage (filtros de
+                                período/status/busca como propriedades da
+                                instância).
 assets/observability-core.js   kit de UI compartilhado pelas 3 páginas acima
                                 (window.RPAUI) — formatação, acesso a dados,
                                 mini-charts SVG, navegação entre páginas.
@@ -77,24 +91,48 @@ ARQUITETURA — VISÃO GERAL
     logs/*.log, logs/*.jsonl
              │
              ▼
-    server.py: build_dataset(mode)   ← parseia e filtra por janela de datas
-             │                         antes de abrir cada arquivo (barato)
+    server.py: DatasetBuilder.build_dataset(mode)  ← parseia e filtra por
+             │                         janela de datas antes de abrir cada
+             │                         arquivo (barato)
              ▼
     obs (dict "de detalhe": execuções, eventos por etapa, telemetria de VM)
              │
              ▼
-    server.py: build_index(obs, ...) ← agrega: KPIs, tendências, Pareto de
-             │                         erros, confiabilidade/utilização de
-             │                         VM, sugestão de consolidação
+    server.py: IndexBuilder.build_index(obs, ...)  ← agrega: KPIs, tendências,
+             │                         Pareto de erros, confiabilidade/
+             │                         utilização de VM, sugestão de
+             │                         consolidação
              ▼
     idx (dict "agregado", consumido principalmente por index.html)
              │
              ├── GET /assets/observability-data.js → window.OBS_DATA = obs
              └── GET /assets/index-data.js          → window.INDEX_DATA = idx
 
-`get_data(mode)` cacheia (obs, idx) em memória por modo ('90d' ou 'full') e
-só reconstrói quando o fingerprint dos arquivos (contagem/tamanho/mtime)
-muda — por isso um GET repetido não reprocessa os logs à toa.
+`DataCache.get_data(mode)` cacheia (obs, idx) em memória por modo ('90d' ou
+'full') e só reconstrói quando o fingerprint dos arquivos (contagem/
+tamanho/mtime) muda — por isso um GET repetido não reprocessa os logs à toa.
+
+BACK-END — server.py (organização em classes)
+O pipeline de dataset é organizado em classes por responsabilidade, cada
+método mantendo o nome original (com underscore quando aplicável) como
+`@staticmethod`: TimeMath (datas/percentil/mediana), IntervalMath (merge de
+intervalos, minutos ocupados, concorrência máxima — usado por
+VmConsolidationPlanner), VmReliabilityClassifier (classifica uma VM como
+confiável/instável cruzando todas as RPAs que passam por ela),
+VmConsolidationPlanner (sugestão de consolidação via coloração de grafo
+gulosa Welsh-Powell), LogFileDiscovery (localizar/filtrar arquivos de log
+por janela de datas), LogFileReader (leitura com cache incremental por
+mtime+tamanho), ScheduleMatcher (cruza agenda esperada × execuções reais,
+gera alertas de atraso/não-execução), DependencyAnalyzer (correlação
+"mudança de dependência × erro" usada pela Investigação), DatasetBuilder
+(`build_dataset`, um único método sequencial — deliberadamente não
+fragmentado: o fluxo é de passagem única com muitas variáveis locais
+interdependentes, e decompor mais aumentaria o risco de regressão sem
+ganho real de clareza) e IndexBuilder (`build_index`, mesma lógica de não
+fragmentar). Assim como em dashboard-app.js, cada método também tem um
+alias solto de mesmo nome logo após as classes (`build_dataset =
+DatasetBuilder.build_dataset` etc.) — nenhum ponto de chamada interno ou
+externo (test_server.py, AutomationAnywhereGateway) precisou mudar.
 
 FRONT-END — index.html + assets/dashboard-app.js (o cockpit)
 index.html carrega assets/dashboard-app.js como um <script src> clássico —
@@ -150,6 +188,19 @@ sidebar/roteamento — abrem numa aba nova a partir de index.html, sempre com
 um parâmetro na URL (`execution_id` ou `rpa_id`). Por segurança, nenhuma
 delas cai num "exemplo" quando o parâmetro está ausente/inválido — mostram
 uma mensagem de acesso inválido (ver seção SEGURANÇA).
+
+Cada página encapsula sua lógica numa única classe (InvestigacaoPage,
+DiagnosticoPage, RpaDashboardPage): construtor recebe `window.RPAUI`,
+`render()` faz a validação do parâmetro da URL + monta o estado
+compartilhado (execução, RPA, eventos, telemetria de VM) como propriedades
+da instância, e cada seção da página (hero, KPIs, evidências, gráficos,
+tabela etc.) é um método próprio que lê esse estado via `this`. Diferente
+de dashboard-app.js, aqui não há reuso entre páginas — a classe existe só
+para nomear/isolar cada seção, não para compartilhar código. Em
+RpaDashboardPage, os campos de filtro (período/status/busca) também viram
+propriedades da instância (`bindFilters()`) para que os handlers de evento
+consigam chamar `this.renderCharts()`/`this.renderTable()` sem variáveis
+globais soltas.
 
 --------------------------------------------------------------------------------
 INTEGRAÇÃO AUTOMATION ANYWHERE (módulo opcional)

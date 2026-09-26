@@ -72,148 +72,203 @@
     <script src="assets/auto-refresh.js"></script>
 <script>
 /* ============================================================================
-   INVESTIGAÇÃO
+   InvestigacaoPage
    Objetivo: reproduzir exatamente o que ocorreu em uma execução e manter
-   evidências suficientes para auditoria operacional, reprocessamento e análise.
+   evidências suficientes para auditoria operacional, reprocessamento e
+   análise. Cada seção do relatório (hero, KPIs, etapas, agenda, etc.) é um
+   método que só lê o estado já resolvido em `render()` — não há reuso entre
+   páginas aqui, então a classe existe para nomear e isolar cada seção, não
+   para compartilhar código com outro lugar.
    ============================================================================ */
-const U = window.RPAUI;
-/* Sem fallback para "última execução": abrir esta página sem um
-   execution_id válido na URL não deve expor dados de nenhuma execução. */
-const executionId = U.q.get('execution_id');
-document.querySelector('#btnCounterpart')?.addEventListener('click',()=>U.openDiagnostic(executionId));
-const ex = executionId ? U.getExecution(executionId) : null;
-if (!ex) {
-    document.body.innerHTML = '<main class="page"><div class="empty">Nenhuma execução válida foi informada. Abra a investigação a partir de uma execução no monitor.</div></main>';
-} else {
-    U.initToolbar(`Investigação ${executionId}`);
-    const rpa = U.getRpa(ex.rpaId);
-    const events = U.getEvents(executionId);
-    const vm = U.getVmContext(executionId);
-
-    document.querySelector('#hero').innerHTML = `<section class="hero">
-        <div class="hero-main">${U.statusBadge(ex.status)}<h1>${U.esc(rpa.name)}</h1><p><span class="mono">${U.esc(ex.executionId)}</span> · ${U.esc(ex.process)}</p></div>
-        <div class="stat"><span>Início</span><strong>${U.fmtDateTime(ex.start)}</strong></div>
-        <div class="stat"><span>Fim</span><strong>${U.fmtDateTime(ex.end)}</strong></div>
-        <div class="stat"><span>Duração</span><strong>${ex.durationMin.toFixed(2)} min</strong></div>
-        <div class="stat"><span>VM</span><strong class="mono">${U.esc(ex.machine)}</strong></div>
-    </section>`;
-
-    const errorSteps = events.filter(e=>e.status==='ERROR').length;
-    const warningSteps = events.filter(e=>e.status==='WARNING').length;
-    document.querySelector('#kpis').innerHTML = [
-        ['Etapas registradas',events.length,`${events.filter(e=>e.status==='SUCCESS').length} com sucesso`],
-        ['Erros de etapa',errorSteps,errorSteps?'requer evidência':'sem erro técnico'],
-        ['Warnings de etapa',warningSteps,`retries: ${ex.retryCount}`],
-        ['Itens processados',`${ex.processedItems}/${ex.totalItems}`,`${ex.errorItems} erro(s) de item`]
-    ].map(x=>`<div class="kpi"><span>${x[0]}</span><strong>${x[1]}</strong><small>${x[2]}</small></div>`).join('');
-
-    document.querySelector('#steps').innerHTML = events.map((s,i)=>`<div class="step">
-        <div class="step-icon ${s.status}">${s.status==='SUCCESS'?'✓':s.status==='ERROR'?'×':'!'}</div>
-        <div><div class="step-title">${String(s.order).padStart(2,'0')}. ${U.esc(s.step)}</div><div class="step-meta">${U.fmtTime(s.timestamp)} → ${U.fmtTime(s.endTimestamp)} · tentativa ${s.loopNumber}</div>${s.errorMessage?`<div class="error-box"><strong>${U.esc(s.errorCode||'ERRO')}</strong> · ${U.esc(s.errorType||'')}<br>${U.esc(s.errorMessage)}</div>`:`<div class="step-meta">${U.esc(s.message||'')}</div>`}</div>
-        <div>${U.statusBadge(s.status)}<div class="step-meta">${U.esc(s.severity)}</div></div>
-        <div><strong>${U.duration(s.durationSec)}</strong><div class="step-meta">tempo da etapa</div></div>
-        <div><div class="step-meta">Aplicação</div><strong>${U.esc(s.application||rpa.application)}</strong><div class="step-meta mono">${U.esc(s.transactionId||'')}</div></div>
-    </div>`).join('') || '<div class="empty">Sem eventos detalhados.</div>';
-
-    const scheduleRows = [
-        ['Horário previsto', U.fmtDateTime(ex.scheduledDatetime)],
-        ['Limite para início', U.fmtDateTime(ex.latestStartDatetime)],
-        ['Início real', U.fmtDateTime(ex.start)],
-        ['Atraso de início', `${ex.startDelaySec}s`],
-        ['Limite de conclusão', U.fmtDateTime(ex.deadlineDatetime)],
-        ['Término real', U.fmtDateTime(ex.end)],
-        ['Conformidade de início', U.statusBadge(ex.startCompliance==='NO_PRAZO'?'SUCCESS':'WARNING')+' '+U.esc(ex.startCompliance)],
-        ['Conformidade do deadline', U.statusBadge(ex.deadlineCompliance==='NO_PRAZO'?'SUCCESS':'ERROR')+' '+U.esc(ex.deadlineCompliance)],
-        ['Classificação da duração', U.statusBadge(ex.durationCompliance==='NORMAL'?'SUCCESS':ex.durationCompliance==='DEGRADADA'?'WARNING':'ERROR')+' '+U.esc(ex.durationCompliance)],
-    ];
-    document.querySelector('#schedule').innerHTML = scheduleRows.map(x=>`<div class="evidence"><span>${x[0]}</span><span>${x[1]}</span></div>`).join('');
-
-    const reconciled = ex.processedItems === ex.successItems + ex.warningItems + ex.errorItems;
-    document.querySelector('#reconciliation').innerHTML = `
-        <div class="callout ${reconciled?'':'danger'}">${reconciled?'Reconciliação consistente: processed_items = success + warning + error.':'Há divergência na reconciliação dos itens.'}</div>
-        <div class="grid g4" style="margin-top:12px">
-            <div class="stat"><span>Total previsto</span><strong>${ex.totalItems}</strong></div>
-            <div class="stat"><span>Processados</span><strong>${ex.processedItems}</strong></div>
-            <div class="stat"><span>Sucesso</span><strong>${ex.successItems}</strong></div>
-            <div class="stat"><span>Warning / erro</span><strong>${ex.warningItems} / ${ex.errorItems}</strong></div>
-        </div>`;
-
-    const vmRel = U.vmReliabilityFor(ex.machine);
-    const vmUtil = U.vmUtilizationFor(ex.machine);
-    const sharingNote = vmUtil && vmUtil.byRpa.length > 1
-        ? `Esta VM não é dedicada: também executa ${vmUtil.byRpa.length - 1} outra(s) RPA (${vmUtil.byRpa.filter(r=>r.rpaId!==ex.rpaId).slice(0,3).map(r=>U.esc(r.rpaName)).join(', ')}).`
-        : 'Esta VM está dedicada apenas a esta RPA no período analisado.';
-    const reliabilityNote = vmRel
-        ? `<div class="evidence"><span>Confiabilidade da VM</span>${U.reliabilityBadge(vmRel.classification)}</div><div class="evidence"><span>Taxa de erro geral da VM</span><strong>${vmRel.overallErrorRate}%</strong></div>`
-        : '';
-    if(vm.length){
-        const avg=k=>vm.reduce((a,r)=>a+Number(r[k]||0),0)/vm.length;
-        const max=k=>Math.max(...vm.map(r=>Number(r[k]||0)));
-        document.querySelector('#vmSummary').innerHTML = `<div class="grid g3">
-            <div class="stat"><span>CPU média / pico</span><strong>${avg('cpu_percent').toFixed(1)}% / ${max('cpu_percent').toFixed(1)}%</strong></div>
-            <div class="stat"><span>RAM média / pico</span><strong>${avg('memory_percent').toFixed(1)}% / ${max('memory_percent').toFixed(1)}%</strong></div>
-            <div class="stat"><span>Disco máximo</span><strong>${max('disk_percent').toFixed(1)}%</strong></div>
-        </div><div style="margin-top:10px" class="callout">RDP observado: ${[...new Set(vm.map(r=>r.rdp_status))].join(', ')}.</div>
-        ${reliabilityNote}
-        <div style="margin-top:10px" class="callout">${U.esc(sharingNote)}</div>`;
-        const vmSeries=vm.map(r=>({date:r.data.slice(11,16),cpu:r.cpu_percent,memory:r.memory_percent,disk:r.disk_percent}));
-        document.querySelector('#vmChart').innerHTML=U.lineSvg(vmSeries,[{key:'cpu',label:'CPU %'},{key:'memory',label:'RAM %'},{key:'disk',label:'Disco %'}],{min:0,max:100,labelX:r=>r.date,formatY:v=>`${Math.round(v)}%`});
-    } else {
-        document.querySelector('#vmSummary').innerHTML=`<div class="empty">Sem telemetria para a VM.</div>${reliabilityNote?`<div style="margin-top:10px">${reliabilityNote}</div>`:''}`;
-        document.querySelector('#vmChart').innerHTML='<div class="empty">Sem telemetria para a VM.</div>';
+class InvestigacaoPage {
+    constructor(rpaUi) {
+        this.U = rpaUi;
     }
 
-    const firstTx=events.find(e=>e.transactionId)?.transactionId || '—';
-    const evidence = [
-        ['execution_id',ex.executionId],['transaction_id',firstTx],['rpa_id',ex.rpaId],['process_name',ex.process],
-        ['robot_name',ex.robotName],['orchestrator',ex.orchestrator],['environment',ex.environment],['version',ex.version],
-        ['machine_name',ex.machine],['application',rpa.application],['support_team',rpa.supportTeam],['runbook',rpa.runbook]
-    ];
-    document.querySelector('#evidence').innerHTML=evidence.map(x=>`<div class="evidence"><span>${U.esc(x[0])}</span><span class="mono">${U.esc(x[1])}</span></div>`).join('');
-
-    const errorStep = events.find(e=>e.status==='ERROR');
-    const codeRank = errorStep?.errorCode ? U.paretoRank('errorCode', errorStep.errorCode) : null;
-    const stepRank = errorStep ? U.paretoRank('step', errorStep.step) : null;
-    const paretoNote = [
-        codeRank ? `O código <strong class="mono">${U.esc(errorStep.errorCode)}</strong> é o <strong>#${codeRank.rank}</strong> mais recorrente do período (${codeRank.count} ocorrência(s) entre os top ${codeRank.of}).` : '',
-        stepRank ? `A etapa <strong>${U.esc(errorStep.step)}</strong> está em <strong>#${stepRank.rank}</strong> no Pareto de erros por etapa (${stepRank.count} ocorrência(s)).` : '',
-    ].filter(Boolean).join('<br>');
-
-    const related=U.D.recurrenceByExecution[executionId]||[];
-    document.querySelector('#related').innerHTML =
-        (paretoNote ? `<div class="callout warning" style="margin-bottom:10px">${paretoNote}</div>` : '') +
-        (related.length?`<div class="mini-list">${related.map(x=>`<div class="mini-item clickable" onclick="RPAUI.openInvestigation('${x.executionId}')"><strong class="mono">${x.executionId}</strong><span class="muted">${U.fmtDateTime(x.start)} · ${U.esc(x.step)} · ${x.durationMin} min · ${U.esc(x.machine)}</span></div>`).join('')}</div>`:'<div class="empty">Não há recorrências equivalentes na janela analisada.</div>');
-
-    // Arquivos de dependência da RPA (base cadastral, não log): cruza a data
-    // de última alteração com a linha do tempo de erros da própria RPA.
-    // Sempre rotulado como correlação candidata — nunca como causa confirmada.
-    const deps = U.D.dependencyStatus?.[ex.rpaId] || [];
-    const signalNote = {
-        AUMENTOU: null, // renderizado como destaque abaixo
-        SEM_MUDANCA: 'Sem indício de mudança no padrão de erros após esta alteração.',
-        SEM_BASELINE: 'Arquivo alterado antes do início do período monitorado — não há histórico suficiente antes da alteração para comparar.',
-        DADOS_INSUFICIENTES: 'Alterado há menos de 2 dias — ainda não há execuções suficientes desde então para avaliar impacto.',
-        SEM_DADOS: 'Sem dados suficientes para avaliar.',
-    };
-    document.querySelector('#dependencies').innerHTML = deps.length ? `<div class="mini-list">${deps.map(d => {
-        if (!d.exists) {
-            return `<div class="mini-item"><strong>${U.esc(d.label)}</strong><div class="step-meta mono">${U.esc(d.path)}</div><div class="step-meta">Arquivo não encontrado no caminho cadastrado.</div></div>`;
+    /** Ponto de entrada. Sem fallback para "última execução": abrir esta
+     * página sem um execution_id válido na URL não deve expor dados de
+     * nenhuma execução (ver README.txt, seção SEGURANÇA). */
+    render() {
+        const U = this.U;
+        const executionId = U.q.get('execution_id');
+        document.querySelector('#btnCounterpart')?.addEventListener('click', () => U.openDiagnostic(executionId));
+        const ex = executionId ? U.getExecution(executionId) : null;
+        if (!ex) {
+            document.body.innerHTML = '<main class="page"><div class="empty">Nenhuma execução válida foi informada. Abra a investigação a partir de uma execução no monitor.</div></main>';
+            return;
         }
-        const head = `<strong>${U.esc(d.label)}</strong><div class="step-meta mono">${U.esc(d.path)}</div><div class="step-meta">Última alteração: ${U.fmtDateTime(d.lastModified)} · há ${d.daysSinceModification} dia(s)</div>`;
-        if (d.signal === 'AUMENTOU') {
-            const first = d.firstErrorAfter;
-            return `<div class="mini-item">${head}
-                <div class="callout warning" style="margin-top:8px">
-                    <strong>Correlação candidata</strong><br>
-                    ${d.errorsBefore30d} erro(s) nos 30 dias anteriores à alteração · ${d.errorsAfter30d} erro(s) nos dias seguintes.
-                    ${first ? ` Primeiro erro após a alteração: <span class="mono clickable" onclick="RPAUI.openInvestigation('${first.executionId}')">${first.executionId}</span>, ${first.hoursAfter}h depois.` : ''}
-                    Correlação temporal — confirme se a alteração é a causa antes de agir.
-                </div>
+
+        this.executionId = executionId;
+        this.ex = ex;
+        this.rpa = U.getRpa(ex.rpaId);
+        this.events = U.getEvents(executionId);
+        this.vm = U.getVmContext(executionId);
+
+        U.initToolbar(`Investigação ${executionId}`);
+        this.renderHero();
+        this.renderKpis();
+        this.renderSteps();
+        this.renderSchedule();
+        this.renderReconciliation();
+        this.renderVmSummary();
+        this.renderEvidence();
+        this.renderRelated();
+        this.renderDependencies();
+    }
+
+    renderHero() {
+        const { U, ex, rpa } = this;
+        document.querySelector('#hero').innerHTML = `<section class="hero">
+            <div class="hero-main">${U.statusBadge(ex.status)}<h1>${U.esc(rpa.name)}</h1><p><span class="mono">${U.esc(ex.executionId)}</span> · ${U.esc(ex.process)}</p></div>
+            <div class="stat"><span>Início</span><strong>${U.fmtDateTime(ex.start)}</strong></div>
+            <div class="stat"><span>Fim</span><strong>${U.fmtDateTime(ex.end)}</strong></div>
+            <div class="stat"><span>Duração</span><strong>${ex.durationMin.toFixed(2)} min</strong></div>
+            <div class="stat"><span>VM</span><strong class="mono">${U.esc(ex.machine)}</strong></div>
+        </section>`;
+    }
+
+    renderKpis() {
+        const { ex, events } = this;
+        const errorSteps = events.filter(e => e.status === 'ERROR').length;
+        const warningSteps = events.filter(e => e.status === 'WARNING').length;
+        document.querySelector('#kpis').innerHTML = [
+            ['Etapas registradas', events.length, `${events.filter(e => e.status === 'SUCCESS').length} com sucesso`],
+            ['Erros de etapa', errorSteps, errorSteps ? 'requer evidência' : 'sem erro técnico'],
+            ['Warnings de etapa', warningSteps, `retries: ${ex.retryCount}`],
+            ['Itens processados', `${ex.processedItems}/${ex.totalItems}`, `${ex.errorItems} erro(s) de item`],
+        ].map(x => `<div class="kpi"><span>${x[0]}</span><strong>${x[1]}</strong><small>${x[2]}</small></div>`).join('');
+    }
+
+    renderSteps() {
+        const { U, events, rpa } = this;
+        document.querySelector('#steps').innerHTML = events.map((s) => `<div class="step">
+            <div class="step-icon ${s.status}">${s.status === 'SUCCESS' ? '✓' : s.status === 'ERROR' ? '×' : '!'}</div>
+            <div><div class="step-title">${String(s.order).padStart(2, '0')}. ${U.esc(s.step)}</div><div class="step-meta">${U.fmtTime(s.timestamp)} → ${U.fmtTime(s.endTimestamp)} · tentativa ${s.loopNumber}</div>${s.errorMessage ? `<div class="error-box"><strong>${U.esc(s.errorCode || 'ERRO')}</strong> · ${U.esc(s.errorType || '')}<br>${U.esc(s.errorMessage)}</div>` : `<div class="step-meta">${U.esc(s.message || '')}</div>`}</div>
+            <div>${U.statusBadge(s.status)}<div class="step-meta">${U.esc(s.severity)}</div></div>
+            <div><strong>${U.duration(s.durationSec)}</strong><div class="step-meta">tempo da etapa</div></div>
+            <div><div class="step-meta">Aplicação</div><strong>${U.esc(s.application || rpa.application)}</strong><div class="step-meta mono">${U.esc(s.transactionId || '')}</div></div>
+        </div>`).join('') || '<div class="empty">Sem eventos detalhados.</div>';
+    }
+
+    renderSchedule() {
+        const { U, ex } = this;
+        const scheduleRows = [
+            ['Horário previsto', U.fmtDateTime(ex.scheduledDatetime)],
+            ['Limite para início', U.fmtDateTime(ex.latestStartDatetime)],
+            ['Início real', U.fmtDateTime(ex.start)],
+            ['Atraso de início', `${ex.startDelaySec}s`],
+            ['Limite de conclusão', U.fmtDateTime(ex.deadlineDatetime)],
+            ['Término real', U.fmtDateTime(ex.end)],
+            ['Conformidade de início', U.statusBadge(ex.startCompliance === 'NO_PRAZO' ? 'SUCCESS' : 'WARNING') + ' ' + U.esc(ex.startCompliance)],
+            ['Conformidade do deadline', U.statusBadge(ex.deadlineCompliance === 'NO_PRAZO' ? 'SUCCESS' : 'ERROR') + ' ' + U.esc(ex.deadlineCompliance)],
+            ['Classificação da duração', U.statusBadge(ex.durationCompliance === 'NORMAL' ? 'SUCCESS' : ex.durationCompliance === 'DEGRADADA' ? 'WARNING' : 'ERROR') + ' ' + U.esc(ex.durationCompliance)],
+        ];
+        document.querySelector('#schedule').innerHTML = scheduleRows.map(x => `<div class="evidence"><span>${x[0]}</span><span>${x[1]}</span></div>`).join('');
+    }
+
+    renderReconciliation() {
+        const { ex } = this;
+        const reconciled = ex.processedItems === ex.successItems + ex.warningItems + ex.errorItems;
+        document.querySelector('#reconciliation').innerHTML = `
+            <div class="callout ${reconciled ? '' : 'danger'}">${reconciled ? 'Reconciliação consistente: processed_items = success + warning + error.' : 'Há divergência na reconciliação dos itens.'}</div>
+            <div class="grid g4" style="margin-top:12px">
+                <div class="stat"><span>Total previsto</span><strong>${ex.totalItems}</strong></div>
+                <div class="stat"><span>Processados</span><strong>${ex.processedItems}</strong></div>
+                <div class="stat"><span>Sucesso</span><strong>${ex.successItems}</strong></div>
+                <div class="stat"><span>Warning / erro</span><strong>${ex.warningItems} / ${ex.errorItems}</strong></div>
             </div>`;
+    }
+
+    renderVmSummary() {
+        const { U, ex, vm } = this;
+        const vmRel = U.vmReliabilityFor(ex.machine);
+        const vmUtil = U.vmUtilizationFor(ex.machine);
+        const sharingNote = vmUtil && vmUtil.byRpa.length > 1
+            ? `Esta VM não é dedicada: também executa ${vmUtil.byRpa.length - 1} outra(s) RPA (${vmUtil.byRpa.filter(r => r.rpaId !== ex.rpaId).slice(0, 3).map(r => U.esc(r.rpaName)).join(', ')}).`
+            : 'Esta VM está dedicada apenas a esta RPA no período analisado.';
+        const reliabilityNote = vmRel
+            ? `<div class="evidence"><span>Confiabilidade da VM</span>${U.reliabilityBadge(vmRel.classification)}</div><div class="evidence"><span>Taxa de erro geral da VM</span><strong>${vmRel.overallErrorRate}%</strong></div>`
+            : '';
+        if (vm.length) {
+            const avg = k => vm.reduce((a, r) => a + Number(r[k] || 0), 0) / vm.length;
+            const max = k => Math.max(...vm.map(r => Number(r[k] || 0)));
+            document.querySelector('#vmSummary').innerHTML = `<div class="grid g3">
+                <div class="stat"><span>CPU média / pico</span><strong>${avg('cpu_percent').toFixed(1)}% / ${max('cpu_percent').toFixed(1)}%</strong></div>
+                <div class="stat"><span>RAM média / pico</span><strong>${avg('memory_percent').toFixed(1)}% / ${max('memory_percent').toFixed(1)}%</strong></div>
+                <div class="stat"><span>Disco máximo</span><strong>${max('disk_percent').toFixed(1)}%</strong></div>
+            </div><div style="margin-top:10px" class="callout">RDP observado: ${[...new Set(vm.map(r => r.rdp_status))].join(', ')}.</div>
+            ${reliabilityNote}
+            <div style="margin-top:10px" class="callout">${U.esc(sharingNote)}</div>`;
+            const vmSeries = vm.map(r => ({ date: r.data.slice(11, 16), cpu: r.cpu_percent, memory: r.memory_percent, disk: r.disk_percent }));
+            document.querySelector('#vmChart').innerHTML = U.lineSvg(vmSeries, [{ key: 'cpu', label: 'CPU %' }, { key: 'memory', label: 'RAM %' }, { key: 'disk', label: 'Disco %' }], { min: 0, max: 100, labelX: r => r.date, formatY: v => `${Math.round(v)}%` });
+        } else {
+            document.querySelector('#vmSummary').innerHTML = `<div class="empty">Sem telemetria para a VM.</div>${reliabilityNote ? `<div style="margin-top:10px">${reliabilityNote}</div>` : ''}`;
+            document.querySelector('#vmChart').innerHTML = '<div class="empty">Sem telemetria para a VM.</div>';
         }
-        return `<div class="mini-item">${head}<div class="step-meta" style="margin-top:6px">${signalNote[d.signal] || ''}</div></div>`;
-    }).join('')}</div>` : '<div class="empty">Nenhum arquivo de dependência cadastrado para esta RPA.</div>';
+    }
+
+    renderEvidence() {
+        const { U, ex, rpa, events } = this;
+        const firstTx = events.find(e => e.transactionId)?.transactionId || '—';
+        const evidence = [
+            ['execution_id', ex.executionId], ['transaction_id', firstTx], ['rpa_id', ex.rpaId], ['process_name', ex.process],
+            ['robot_name', ex.robotName], ['orchestrator', ex.orchestrator], ['environment', ex.environment], ['version', ex.version],
+            ['machine_name', ex.machine], ['application', rpa.application], ['support_team', rpa.supportTeam], ['runbook', rpa.runbook],
+        ];
+        document.querySelector('#evidence').innerHTML = evidence.map(x => `<div class="evidence"><span>${U.esc(x[0])}</span><span class="mono">${U.esc(x[1])}</span></div>`).join('');
+    }
+
+    renderRelated() {
+        const { U, events, executionId } = this;
+        const errorStep = events.find(e => e.status === 'ERROR');
+        const codeRank = errorStep?.errorCode ? U.paretoRank('errorCode', errorStep.errorCode) : null;
+        const stepRank = errorStep ? U.paretoRank('step', errorStep.step) : null;
+        const paretoNote = [
+            codeRank ? `O código <strong class="mono">${U.esc(errorStep.errorCode)}</strong> é o <strong>#${codeRank.rank}</strong> mais recorrente do período (${codeRank.count} ocorrência(s) entre os top ${codeRank.of}).` : '',
+            stepRank ? `A etapa <strong>${U.esc(errorStep.step)}</strong> está em <strong>#${stepRank.rank}</strong> no Pareto de erros por etapa (${stepRank.count} ocorrência(s)).` : '',
+        ].filter(Boolean).join('<br>');
+
+        const related = U.D.recurrenceByExecution[executionId] || [];
+        document.querySelector('#related').innerHTML =
+            (paretoNote ? `<div class="callout warning" style="margin-bottom:10px">${paretoNote}</div>` : '') +
+            (related.length ? `<div class="mini-list">${related.map(x => `<div class="mini-item clickable" onclick="RPAUI.openInvestigation('${x.executionId}')"><strong class="mono">${x.executionId}</strong><span class="muted">${U.fmtDateTime(x.start)} · ${U.esc(x.step)} · ${x.durationMin} min · ${U.esc(x.machine)}</span></div>`).join('')}</div>` : '<div class="empty">Não há recorrências equivalentes na janela analisada.</div>');
+    }
+
+    /* Arquivos de dependência da RPA (base cadastral, não log): cruza a data
+     * de última alteração com a linha do tempo de erros da própria RPA.
+     * Sempre rotulado como correlação candidata — nunca como causa confirmada. */
+    renderDependencies() {
+        const { U, ex } = this;
+        const deps = U.D.dependencyStatus?.[ex.rpaId] || [];
+        const signalNote = {
+            AUMENTOU: null, // renderizado como destaque abaixo
+            SEM_MUDANCA: 'Sem indício de mudança no padrão de erros após esta alteração.',
+            SEM_BASELINE: 'Arquivo alterado antes do início do período monitorado — não há histórico suficiente antes da alteração para comparar.',
+            DADOS_INSUFICIENTES: 'Alterado há menos de 2 dias — ainda não há execuções suficientes desde então para avaliar impacto.',
+            SEM_DADOS: 'Sem dados suficientes para avaliar.',
+        };
+        document.querySelector('#dependencies').innerHTML = deps.length ? `<div class="mini-list">${deps.map(d => {
+            if (!d.exists) {
+                return `<div class="mini-item"><strong>${U.esc(d.label)}</strong><div class="step-meta mono">${U.esc(d.path)}</div><div class="step-meta">Arquivo não encontrado no caminho cadastrado.</div></div>`;
+            }
+            const head = `<strong>${U.esc(d.label)}</strong><div class="step-meta mono">${U.esc(d.path)}</div><div class="step-meta">Última alteração: ${U.fmtDateTime(d.lastModified)} · há ${d.daysSinceModification} dia(s)</div>`;
+            if (d.signal === 'AUMENTOU') {
+                const first = d.firstErrorAfter;
+                return `<div class="mini-item">${head}
+                    <div class="callout warning" style="margin-top:8px">
+                        <strong>Correlação candidata</strong><br>
+                        ${d.errorsBefore30d} erro(s) nos 30 dias anteriores à alteração · ${d.errorsAfter30d} erro(s) nos dias seguintes.
+                        ${first ? ` Primeiro erro após a alteração: <span class="mono clickable" onclick="RPAUI.openInvestigation('${first.executionId}')">${first.executionId}</span>, ${first.hoursAfter}h depois.` : ''}
+                        Correlação temporal — confirme se a alteração é a causa antes de agir.
+                    </div>
+                </div>`;
+            }
+            return `<div class="mini-item">${head}<div class="step-meta" style="margin-top:6px">${signalNote[d.signal] || ''}</div></div>`;
+        }).join('')}</div>` : '<div class="empty">Nenhum arquivo de dependência cadastrado para esta RPA.</div>';
+    }
 }
+
+new InvestigacaoPage(window.RPAUI).render();
 </script>
 </body>
 </html>

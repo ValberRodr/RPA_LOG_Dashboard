@@ -52,46 +52,133 @@
     <script src="assets/auto-refresh.js"></script>
 <script>
 /* ============================================================================
-   DASHBOARD INDIVIDUAL DA RPA
+   RpaDashboardPage
    Objetivo: dar à sustentação uma visão histórica completa do comportamento
    da automação, mantendo drill-through para investigação e diagnóstico.
+   Um método por seção renderizada; os filtros (período/status/busca) ficam
+   como propriedades da instância para que os handlers de evento consigam
+   re-renderizar gráficos e tabela sem variáveis globais soltas.
    ============================================================================ */
-const U=window.RPAUI;
-/* Sem fallback para "primeira RPA do catálogo": abrir esta página sem um
-   rpa_id válido na URL não deve expor dados de nenhuma automação. */
-const rpaId=U.q.get('rpa_id');
-const rpa=rpaId ? U.getRpa(rpaId) : null;
-const agg=rpa ? U.D.rpaAggregates[rpaId] : null;
-if(!rpa){document.body.innerHTML='<main class="page"><div class="empty">Nenhuma RPA válida foi informada. Abra o dashboard a partir do catálogo ou de uma execução no monitor.</div></main>'}else{
-    U.initToolbar(`Dashboard ${rpa.name}`);
-    document.querySelector('#hero').innerHTML=`<section class="hero"><div class="hero-main"><span class="badge neutral">${U.esc(rpa.rpaId)}</span><h1>${U.esc(rpa.name)}</h1><p>${U.esc(rpa.businessArea)} · ${U.esc(rpa.businessProcess)} · ${U.esc(rpa.process)}</p></div><div class="stat"><span>Criticidade</span><strong>${U.esc(rpa.criticality)}</strong></div><div class="stat"><span>Aplicação</span><strong>${U.esc(rpa.application)}</strong></div><div class="stat"><span>VM primária</span><strong class="mono">${U.esc(rpa.primaryVm)}</strong></div><div class="stat"><span>Suporte</span><strong>${U.esc(rpa.supportTeam)}</strong></div></section>`;
-    document.querySelector('#kpis').innerHTML=[
-        ['Execuções',agg.totalExecutions,'no período completo'],['Success rate',`${agg.successRate.toFixed(1)}%`,`${agg.error} ERROR · ${agg.warning} WARNING`],
-        ['Duração mediana',`${agg.medianDuration.toFixed(1)} min`,`P95 ${agg.p95Duration.toFixed(1)} min`],['Itens processados',agg.processedItems.toLocaleString('pt-BR'),`${agg.retries} retries · ${agg.slaBreaches} SLA estourado`]
-    ].map(x=>`<div class="kpi"><span>${x[0]}</span><strong>${x[1]}</strong><small>${x[2]}</small></div>`).join('');
+class RpaDashboardPage {
+    constructor(rpaUi) {
+        this.U = rpaUi;
+    }
 
-    const period=document.querySelector('#period'), status=document.querySelector('#status'), search=document.querySelector('#search');
-    function filteredDaily(){const n=Number(period.value);return agg.daily.slice(-n)}
-    function renderCharts(){const daily=filteredDaily();document.querySelector('#successChart').innerHTML=U.lineSvg(daily,[{key:'successRate',label:'Success rate'}],{min:0,max:100,labelX:r=>r.date.slice(5).split('-').reverse().join('/'),formatY:v=>`${Math.round(v)}%`});document.querySelector('#durationChart').innerHTML=U.lineSvg(daily,[{key:'avgDuration',label:'Duração média'}],{min:0,labelX:r=>r.date.slice(5).split('-').reverse().join('/'),formatY:v=>`${Math.round(v)}m`});document.querySelector('#volumeChart').innerHTML=U.lineSvg(daily,[{key:'processedItems',label:'Itens processados'}],{min:0,labelX:r=>r.date.slice(5).split('-').reverse().join('/'),formatY:v=>Math.round(v).toLocaleString('pt-BR')});}
-    document.querySelector('#errors').innerHTML='<strong class="muted">Códigos</strong>'+U.barSvg((agg.errorCodes||[]).slice(0,8).map(x=>({label:x.code,value:x.count})),'value');
-    document.querySelector('#errorSteps').innerHTML='<strong class="muted">Etapas</strong>'+U.barSvg((agg.errorSteps||[]).slice(0,8).map(x=>({label:x.step,value:x.count})),'value');
-    document.querySelector('#profile').innerHTML=[['Horários',rpa.schedule.join(' · ')],['Calendário',rpa.calendar==='daily'?'SEG-DOM':'SEG-SEX'],['Duração esperada',`${rpa.expectedDurationMin} min`],['Atenção de duração',`${rpa.warningDurationMin} min`],['Limite máximo',`${rpa.maxDurationMin} min`],['Tolerância de início',`${rpa.startToleranceMin} min`],['Máximo de retries',rpa.maxRetries],['VM contingência',rpa.backupVm],['Impacto',rpa.businessImpact]].map(x=>`<div class="evidence"><span>${x[0]}</span><span>${U.esc(x[1])}</span></div>`).join('')
-        + (()=>{ const vmRel=U.vmReliabilityFor(rpa.primaryVm), vmUtil=U.vmUtilizationFor(rpa.primaryVm), rank=U.paretoRank('rpa', rpa.name);
-            return (vmRel?`<div class="evidence"><span>Confiabilidade da VM primária</span>${U.reliabilityBadge(vmRel.classification)}</div>`:'')
-                + (vmUtil?`<div class="evidence"><span>RPAs que dividem a VM primária</span><strong>${vmUtil.byRpa.length}</strong></div>`:'')
-                + (rank?`<div class="evidence"><span>Posição no Pareto de erros por RPA</span><strong>#${rank.rank} de ${rank.of} (${rank.count} erro(s))</strong></div>`:'<div class="evidence"><span>Posição no Pareto de erros por RPA</span><strong>Fora do top de concentração de erros</strong></div>'); })();
+    /** Ponto de entrada. Sem fallback para "primeira RPA do catálogo": abrir
+     * esta página sem um rpa_id válido na URL não deve expor dados de
+     * nenhuma automação (ver README.txt, seção SEGURANÇA). */
+    render() {
+        const U = this.U;
+        this.rpaId = U.q.get('rpa_id');
+        this.rpa = this.rpaId ? U.getRpa(this.rpaId) : null;
+        if (!this.rpa) {
+            document.body.innerHTML = '<main class="page"><div class="empty">Nenhuma RPA válida foi informada. Abra o dashboard a partir do catálogo ou de uma execução no monitor.</div></main>';
+            return;
+        }
 
-    document.querySelector('#benefits').innerHTML = (rpa.benefits||[]).length
-        ? `<ul style="margin:0;padding-left:18px;display:grid;gap:8px">${rpa.benefits.map(b=>`<li>${U.esc(b)}</li>`).join('')}</ul>`
-        : '<div class="empty">Sem benefícios cadastrados.</div>';
-    document.querySelector('#owners').innerHTML = (rpa.owners||[]).length
-        ? `<div class="mini-list">${rpa.owners.map(o=>`<div class="mini-item"><strong>${U.esc(o.name)}</strong><div class="step-meta">${U.esc(o.role)}</div></div>`).join('')}</div>`
-        : '<div class="empty">Sem responsáveis cadastrados.</div>';
-    document.querySelector('#stepStats').innerHTML=(agg.stepStats||[]).map(s=>`<div class="metric-row"><span>${U.esc(s.step)}</span><div class="progress"><span style="width:${Math.min(100,s.avgSec/Math.max(...agg.stepStats.map(x=>x.avgSec))*100)}%"></span></div><strong>${U.duration(s.avgSec)}</strong></div>`).join('')||'<div class="empty">Sem dados de etapas.</div>';
+        this.agg = U.D.rpaAggregates[this.rpaId];
+        U.initToolbar(`Dashboard ${this.rpa.name}`);
+        this.renderHero();
+        this.renderKpis();
+        this.renderErrors();
+        this.renderProfile();
+        this.renderBenefits();
+        this.renderOwners();
+        this.renderStepStats();
+        this.bindFilters();
+        this.renderCharts();
+        this.renderTable();
+    }
 
-    function renderTable(){const n=Number(period.value);const cutoff=new Date(U.D.periodEnd+'T23:59:59');cutoff.setDate(cutoff.getDate()-n+1);let rows=U.D.executions.filter(x=>x.rpaId===rpaId && new Date(x.start)>=cutoff);if(status.value!=='ALL')rows=rows.filter(x=>x.status===status.value);const q=search.value.trim().toLowerCase();if(q)rows=rows.filter(x=>(x.executionId+' '+x.machine).toLowerCase().includes(q));rows.sort((a,b)=>b.start.localeCompare(a.start));document.querySelector('#tableCount').textContent=`${rows.length} execução(ões)`;document.querySelector('#executions').innerHTML=rows.map(x=>`<tr><td class="mono">${x.executionId}</td><td class="nowrap">${U.fmtDateTime(x.start)}</td><td>${U.statusBadge(x.status)}</td><td>${x.durationMin.toFixed(1)} min</td><td>${x.processedItems}/${x.totalItems}</td><td>${x.retryCount}</td><td>${x.deadlineCompliance}</td><td class="mono">${U.esc(x.machine)}</td><td class="nowrap"><button class="btn" onclick="RPAUI.openInvestigation('${x.executionId}')">Investigar</button> <button class="btn" onclick="RPAUI.openDiagnostic('${x.executionId}')">Diagnóstico</button></td></tr>`).join('')||'<tr><td colspan="9" class="empty">Sem execuções para o filtro.</td></tr>';}
-    period.addEventListener('change',()=>{renderCharts();renderTable()});status.addEventListener('change',renderTable);search.addEventListener('input',renderTable);renderCharts();renderTable();
+    renderHero() {
+        const { U, rpa } = this;
+        document.querySelector('#hero').innerHTML = `<section class="hero"><div class="hero-main"><span class="badge neutral">${U.esc(rpa.rpaId)}</span><h1>${U.esc(rpa.name)}</h1><p>${U.esc(rpa.businessArea)} · ${U.esc(rpa.businessProcess)} · ${U.esc(rpa.process)}</p></div><div class="stat"><span>Criticidade</span><strong>${U.esc(rpa.criticality)}</strong></div><div class="stat"><span>Aplicação</span><strong>${U.esc(rpa.application)}</strong></div><div class="stat"><span>VM primária</span><strong class="mono">${U.esc(rpa.primaryVm)}</strong></div><div class="stat"><span>Suporte</span><strong>${U.esc(rpa.supportTeam)}</strong></div></section>`;
+    }
+
+    renderKpis() {
+        const { agg } = this;
+        document.querySelector('#kpis').innerHTML = [
+            ['Execuções', agg.totalExecutions, 'no período completo'], ['Success rate', `${agg.successRate.toFixed(1)}%`, `${agg.error} ERROR · ${agg.warning} WARNING`],
+            ['Duração mediana', `${agg.medianDuration.toFixed(1)} min`, `P95 ${agg.p95Duration.toFixed(1)} min`], ['Itens processados', agg.processedItems.toLocaleString('pt-BR'), `${agg.retries} retries · ${agg.slaBreaches} SLA estourado`],
+        ].map(x => `<div class="kpi"><span>${x[0]}</span><strong>${x[1]}</strong><small>${x[2]}</small></div>`).join('');
+    }
+
+    renderErrors() {
+        const { U, agg } = this;
+        document.querySelector('#errors').innerHTML = '<strong class="muted">Códigos</strong>' + U.barSvg((agg.errorCodes || []).slice(0, 8).map(x => ({ label: x.code, value: x.count })), 'value');
+        document.querySelector('#errorSteps').innerHTML = '<strong class="muted">Etapas</strong>' + U.barSvg((agg.errorSteps || []).slice(0, 8).map(x => ({ label: x.step, value: x.count })), 'value');
+    }
+
+    renderProfile() {
+        const { U, rpa } = this;
+        document.querySelector('#profile').innerHTML = [['Horários', rpa.schedule.join(' · ')], ['Calendário', rpa.calendar === 'daily' ? 'SEG-DOM' : 'SEG-SEX'], ['Duração esperada', `${rpa.expectedDurationMin} min`], ['Atenção de duração', `${rpa.warningDurationMin} min`], ['Limite máximo', `${rpa.maxDurationMin} min`], ['Tolerância de início', `${rpa.startToleranceMin} min`], ['Máximo de retries', rpa.maxRetries], ['VM contingência', rpa.backupVm], ['Impacto', rpa.businessImpact]].map(x => `<div class="evidence"><span>${x[0]}</span><span>${U.esc(x[1])}</span></div>`).join('')
+            + (() => {
+                const vmRel = U.vmReliabilityFor(rpa.primaryVm), vmUtil = U.vmUtilizationFor(rpa.primaryVm), rank = U.paretoRank('rpa', rpa.name);
+                return (vmRel ? `<div class="evidence"><span>Confiabilidade da VM primária</span>${U.reliabilityBadge(vmRel.classification)}</div>` : '')
+                    + (vmUtil ? `<div class="evidence"><span>RPAs que dividem a VM primária</span><strong>${vmUtil.byRpa.length}</strong></div>` : '')
+                    + (rank ? `<div class="evidence"><span>Posição no Pareto de erros por RPA</span><strong>#${rank.rank} de ${rank.of} (${rank.count} erro(s))</strong></div>` : '<div class="evidence"><span>Posição no Pareto de erros por RPA</span><strong>Fora do top de concentração de erros</strong></div>');
+            })();
+    }
+
+    renderBenefits() {
+        const { U, rpa } = this;
+        document.querySelector('#benefits').innerHTML = (rpa.benefits || []).length
+            ? `<ul style="margin:0;padding-left:18px;display:grid;gap:8px">${rpa.benefits.map(b => `<li>${U.esc(b)}</li>`).join('')}</ul>`
+            : '<div class="empty">Sem benefícios cadastrados.</div>';
+    }
+
+    renderOwners() {
+        const { U, rpa } = this;
+        document.querySelector('#owners').innerHTML = (rpa.owners || []).length
+            ? `<div class="mini-list">${rpa.owners.map(o => `<div class="mini-item"><strong>${U.esc(o.name)}</strong><div class="step-meta">${U.esc(o.role)}</div></div>`).join('')}</div>`
+            : '<div class="empty">Sem responsáveis cadastrados.</div>';
+    }
+
+    renderStepStats() {
+        const { U, agg } = this;
+        document.querySelector('#stepStats').innerHTML = (agg.stepStats || []).map(s => `<div class="metric-row"><span>${U.esc(s.step)}</span><div class="progress"><span style="width:${Math.min(100, s.avgSec / Math.max(...agg.stepStats.map(x => x.avgSec)) * 100)}%"></span></div><strong>${U.duration(s.avgSec)}</strong></div>`).join('') || '<div class="empty">Sem dados de etapas.</div>';
+    }
+
+    /** Guarda os campos de filtro na instância e liga os eventos que
+     * re-renderizam gráficos/tabela sem recriar os listeners. */
+    bindFilters() {
+        this.period = document.querySelector('#period');
+        this.status = document.querySelector('#status');
+        this.search = document.querySelector('#search');
+        this.period.addEventListener('change', () => { this.renderCharts(); this.renderTable(); });
+        this.status.addEventListener('change', () => this.renderTable());
+        this.search.addEventListener('input', () => this.renderTable());
+    }
+
+    filteredDaily() {
+        const n = Number(this.period.value);
+        return this.agg.daily.slice(-n);
+    }
+
+    renderCharts() {
+        const { U } = this;
+        const daily = this.filteredDaily();
+        document.querySelector('#successChart').innerHTML = U.lineSvg(daily, [{ key: 'successRate', label: 'Success rate' }], { min: 0, max: 100, labelX: r => r.date.slice(5).split('-').reverse().join('/'), formatY: v => `${Math.round(v)}%` });
+        document.querySelector('#durationChart').innerHTML = U.lineSvg(daily, [{ key: 'avgDuration', label: 'Duração média' }], { min: 0, labelX: r => r.date.slice(5).split('-').reverse().join('/'), formatY: v => `${Math.round(v)}m` });
+        document.querySelector('#volumeChart').innerHTML = U.lineSvg(daily, [{ key: 'processedItems', label: 'Itens processados' }], { min: 0, labelX: r => r.date.slice(5).split('-').reverse().join('/'), formatY: v => Math.round(v).toLocaleString('pt-BR') });
+    }
+
+    renderTable() {
+        const { U, rpaId, status, search } = this;
+        const n = Number(this.period.value);
+        const cutoff = new Date(U.D.periodEnd + 'T23:59:59');
+        cutoff.setDate(cutoff.getDate() - n + 1);
+        let rows = U.D.executions.filter(x => x.rpaId === rpaId && new Date(x.start) >= cutoff);
+        if (status.value !== 'ALL') rows = rows.filter(x => x.status === status.value);
+        const q = search.value.trim().toLowerCase();
+        if (q) rows = rows.filter(x => (x.executionId + ' ' + x.machine).toLowerCase().includes(q));
+        rows.sort((a, b) => b.start.localeCompare(a.start));
+        document.querySelector('#tableCount').textContent = `${rows.length} execução(ões)`;
+        document.querySelector('#executions').innerHTML = rows.map(x => `<tr><td class="mono">${x.executionId}</td><td class="nowrap">${U.fmtDateTime(x.start)}</td><td>${U.statusBadge(x.status)}</td><td>${x.durationMin.toFixed(1)} min</td><td>${x.processedItems}/${x.totalItems}</td><td>${x.retryCount}</td><td>${x.deadlineCompliance}</td><td class="mono">${U.esc(x.machine)}</td><td class="nowrap"><button class="btn" onclick="RPAUI.openInvestigation('${x.executionId}')">Investigar</button> <button class="btn" onclick="RPAUI.openDiagnostic('${x.executionId}')">Diagnóstico</button></td></tr>`).join('') || '<tr><td colspan="9" class="empty">Sem execuções para o filtro.</td></tr>';
+    }
 }
+
+new RpaDashboardPage(window.RPAUI).render();
 </script>
 </body>
 </html>
