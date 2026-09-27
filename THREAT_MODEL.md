@@ -39,6 +39,15 @@ como validar autenticidade/integridade do conteúdo original).
 (seção 19 do SECURITY.md) — o pior caso é exibir dado errado, não propagar
 a adulteração para o arquivo fonte.
 
+**Variante — executável adulterado numa pasta de rede:** se o código/
+executável (não só os logs) for guardado numa pasta de rede compartilhada
+(ver seção 1 do SECURITY.md), quem tiver acesso de escrita a essa pasta
+poderia trocar o executável por um malicioso antes de outro usuário abrir o
+atalho. Sem assinatura de código (ver `packaging/README.md`), não há
+verificação automática de integridade — mitigação é de processo: restringir
+escrita nessa pasta de rede a quem realmente publica atualizações, nunca a
+todos os usuários que só rodam o app a partir dela.
+
 ### 4. API do Automation Anywhere comprometida/maliciosa
 Resposta da API do Control Room contém payload adversarial (nome de campo
 com HTML, URL inesperada, estrutura profundamente aninhada).
@@ -53,9 +62,16 @@ SECURITY.md — SSRF via redirect e via DNS rebinding/TOCTOU). Nenhum campo do
 nova (fora do fluxo natural de paginação, que não é atacável dessa forma).
 
 ### 5. Dependência comprometida
-N/A direto — o projeto não usa dependências de terceiros (nem Python nem
-JS além de stdlib/vanilla), então não há supply chain de pacote a
-comprometer. Revisar este item se isso mudar.
+N/A direto para o app em si — não usa dependências de terceiros (nem Python
+nem JS além de stdlib/vanilla), então não há supply chain de pacote a
+comprometer em tempo de execução. Revisar este item se isso mudar.
+
+**Ressalva de build:** gerar o executável (`packaging/`) usa o PyInstaller
+como ferramenta de build — uma dependência de build, não de runtime (não
+fica embutida na lógica do app, só empacota o interpretador Python + stdlib
+dentro do executável final). Instalar sempre a partir do PyPI oficial
+(`pip install pyinstaller`, como os scripts em `packaging/` já fazem) — nunca
+de um instalador de terceiros.
 
 ### 6. Roubo do token do Automation Anywhere
 Token em memória do processo Python, ou em `config/aa_config.json`, ou

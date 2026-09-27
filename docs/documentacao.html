@@ -258,6 +258,7 @@
         <div class="toc-group">
             <div class="toc-group-title">Sustentação</div>
             <a class="toc-link" href="#runbook">Runbook operacional</a>
+            <a class="toc-link" href="#empacotamento">Empacotamento (executáveis)</a>
             <a class="toc-link" href="#extensao">Como estender</a>
             <a class="toc-link" href="#glossario">Glossário</a>
         </div>
@@ -360,6 +361,13 @@ node --test test_dashboard.js</code></pre>
 ├── README.txt                     <span class="c"># guia de arquitetura resumido (nível "onboarding rápido")</span>
 ├── SECURITY.md                    <span class="c"># política de segurança + histórico de correções (causa/impacto/vetor/fix/teste)</span>
 ├── THREAT_MODEL.md                <span class="c"># 10 cenários de ameaça considerados e status de mitigação de cada um</span>
+├── <span class="d">.github/workflows/</span>
+│   └── build-executaveis.yml      <span class="c"># CI manual: builda o .exe (Windows) e o binário (macOS) sem precisar das duas máquinas</span>
+├── <span class="d">packaging/</span>
+│   ├── RPA_Ops_Monitor.spec       <span class="c"># spec do PyInstaller — só embute HTML/assets (config/logs ficam de fora)</span>
+│   ├── build_macos.sh             <span class="c"># gera dist/RPA_Ops_Monitor/ no macOS</span>
+│   ├── build_windows.bat          <span class="c"># gera dist\RPA_Ops_Monitor\ no Windows</span>
+│   └── README.md                  <span class="c"># arquitetura do empacotamento (por que config/logs ficam fora do bundle)</span>
 ├── <span class="d">docs/</span>
 │   └── documentacao.html          <span class="c"># ESTE arquivo</span>
 ├── <span class="d">assets/</span>
@@ -1169,6 +1177,34 @@ if (typeof module !== 'undefined' && module.exports) {
                     <tr><td>Painel abre numa janela sem barra de endereço/abas</td><td>Esperado: <code>python3 server.py</code> abre o Chrome/Edge em "modo app" de propósito (ver <a href="#inicio-rapido">Início rápido</a>). Para ver a URL de verdade, abra as ferramentas de desenvolvedor (a barra de endereço fica oculta por design, não é um bug).</td></tr>
                     <tr><td>Botão "Investigar"/"Diagnóstico"/"Dashboard ↗" não abre nada</td><td>Eles usam <code>window.open(...)</code> (<code>RPAUI.openInvestigation</code>/<code>openDiagnostic</code>/<code>openRpa</code>) — verificar se o navegador bloqueou o popup para esta origem (ícone na barra de endereço, ou configuração de "Pop-ups e redirecionamentos" do navegador) e liberar. Automação de browser/CDP também pode bloquear <code>window.open</code> mesmo com clique real, por não contar como gesto de usuário "genuíno" para o navegador.</td></tr>
                 </table></div>
+            </section>
+
+            <!-- ================================================================ -->
+            <section class="section" id="empacotamento">
+                <h2>Empacotamento (executáveis)<a class="anchor-link" href="#empacotamento">#</a></h2>
+                <p>Gera um executável nativo — Windows <code>.exe</code> ou binário macOS — que roda sem precisar de Python instalado na máquina de quem for usar o painel. Formato: uma <strong>pasta</strong> (<code>dist/RPA_Ops_Monitor/</code>) com o executável dentro, não um arquivo único auto-extraível — abre mais rápido e tem bem menos chance de antivírus/EDR corporativo barrar (o "onefile" do PyInstaller é um padrão conhecido de dropper de malware e dispara falso-positivo com frequência).</p>
+                <pre class="code-block"><span class="lang-tag">shell</span><code># macOS
+./packaging/build_macos.sh
+
+# Windows (duplo clique, ou via prompt de comando)
+packaging\build_windows.bat</code></pre>
+                <p>PyInstaller <strong>não faz cross-compile</strong>: cada script só gera o executável do próprio SO. Para gerar os dois sem ter as duas máquinas, use <strong>Actions → "Build executáveis (Windows/macOS)" → Run workflow</strong> no GitHub — builda nos runners hospedados do próprio GitHub e disponibiliza os dois como artifact pra baixar (<code>.github/workflows/build-executaveis.yml</code>, disparo manual de propósito).</p>
+                <h3>Por que config/logs ficam fora do bundle</h3>
+                <p><code>RPA_Ops_Monitor.spec</code> embute só os arquivos <strong>somente-leitura</strong> (HTMLs, <code>assets/</code> — exceto <code>observability-data.js</code>/<code>index-data.js</code>, o fallback de <code>file://</code> que o servidor nunca lê, ~15 MB de peso morto — e <code>docs/documentacao.html</code>). <code>config/</code> e <code>logs/</code> nunca entram no bundle: um executável do PyInstaller extrai seus dados embutidos para uma pasta temporária (<code>sys._MEIPASS</code>) recriada do zero a cada execução — se o cadastro estivesse ali dentro, qualquer edição feita pelo Cadastro de RPAs se perderia ao fechar o app.</p>
+                <p>Por isso <code>server.py</code> distingue dois caminhos-base no topo do arquivo:</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Constante</th><th>Aponta para</th><th>Contém</th></tr>
+                    <tr><td><code>BUNDLE_DIR</code></td><td><code>sys._MEIPASS</code> (empacotado) / pasta do script (dev)</td><td>HTMLs, <code>assets/</code> — só leitura; é o que <code>Handler</code> serve estaticamente.</td></tr>
+                    <tr><td><code>ROOT</code></td><td>pasta do executável real, via <code>Path(sys.executable).parent</code> (empacotado) / pasta do script (dev)</td><td><code>config/</code>, <code>logs/</code> — graváveis, precisam sobreviver a um rebuild/atualização.</td></tr>
+                </table></div>
+                <div class="callout callout-ok">
+                    <div class="icon-dot">✓</div>
+                    <p>Rodando como <code>python3 server.py</code> (sem empacotar), <code>BUNDLE_DIR</code> e <code>ROOT</code> são a mesma pasta — nenhum comportamento muda para quem usa dessa forma; validado com a suíte de 75 testes de <code>test_server.py</code> passando sem alteração.</p>
+                </div>
+                <div class="callout callout-warn">
+                    <div class="icon-dot">!</div>
+                    <p>Os scripts de build <strong>nunca sobrescrevem</strong> <code>config/</code>/<code>logs/</code> que já existam dentro de <code>dist/RPA_Ops_Monitor/</code> — só copiam na primeira vez. Rebuildar após atualizar o código preserva o Cadastro de RPAs editado e os logs reais do usuário. Nenhum dos dois executáveis é assinado (sem certificado Apple Developer ID/Microsoft Authenticode) — primeira abertura mostra aviso do SO (ver <a href="../packaging/README.md">packaging/README.md</a> e a seção 1 de <a href="../SECURITY.md">SECURITY.md</a> para a consideração de segurança de distribuir um executável não assinado).</p>
+                </div>
             </section>
 
             <!-- ================================================================ -->

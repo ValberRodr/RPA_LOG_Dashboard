@@ -1,0 +1,39 @@
+name: Build executáveis (Windows/macOS)
+
+# Manual de propósito (workflow_dispatch): empacotar não precisa rodar a
+# cada commit, só quando alguém quer um executável novo pra distribuir.
+# Rode em Actions → "Build executáveis (Windows/macOS)" → "Run workflow".
+on:
+  workflow_dispatch: {}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build
+        shell: cmd
+        run: packaging\build_windows.bat
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RPA_Ops_Monitor-windows
+          path: dist/RPA_Ops_Monitor
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build
+        run: |
+          chmod +x packaging/build_macos.sh
+          packaging/build_macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RPA_Ops_Monitor-macos
+          path: dist/RPA_Ops_Monitor

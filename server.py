@@ -41,7 +41,22 @@ import urllib.error
 import urllib.request
 import webbrowser
 
-ROOT = Path(__file__).resolve().parent
+# Rodando como script (`python3 server.py`), tudo fica na mesma pasta —
+# comportamento inalterado. Empacotado como executável (PyInstaller, ver
+# packaging/), os HTMLs/assets vão embutidos no bundle e são extraídos numa
+# pasta temporária a cada execução (sys._MEIPASS) — mas logs/config NUNCA
+# podem morar aí: essa pasta é recriada do zero a cada execução, então
+# qualquer gravação do Cadastro de RPAs se perderia. Por isso dois caminhos-
+# base: BUNDLE_DIR (só leitura, HTML/assets, pode estar no bundle) e ROOT
+# (logs/config, sempre numa pasta real e estável ao lado do .exe/binário —
+# nunca dentro do bundle temporário).
+if getattr(sys, 'frozen', False):
+    BUNDLE_DIR = Path(getattr(sys, '_MEIPASS', None) or Path(sys.executable).resolve().parent)
+    ROOT = Path(sys.executable).resolve().parent
+else:
+    BUNDLE_DIR = Path(__file__).resolve().parent
+    ROOT = BUNDLE_DIR
+
 LOG_BASE = ROOT / 'logs' / 'Organizacao&Processos' / 'Melhoria_Continua' / 'Monitoramento'
 RPA_LOG_ROOT = LOG_BASE / 'Logs'
 VM_ROOT = LOG_BASE / 'VMS' / 'Historico'
@@ -1937,7 +1952,12 @@ aa_gateway = AutomationAnywhereGateway(AA_CONFIG_FILE, get_data)
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self,*args,**kwargs):
-        super().__init__(*args,directory=str(ROOT),**kwargs)
+        # BUNDLE_DIR (não ROOT): os HTMLs/assets estáticos podem estar
+        # dentro do bundle do PyInstaller — nunca serve a pasta de
+        # logs/config real (ver comentário de BUNDLE_DIR/ROOT no topo do
+        # arquivo). Em modo script os dois caminhos são a mesma pasta, então
+        # o comportamento não muda.
+        super().__init__(*args,directory=str(BUNDLE_DIR),**kwargs)
 
     def end_headers(self):
         self.send_header('Cache-Control','no-store, no-cache, must-revalidate, max-age=0')

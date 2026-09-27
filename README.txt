@@ -19,6 +19,11 @@ INÍCIO RÁPIDO
   as variáveis de ambiente RPA_MONITOR_HOSTNAME e RPA_MONITOR_PORT.
 - Testes locais: `python3 test_server.py` (sem dependências, usa unittest da
   biblioteca padrão — ver seção TESTES mais abaixo).
+- Executável sem precisar de Python instalado: `packaging/build_macos.sh`
+  (macOS) ou `packaging/build_windows.bat` (Windows) geram uma pasta com o
+  binário dentro (`dist/RPA_Ops_Monitor/`) — ou baixe pronto em Actions →
+  "Build executáveis (Windows/macOS)" → Run workflow, no GitHub. Ver
+  packaging/README.md.
 
 POR QUE EXISTE UM SERVIDOR LOCAL?
 Navegadores bloqueiam a leitura automática de arquivos .log locais quando um

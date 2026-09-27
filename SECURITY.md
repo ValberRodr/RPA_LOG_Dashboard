@@ -21,6 +21,26 @@ Ver também [THREAT_MODEL.md](THREAT_MODEL.md).
 - Qualquer comunicação externa deve estar documentada aqui: hoje a única é a
   chamada explícita e opcional ao Control Room do Automation Anywhere,
   configurada manualmente pelo usuário (seção 4).
+- **Distribuição como executável (PyInstaller, ver `packaging/`):** os
+  executáveis gerados (Windows/macOS) não são assinados (sem certificado
+  Apple Developer ID / Microsoft Authenticode) — na primeira execução o SO
+  mostra um aviso ("desenvolvedor não identificado"/SmartScreen). Isso é
+  esperado, mas **treinar usuários a sempre clicar em "abrir/executar mesmo
+  assim" é, em geral, um vetor de engenharia social**: só distribua o
+  executável por um canal em que o usuário confia na origem (nunca por
+  e-mail/link externo não solicitado), e valide o hash/procedência antes de
+  rodar num ambiente sensível. `config/`/`logs/` ficam sempre fora do bundle
+  do executável (nunca dentro da pasta temporária de extração) — ver
+  `packaging/README.md` para o porquê.
+- **Armazenamento em pasta de rede:** é seguro guardar o código (ou o
+  executável) numa pasta compartilhada, desde que cada usuário rode seu
+  próprio processo local (continua ouvindo só em `127.0.0.1` na própria
+  máquina) — nunca um único servidor central acessado por vários usuários
+  pela rede (isso violaria o primeiro item desta seção). Risco à parte:
+  `config/rpa_metadata.json` compartilhado entre várias máquinas não tem
+  lock/controle de concorrência — edições simultâneas por usuários
+  diferentes podem se sobrescrever silenciosamente (perda de dado, não uma
+  vulnerabilidade de segurança).
 
 ## 2. Dados de logs — sempre não confiáveis
 
