@@ -20,10 +20,11 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from datetime import datetime, timedelta, date
 from collections import defaultdict, Counter
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, urljoin, parse_qs
 import bisect
 import hashlib
 import hmac
+import http.client
 import ipaddress
 import json
 import math
@@ -33,6 +34,7 @@ import re
 import secrets
 import socket
 import statistics
+import subprocess
 import sys
 import threading
 import urllib.error
@@ -47,7 +49,20 @@ META_FILE = ROOT / 'config' / 'rpa_metadata.json'
 AA_CONFIG_FILE = ROOT / 'config' / 'aa_config.json'
 HOST = '127.0.0.1'
 PORT = int(os.environ.get('RPA_MONITOR_PORT', '8765'))
-ALLOWED_ORIGIN = f'http://{HOST}:{PORT}'
+# Nome amigável para abrir o painel (em vez de "127.0.0.1"). Usa o sufixo
+# ".localhost", que Chrome/Edge/Firefox resolvem para 127.0.0.1 nativamente
+# — sem precisar editar /etc/hosts (ou o hosts do Windows) e sem exigir
+# privilégios de admin — em qualquer SO. Não usamos TLDs "reais" como
+# ".app": eles entram na lista de pré-carregamento HSTS dos navegadores, que
+# força HTTPS para qualquer nome sob esse sufixo — e este servidor só fala
+# HTTP, então a conexão simplesmente falharia.
+APP_HOSTNAME = os.environ.get('RPA_MONITOR_HOSTNAME', 'bs.rpa-monitor.localhost')
+APP_URL = f'http://{APP_HOSTNAME}:{PORT}'
+# O servidor continua ouvindo só em 127.0.0.1 (HOST); ambos os nomes chegam
+# nele pela interface de loopback, então aceitamos os dois como Origin
+# válida — assim o CSRF (camada 2) não quebra se alguém abrir por um nome ou
+# outro.
+ALLOWED_ORIGINS = {APP_URL.lower(), f'http://{HOST}:{PORT}'.lower(), f'http://localhost:{PORT}'.lower()}
 
 DEFAULT_WINDOW_DAYS = 90
 EXEC_FNAME_RE = re.compile(r'^RPA_(\d{4}-\d{2}-\d{2})(?:_(.+))?\.log$')
@@ -1430,6 +1445,58 @@ rpa_registry = RpaRegistryStore(META_FILE)
 # basta apontar aaBaseUrl para ele: o mesmo código passa a fazer proxy real.
 # =============================================================================
 
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """Conexão HTTP que ignora a resolução de DNS embutida do stdlib e
+    conecta direto no IP já validado contra o bloqueio de SSRF — ver
+    `AutomationAnywhereGateway._resolve_pinned_ip`."""
+    def __init__(self, pinned_ip, host, *args, **kwargs):
+        super().__init__(host, *args, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        self.sock = socket.create_connection((self._pinned_ip, self.port), self.timeout, self.source_address)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Como `_PinnedHTTPConnection`, mas preservando o TLS: o handshake usa
+    `server_hostname=self.host` (o hostname original, não o IP), então a
+    verificação de certificado continua correta mesmo conectando pelo IP
+    literal já validado."""
+    def __init__(self, pinned_ip, host, *args, **kwargs):
+        super().__init__(host, *args, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        sock = socket.create_connection((self._pinned_ip, self.port), self.timeout, self.source_address)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, pinned_ip):
+        super().__init__()
+        self._pinned_ip = pinned_ip
+
+    def http_open(self, req):
+        return self.do_open(lambda host, **kw: _PinnedHTTPConnection(self._pinned_ip, host, **kw), req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, pinned_ip):
+        super().__init__()
+        self._pinned_ip = pinned_ip
+
+    def https_open(self, req):
+        return self.do_open(lambda host, **kw: _PinnedHTTPSConnection(self._pinned_ip, host, **kw), req, context=self._context)
+
+
+class _NoFollowRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Desliga o redirecionamento automático do urllib. Cada salto é
+    revalidado manualmente em `AutomationAnywhereGateway._forward` antes de
+    seguir — ver a docstring de `_is_blocked_target`."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class AutomationAnywhereGateway:
     """Encapsula toda a integração opcional com o Automation Anywhere 360
     Control Room: config, autenticação, discovery de capability, Activity
@@ -1517,48 +1584,111 @@ class AutomationAnywhereGateway:
     def is_mock(self, base_url):
         return not base_url or base_url.strip().lower() in ('mock', 'http://mock', 'mock://local')
 
+    MAX_REDIRECTS = 5
+
+    @classmethod
+    def _blocked_ip(cls, ip_str):
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return True
+        return any(ip in net for net in cls._BLOCKED_HOST_NETWORKS)
+
+    @classmethod
+    def _resolve_pinned_ip(cls, url):
+        """Resolve o host de `url` uma ÚNICA vez e devolve o IP já validado
+        contra o bloqueio de SSRF (loopback/link-local/metadata) — os únicos
+        alvos que NUNCA são uma Control Room legítima. `_forward` conecta
+        exatamente nesse IP (nunca deixa a lib resolver de novo por conta
+        própria): sem isso, haveria uma janela entre esta checagem e a
+        conexão de verdade em que uma segunda resolução de DNS — um domínio
+        com TTL curto sob controle do atacante — poderia devolver um IP
+        diferente do validado aqui (DNS rebinding / TOCTOU). Uma falha de
+        resolução também é tratada como bloqueada (falha segura: preferível
+        recusar a chamada a arriscar um destino não verificado)."""
+        host = urlparse(url).hostname
+        if not host:
+            return None, 'SSRF_BLOCKED: URL sem host.'
+        port = urlparse(url).port or (443 if urlparse(url).scheme == 'https' else 80)
+        try:
+            infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        except socket.gaierror:
+            return None, 'SSRF_BLOCKED: falha ao resolver host.'
+        if not infos:
+            return None, 'SSRF_BLOCKED: nenhum endereço resolvido para o host.'
+        ip_str = infos[0][4][0]
+        if cls._blocked_ip(ip_str):
+            return None, 'SSRF_BLOCKED: destino não permitido (loopback/link-local/metadata).'
+        return ip_str, None
+
     @classmethod
     def _is_blocked_target(cls, url):
         """True se o host do `url` resolve para loopback/link-local/metadata
-        — os únicos alvos que NUNCA são uma Control Room legítima. Uma falha
-        de resolução de DNS também é tratada como bloqueada (falha segura:
-        preferível recusar a chamada a arriscar seguir para um destino não
-        verificado)."""
-        host = urlparse(url).hostname
-        if not host:
-            return True
-        try:
-            infos = socket.getaddrinfo(host, None)
-        except socket.gaierror:
-            return True
-        for info in infos:
-            try:
-                ip = ipaddress.ip_address(info[4][0])
-            except ValueError:
-                return True
-            if any(ip in net for net in cls._BLOCKED_HOST_NETWORKS):
-                return True
-        return False
+        (ou se a resolução falhar). Usado tanto na primeira chamada de
+        `_forward` quanto — crucialmente — em CADA salto de redirecionamento
+        (ver `_forward`): sem revalidar o destino de um `Location: ...`, uma
+        Control Room maliciosa ou comprometida poderia responder um 302 para
+        localhost/metadata e o proxy seguiria sem checar de novo."""
+        ip, _error = cls._resolve_pinned_ip(url)
+        return ip is None
 
     # ---- transporte HTTP com a Control Room real -----------------------
-    def _forward(self, method, url, headers, body_bytes):
-        """Encaminha uma chamada ao Control Room real. Nunca loga
-        headers/corpo (podem conter o token) — só o código de status e, em
-        erro, uma mensagem genérica sem o payload original."""
-        if self._is_blocked_target(url):
-            return 0, None, 'SSRF_BLOCKED: destino não permitido (loopback/link-local/metadata).'
+    def _do_one_request(self, method, url, headers, body_bytes, pinned_ip):
+        """Executa exatamente UMA requisição HTTP, conectando no `pinned_ip`
+        já validado (nunca deixa a lib resolver o host de novo). Nunca segue
+        redirecionamento sozinho — `_forward` decide se segue, revalidando o
+        novo destino primeiro."""
+        opener = urllib.request.build_opener(
+            _PinnedHTTPHandler(pinned_ip), _PinnedHTTPSHandler(pinned_ip), _NoFollowRedirectHandler(),
+        )
         req = urllib.request.Request(url, data=body_bytes, method=method)
         for k, v in headers.items():
             req.add_header(k, v)
         try:
-            with urllib.request.urlopen(req, timeout=self.UPSTREAM_TIMEOUT) as resp:
+            with opener.open(req, timeout=self.UPSTREAM_TIMEOUT) as resp:
                 return resp.status, resp.read(), None
         except urllib.error.HTTPError as exc:
-            return exc.code, exc.read(), None
-        except urllib.error.URLError as exc:
-            return 0, None, f'NETWORK_ERROR: {exc.reason}'
-        except TimeoutError:
-            return 0, None, 'NETWORK_ERROR: timeout'
+            # `_NoFollowRedirectHandler` faz `redirect_request` devolver
+            # None propositalmente — isso NÃO devolve a resposta 3xx de
+            # volta como retorno normal (diferença sutil do urllib: só
+            # cancela o `parent.open(new, ...)` que seguiria o redirect),
+            # o handler cai no próximo da cadeia e cai em
+            # `http_error_default`, que levanta HTTPError. Por isso um 3xx
+            # chega aqui como exceção, não como `resp` — extraímos o
+            # Location dela para `_forward` decidir (revalidando) se segue.
+            location = exc.headers.get('Location') if 300 <= exc.code < 400 else None
+            if location:
+                return exc.code, b'', location
+            raise
+
+    def _forward(self, method, url, headers, body_bytes):
+        """Encaminha uma chamada ao Control Room real. Nunca loga
+        headers/corpo (podem conter o token) — só o código de status e, em
+        erro, uma mensagem genérica sem o payload original.
+
+        Cada salto — incluindo cada redirecionamento 3xx — passa de novo por
+        `_resolve_pinned_ip` antes de conectar (ver docstring de
+        `_is_blocked_target`)."""
+        current_method, current_url, current_body = method, url, body_bytes
+        for _ in range(self.MAX_REDIRECTS + 1):
+            pinned_ip, error = self._resolve_pinned_ip(current_url)
+            if error:
+                return 0, None, error
+            try:
+                status, raw, location = self._do_one_request(current_method, current_url, headers, current_body, pinned_ip)
+            except urllib.error.HTTPError as exc:
+                return exc.code, exc.read(), None
+            except urllib.error.URLError as exc:
+                return 0, None, f'NETWORK_ERROR: {exc.reason}'
+            except TimeoutError:
+                return 0, None, 'NETWORK_ERROR: timeout'
+            if location:
+                current_url = urljoin(current_url, location)
+                if status in (301, 302, 303):
+                    current_method, current_body = 'GET', None
+                continue
+            return status, raw, None
+        return 0, None, 'NETWORK_ERROR: excesso de redirecionamentos.'
 
     def _classify_status(self, status, network_error):
         if network_error:
@@ -1887,7 +2017,7 @@ class Handler(SimpleHTTPRequestHandler):
         antes mesmo de olhar o token. Ferramentas não-navegador (curl,
         test_server.py) não mandam Origin, então continuam funcionando."""
         origin = self.headers.get('Origin')
-        return True if not origin else origin.rstrip('/').lower() == ALLOWED_ORIGIN.lower()
+        return True if not origin else origin.rstrip('/').lower() in ALLOWED_ORIGINS
 
     def _csrf_token_is_valid(self):
         """CSRF, camada 1: exige o cabeçalho X-CSRF-Token (obtido via GET
@@ -2053,15 +2183,51 @@ class Handler(SimpleHTTPRequestHandler):
         if '/api/' in self.path: print('[HTTP]',fmt%args)
 
 
+def _chrome_like_candidates() -> list[str]:
+    """Caminhos prováveis do Chrome/Edge no macOS e no Windows, em ordem de
+    preferência. Não depende de estarem no PATH (no Windows, em especial,
+    normalmente não estão)."""
+    if sys.platform == 'darwin':
+        return [
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+        ]
+    if sys.platform.startswith('win'):
+        bases = [os.environ.get('PROGRAMFILES'), os.environ.get('PROGRAMFILES(X86)'), os.environ.get('LOCALAPPDATA')]
+        out = []
+        for base in bases:
+            if not base:
+                continue
+            out.append(os.path.join(base, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+            out.append(os.path.join(base, 'Microsoft', 'Edge', 'Application', 'msedge.exe'))
+        return out
+    return []
+
+
+def _open_as_app_window(url: str) -> None:
+    """Abre o painel numa janela "modo app" do Chrome/Edge — sem barra de
+    endereço, abas ou menus — para que pareça um aplicativo próprio em vez
+    de uma aba de navegador comum. Se nenhum dos dois estiver instalado,
+    cai para o navegador padrão do sistema numa aba normal."""
+    for exe in _chrome_like_candidates():
+        if exe and os.path.isfile(exe):
+            try:
+                subprocess.Popen([exe, f'--app={url}'])
+                return
+            except OSError:
+                continue
+    webbrowser.open(url)
+
+
 def main():
     server=ThreadingHTTPServer((HOST,PORT),Handler)
-    url=f'http://{HOST}:{PORT}/index.html'
+    url=f'{APP_URL}/index.html'
     print('\nRPA Ops Monitor')
     print(f'Painel: {url}')
     print('Dados: ./logs (janela padrão de 90 dias; reprocessados de forma incremental quando houver alteração)')
     print('Atualização do navegador: incremental, a cada 20 minutos')
     print('Para encerrar: Ctrl+C\n')
-    threading.Timer(1.0,lambda:webbrowser.open(url)).start()
+    threading.Timer(1.0,lambda:_open_as_app_window(url)).start()
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally: server.server_close()

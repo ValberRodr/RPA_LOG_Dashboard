@@ -312,15 +312,22 @@ Iniciar_Monitoramento.bat
 
 # Manual (qualquer SO com Python 3)
 python3 server.py
-# abre automaticamente http://127.0.0.1:8765/index.html</code></pre>
-                <p>A porta pode ser alterada com a variável de ambiente <code>RPA_MONITOR_PORT</code> (padrão <code>8765</code>). O servidor só escuta em <code>127.0.0.1</code> — não é exposto na rede.</p>
+# abre sozinho uma janela do Chrome/Edge em "modo app" (sem barra de
+# endereço, abas ou menus) em http://bs.rpa-monitor.localhost:8765/index.html</code></pre>
+                <p>O servidor só escuta em <code>127.0.0.1</code> (constante <code>HOST</code> em <code>server.py</code>) — não é exposto na rede, mesmo com o hostname amigável. Três variáveis de ambiente controlam a abertura:</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Variável</th><th>Padrão</th><th>Efeito</th></tr>
+                    <tr><td><code>RPA_MONITOR_PORT</code></td><td><code>8765</code></td><td>Porta do servidor local.</td></tr>
+                    <tr><td><code>RPA_MONITOR_HOSTNAME</code></td><td><code>bs.rpa-monitor.localhost</code></td><td>Nome exibido/aberto no navegador em vez de <code>127.0.0.1</code>. Usa o sufixo <code>.localhost</code> de propósito: Chrome/Edge/Firefox resolvem qualquer nome sob esse sufixo para <code>127.0.0.1</code> nativamente (RFC 6761), sem precisar editar <code>/etc/hosts</code>/hosts do Windows nem privilégio de admin — e funciona igual nos dois SOs. Não use TLDs "reais" como <code>.app</code>: eles entram na lista de pré-carregamento HSTS dos navegadores, que força HTTPS para qualquer nome sob esse sufixo, e este servidor só fala HTTP puro — a conexão falharia.</td></tr>
+                </table></div>
+                <p><code>main()</code> tenta abrir o painel em "modo app" do Chrome ou Edge (<code>_open_as_app_window</code>/<code>_chrome_like_candidates</code> em <code>server.py</code>) — janela sem barra de endereço/abas/menus, usando <code>subprocess.Popen([caminho_absoluto_do_navegador, '--app=' + url])</code>. Os caminhos são absolutos e fixos por SO (nunca resolvidos via <code>PATH</code>, o que evitaria o clássico ataque de PATH hijacking). Sem Chrome/Edge instalado, cai para <code>webbrowser.open(url)</code> — o navegador padrão, numa aba normal.</p>
 
                 <h3>Rodar os testes automatizados</h3>
-                <pre class="code-block"><span class="lang-tag">shell</span><code># Backend — 26 testes, unittest da stdlib, sem dependências
+                <pre class="code-block"><span class="lang-tag">shell</span><code># Backend — 75 testes, unittest da stdlib, sem dependências
 python3 test_server.py
 python3 -m unittest test_server.TestAutomationAnywhereGatewayMock -v   # rodar uma classe específica
 
-# Frontend (partes puras, sem DOM) — 18 testes, test runner nativo do Node ≥18
+# Frontend (partes puras, sem DOM) — 25 testes, test runner nativo do Node ≥18
 node --test test_dashboard.js</code></pre>
 
                 <h3>Requisitos</h3>
@@ -342,8 +349,8 @@ node --test test_dashboard.js</code></pre>
                 <h2>Mapa de arquivos<a class="anchor-link" href="#mapa-arquivos">#</a></h2>
                 <div class="file-tree"><span class="d">RPA_Observability_Package_v3/</span>
 ├── server.py                      <span class="c"># backend: pipeline de dados + servidor HTTP + integração AA</span>
-├── test_server.py                 <span class="c"># 26 testes do backend (unittest, stdlib)</span>
-├── test_dashboard.js              <span class="c"># 18 testes das partes puras do frontend (node --test)</span>
+├── test_server.py                 <span class="c"># 75 testes do backend (unittest, stdlib)</span>
+├── test_dashboard.js              <span class="c"># 25 testes das partes puras do frontend (node --test)</span>
 ├── index.html                     <span class="c"># cockpit operacional (SPA de página única)</span>
 ├── investigacao.html              <span class="c"># investigação forense por execution_id</span>
 ├── diagnostico.html               <span class="c"># diagnóstico técnico-operacional por execution_id</span>
@@ -351,6 +358,8 @@ node --test test_dashboard.js</code></pre>
 ├── Iniciar_Monitoramento.command  <span class="c"># launcher macOS/Linux</span>
 ├── Iniciar_Monitoramento.bat      <span class="c"># launcher Windows</span>
 ├── README.txt                     <span class="c"># guia de arquitetura resumido (nível "onboarding rápido")</span>
+├── SECURITY.md                    <span class="c"># política de segurança + histórico de correções (causa/impacto/vetor/fix/teste)</span>
+├── THREAT_MODEL.md                <span class="c"># 10 cenários de ameaça considerados e status de mitigação de cada um</span>
 ├── <span class="d">docs/</span>
 │   └── documentacao.html          <span class="c"># ESTE arquivo</span>
 ├── <span class="d">assets/</span>
@@ -887,7 +896,7 @@ if (typeof module !== 'undefined' && module.exports) {
                     <tr><td><code>RpaFormatter</code></td><td>Formatação de data/hora/número/badges — sem estado, sem dependência de dado.</td></tr>
                     <tr><td><code>RpaDataRepository</code></td><td>Todo acesso a <code>OBS_DATA</code>/<code>INDEX_DATA</code>. <code>D</code> continua exposto como propriedade crua (as páginas acessam <code>U.D.executions</code> diretamente) por design — encapsular atrás de métodos exigiria reescrever as 3 páginas.</td></tr>
                     <tr><td><code>RpaChartRenderer</code></td><td>Os dois mini-charts em SVG puro (<code>lineSvg</code>, <code>barSvg</code>) usados pelas páginas avulsas — sem depender de Chart.js.</td></tr>
-                    <tr><td><code>RpaPageNavigator</code></td><td>Abrir outra página em nova aba, montar o toolbar padrão (fechar/exportar/snapshot), exportar PDF via <code>window.print()</code>.</td></tr>
+                    <tr><td><code>RpaPageNavigator</code></td><td>Abrir outra página em nova aba, montar o toolbar padrão (fechar/exportar/snapshot), exportar PDF via <code>window.print()</code>, e a delegação de clique de <code>bindExecutionLinks()</code> (ver abaixo).</td></tr>
                 </table></div>
                 <h3>API pública de <code>window.RPAUI</code></h3>
                 <div class="callout callout-danger">
@@ -912,6 +921,7 @@ if (typeof module !== 'undefined' && module.exports) {
                     <tr><td><code>openInvestigation(id)</code> / <code>openDiagnostic(id)</code> / <code>openRpa(id)</code></td><td>função</td><td>Abre outra página avulsa em nova aba com o parâmetro certo na URL.</td></tr>
                     <tr><td><code>exportPdf()</code></td><td>função</td><td><code>window.print()</code>.</td></tr>
                     <tr><td><code>initToolbar(label)</code></td><td>função</td><td>Liga botão fechar/PDF, preenche o label de snapshot e o <code>document.title</code>.</td></tr>
+                    <tr><td><code>bindExecutionLinks()</code></td><td>função</td><td>Liga <strong>um</strong> listener de clique delegado em <code>document.body</code> que abre investigação/diagnóstico quando o elemento clicado (ou um ancestral) tem <code>data-open-investigation</code>/<code>data-open-diagnostic</code>. Chamado uma vez por página (logo após <code>initToolbar</code>) — nunca use <code>onclick="RPAUI.open...('${execution_id}')"</code> inline: <code>execution_id</code> vem do log (não confiável) e o navegador decodifica entidades HTML antes de compilar um handler inline, então escapar HTML sozinho não impede a injeção de JS ali (ver <a href="#seguranca">Segurança</a>). Sobrevive a qualquer novo <code>innerHTML</code> dos containers internos porque o listener fica no <code>body</code>, não nos elementos recriados.</td></tr>
                     <tr><td><code>lineSvg(rows, series, options)</code> / <code>barSvg(rows, key, labelKey, options)</code></td><td>função</td><td>Os dois mini-charts SVG.</td></tr>
                 </table></div>
             </section>
@@ -1027,13 +1037,24 @@ if (typeof module !== 'undefined' && module.exports) {
                     <tr><td><code>activity_list(base_url, token, filters)</code></td><td>Mock: pagina sobre <code>_mock_activities()</code>. Real: <code>POST {baseUrl}/v3/activity/list</code>.</td></tr>
                     <tr><td><code>activity_detail(base_url, token, activity_id)</code></td><td>Busca uma atividade específica (mock ou real).</td></tr>
                     <tr><td><code>generic_proxy(base_url, token, method, path, body)</code></td><td>Só encaminha caminhos que começam com <code>/v2</code>, <code>/v3</code> ou <code>/v4</code> — nunca uma URL arbitrária.</td></tr>
-                    <tr><td><code>_forward(method, url, headers, body_bytes)</code></td><td>Transporte HTTP cru via <code>urllib.request</code>; nunca loga headers/corpo (podem conter o token).</td></tr>
+                    <tr><td><code>_forward(method, url, headers, body_bytes)</code></td><td>Laço de até <code>MAX_REDIRECTS</code> saltos: cada um resolve+valida o host via <code>_resolve_pinned_ip</code> antes de chamar <code>_do_one_request</code>; segue um <code>Location</code> de redirecionamento só depois de revalidar o novo destino. Nunca loga headers/corpo (podem conter o token).</td></tr>
+                    <tr><td><code>_resolve_pinned_ip(url)</code></td><td>Resolve o host <strong>uma única vez</strong> (<code>socket.getaddrinfo</code>) e valida o IP contra <code>_BLOCKED_HOST_NETWORKS</code> — devolve esse IP para a conexão usar exatamente ele, fechando a janela de TOCTOU/DNS rebinding entre checagem e conexão real.</td></tr>
+                    <tr><td><code>_is_blocked_target(url)</code></td><td><code>True</code>/<code>False</code> em cima de <code>_resolve_pinned_ip</code> — usado nos testes e onde só a decisão booleana importa.</td></tr>
+                    <tr><td><code>_do_one_request(method, url, headers, body, pinned_ip)</code></td><td>Executa exatamente uma requisição HTTP conectando no <code>pinned_ip</code> (via <code>_PinnedHTTPHandler</code>/<code>_PinnedHTTPSHandler</code>, módulo <code>_NoFollowRedirectHandler</code> desligando o redirect automático do <code>urllib</code>); devolve <code>(status, corpo, location)</code> — quem decide se segue o <code>location</code> é <code>_forward</code>.</td></tr>
                     <tr><td><code>_classify_status(status, network_error)</code></td><td>HTTP → <code>AVAILABLE</code>/<code>FORBIDDEN</code>/<code>UNAVAILABLE</code>/<code>TEMPORARY_ERROR</code>/<code>UNSUPPORTED</code>.</td></tr>
                     <tr><td><code>_mock_activities()</code></td><td>Deriva um Activity List plausível a partir das execuções locais — usado para exercitar o motor de correlação de ponta a ponta.</td></tr>
                     <tr><td><code>_mock_generic(path, method, body)</code></td><td>Simula Devices/Schedules/Repository/Audit/Policy a partir dos próprios dados locais.</td></tr>
                 </table></div>
                 <h4>Capabilities simuladas (<code>MOCK_CAPABILITIES</code>)</h4>
                 <p><code>activity</code>, <code>audit</code>, <code>repository</code>, <code>scheduler</code>, <code>devices</code>, <code>packages</code> → <span class="badge success">AVAILABLE</span> &nbsp;·&nbsp; <code>policy</code>, <code>deploy</code> → <span class="badge danger">FORBIDDEN</span> &nbsp;·&nbsp; <code>wlm</code>, <code>acc</code> → <span class="badge neutral">UNAVAILABLE</span> &nbsp;·&nbsp; <code>botInsight</code> → <span class="badge neutral">UNSUPPORTED</span></p>
+                <h4>Classes de transporte com IP pinado (nível de módulo, acima de <code>AutomationAnywhereGateway</code>)</h4>
+                <p>Existem porque <code>urllib.request.urlopen</code> puro resolve DNS de novo em cada conexão e segue redirecionamento sozinho — os dois abriam a brecha de SSRF corrigida em 2026-09-27 (ver <a href="#seguranca">Segurança</a>). Nunca usar <code>urlopen</code> direto para falar com um destino configurado pelo usuário; sempre por <code>_do_one_request</code>.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Classe</th><th>Papel</th></tr>
+                    <tr><td><code>_PinnedHTTPConnection</code> / <code>_PinnedHTTPSConnection</code></td><td>Subclasses de <code>http.client.HTTPConnection</code>/<code>HTTPSConnection</code> cujo <code>connect()</code> ignora a resolução de DNS embutida e conecta direto no IP já validado; a versão HTTPS faz o handshake TLS com <code>server_hostname=self.host</code> (hostname original, não o IP), então a verificação de certificado continua correta.</td></tr>
+                    <tr><td><code>_PinnedHTTPHandler</code> / <code>_PinnedHTTPSHandler</code></td><td>Handlers de <code>urllib.request</code> que instanciam as conexões pinadas acima — passados a <code>build_opener()</code> em <code>_do_one_request</code>.</td></tr>
+                    <tr><td><code>_NoFollowRedirectHandler</code></td><td><code>redirect_request</code> devolve sempre <code>None</code> — isso não retorna a resposta 3xx como valor normal (diferença sutil do <code>urllib</code>), o handler cai em <code>http_error_default</code>, que levanta <code>HTTPError</code>; <code>_do_one_request</code> captura essa exceção e extrai o <code>Location</code> dela.</td></tr>
+                </table></div>
             </section>
 
             <!-- ================================================================ -->
@@ -1063,12 +1084,12 @@ if (typeof module !== 'undefined' && module.exports) {
             <!-- ================================================================ -->
             <section class="section" id="testes">
                 <h2>Testes automatizados<a class="anchor-link" href="#testes">#</a></h2>
-                <h3>test_server.py — 72 testes (unittest, stdlib)</h3>
+                <h3>test_server.py — 75 testes (unittest, stdlib)</h3>
                 <div class="table-wrap"><table>
                     <tr><th>Classe de teste</th><th>Cobre</th></tr>
                     <tr><td><code>TestLogFilenamePatterns</code></td><td><code>EXEC_FNAME_RE</code>/<code>VM_FNAME_RE</code> — aceita nome válido (com e sem sufixo de execução), rejeita prefixo/extensão errados.</td></tr>
                     <tr><td><code>TestAutomationAnywhereGatewayMock</code></td><td>Todo o modo mock do gateway: <code>is_mock</code>, autenticação (rejeita chave curta, aceita válida, token determinístico via <code>hashlib</code>), discovery fixo, Activity List (derivação + paginação), detalhe (encontrado/não encontrado), proxy genérico (devices a partir das VMs fake, allowlist de path, policy FORBIDDEN, toggle de schedule sem tocar na agenda real) — usa <code>get_data_fn</code> fake, nunca lê <code>./logs</code>.</td></tr>
-                    <tr><td><code>TestAutomationAnywhereSsrfGuard</code></td><td>Guard de SSRF de <code>_forward</code>/<code>_is_blocked_target</code> — loopback (IPv4 e IPv6) e link-local/metadata (<code>169.254.169.254</code>) bloqueados, rede privada (<code>10/8</code>) e IP público liberados, <code>_forward</code> retorna erro sem tentar nenhuma conexão de rede quando bloqueado. Sempre com IPs literais — nunca depende de DNS/rede real no ambiente de teste.</td></tr>
+                    <tr><td><code>TestAutomationAnywhereSsrfGuard</code></td><td>Guard de SSRF de <code>_forward</code>/<code>_is_blocked_target</code>/<code>_resolve_pinned_ip</code> — loopback (IPv4 e IPv6) e link-local/metadata (<code>169.254.169.254</code>) bloqueados, rede privada (<code>10/8</code>) e IP público liberados, <code>_forward</code> retorna erro sem tentar nenhuma conexão de rede quando bloqueado. Mais 3 testes (2026-09-27, regressão da correção de SSRF via redirect): um <code>Location</code> de redirecionamento apontando para destino bloqueado NÃO é seguido (mocka só o transporte via <code>_do_one_request</code>, nunca a validação real, para exercitar de verdade a revalidação por salto); um redirecionamento para destino permitido continua funcionando (2 saltos); excesso de redirecionamentos (loop) para de tentar após <code>MAX_REDIRECTS</code>. Sempre com IPs literais — nunca depende de DNS/rede real no ambiente de teste.</td></tr>
                     <tr><td><code>TestRpaRegistryStore</code></td><td>CRUD completo (criar/editar/remover), geração de <code>schedules</code> (inclusive virada de meia-noite), validações (campo obrigatório, horário inválido/duplicado, ordenação de duração, criticidade/calendário fora do enum, processo duplicado), path traversal em <code>dependencyFiles</code> (absoluto e <code>../</code>, ambos rejeitados) e mass assignment (chave desconhecida no payload nunca chega ao disco) — sempre contra um arquivo JSON temporário, nunca <code>config/rpa_metadata.json</code> real.</td></tr>
                     <tr><td><code>TestDatasetBuilds</code></td><td>Smoke test de <code>build_dataset('90d')</code> contra os logs reais do projeto — chaves de topo esperadas presentes, pelo menos 1 RPA no resultado.</td></tr>
                     <tr><td><code>TestHttpServerRoutes</code></td><td>Servidor real numa porta livre: fluxo mock de autenticação AA de ponta a ponta, rotas de leitura (<code>/api/aa/config</code>, <code>/api/status</code>, <code>/api/registry/rpas</code>, <code>/api/csrf-token</code>), <code>index.html</code> serve, <code>observability-data.js</code> é JSON prefixado válido, proxy rejeita path fora da allowlist — e a camada de segurança inteira: POST sem/com token CSRF errado é rejeitado (403), <code>Origin</code> cross-site é rejeitado mesmo com token válido, <code>/api/reload</code> só aceita POST (GET dá 404), corpo acima de 2&nbsp;MB é rejeitado (413), <code>.git/HEAD</code> e listagem de diretório (<code>/config/</code>) dão 404, e toda resposta <code>.html</code> carrega um nonce de CSP que bate exatamente com o <code>&lt;script nonce="..."&gt;</code> injetado no corpo.</td></tr>
@@ -1096,7 +1117,8 @@ if (typeof module !== 'undefined' && module.exports) {
             <!-- ================================================================ -->
             <section class="section" id="seguranca">
                 <h2>Segurança<a class="anchor-link" href="#seguranca">#</a></h2>
-                <p>Uma auditoria de segurança desta aplicação (mesmo sendo <code>127.0.0.1</code>-only) encontrou e corrigiu 4 vulnerabilidades reais e comprovadas com PoC, além das más práticas listadas abaixo — nenhuma delas requer o servidor estar exposto na rede: todas exploráveis a partir do próprio navegador do operador (CSRF a partir de outra aba, `.git/` acessível localmente, etc.).</p>
+                <p>Este projeto segue uma política de segurança formal (OWASP, secure-by-default, least privilege) versionada em <a href="../SECURITY.md"><code>SECURITY.md</code></a> — requisitos por área, histórico de correções (causa/impacto/vetor/fix/teste de regressão para cada uma) e registro de toda auditoria realizada — e <a href="../THREAT_MODEL.md"><code>THREAT_MODEL.md</code></a>, com 10 cenários de ameaça considerados e o status de mitigação de cada um. <strong>Esta seção é um resumo de leitura rápida; <code>SECURITY.md</code> é a fonte de verdade</strong> — em caso de divergência entre os dois, ele prevalece.</p>
+                <p>Duas auditorias de segurança desta aplicação (mesmo sendo <code>127.0.0.1</code>-only) já encontraram e corrigiram vulnerabilidades reais e comprovadas com PoC: 4 na primeira rodada, e mais 3 MEDIUM em 2026-09-27 (SSRF via redirecionamento não revalidado, SSRF via TOCTOU/DNS rebinding, XSS armazenado em <code>execution_id</code>) — nenhuma exigiu o servidor exposto na rede: todas exploráveis a partir do próprio navegador do operador, ou a partir de quem controla/compromete o Control Room configurado.</p>
                 <div class="table-wrap"><table>
                     <tr><th>Controle</th><th>Onde / como</th></tr>
                     <tr><td>Servidor só local</td><td><code>HOST = '127.0.0.1'</code> em <code>server.py</code> — nunca escuta na rede.</td></tr>
@@ -1105,7 +1127,8 @@ if (typeof module !== 'undefined' && module.exports) {
                     <tr><td>Content-Security-Policy</td><td><code>Handler.end_headers()</code>: <code>script-src</code> usa um <strong>nonce por requisição</strong> em vez de <code>'unsafe-inline'</code> — toda resposta <code>.html</code> passa por <code>_serve_html_with_nonce</code>, que injeta o nonce em cada <code>&lt;script&gt;</code> inline daquela página. <code>style-src</code> mantém <code>'unsafe-inline'</code> por trade-off deliberado (documentado no próprio código): remover exigiria reescrever toda a geração de <code>style="..."</code> dinâmico do frontend, e CSS injetado não executa JavaScript arbitrário.</td></tr>
                     <tr><td>Path traversal no Cadastro de RPAs</td><td><code>RpaRegistryStore.validate_payload</code> rejeita qualquer <code>dependencyFiles[].path</code> absoluto ou que escape da pasta do projeto (checado com <code>resolve()</code> + <code>relative_to()</code>); <code>DependencyAnalyzer._dependency_file_status</code> repete a mesma checagem no ponto de uso, como defesa em profundidade.</td></tr>
                     <tr><td>Mass assignment no Cadastro de RPAs</td><td><code>RpaRegistryStore._extract_editable_fields</code> copia só as chaves conhecidas (<code>REQUIRED_FIELDS</code> + <code>OPTIONAL_FIELDS</code>) do payload — uma chamada direta à API não consegue gravar um campo arbitrário no arquivo.</td></tr>
-                    <tr><td>SSRF na integração AA</td><td><code>AutomationAnywhereGateway._forward</code> recusa qualquer <code>baseUrl</code> cujo host resolva para loopback, link-local ou o endpoint de metadata de nuvem (<code>169.254.169.254</code>) — redes privadas (<code>10/8</code>, <code>172.16/12</code>, <code>192.168/16</code>) continuam permitidas de propósito (Control Room on-premises é um caso de uso legítimo).</td></tr>
+                    <tr><td>SSRF na integração AA</td><td><code>AutomationAnywhereGateway._resolve_pinned_ip</code> recusa qualquer host que resolva para loopback, link-local ou o endpoint de metadata de nuvem (<code>169.254.169.254</code>) — redes privadas (<code>10/8</code>, <code>172.16/12</code>, <code>192.168/16</code>) continuam permitidas de propósito (Control Room on-premises é um caso de uso legítimo). Resolve o host <strong>uma única vez</strong> e conecta no IP literal já validado via <code>_PinnedHTTPConnection</code>/<code>_PinnedHTTPSConnection</code> (nunca deixa a stdlib resolver de novo) — fecha uma janela de TOCTOU/DNS rebinding em que um domínio com TTL curto podia responder IP público na checagem e loopback/metadata na conexão real, preservando a verificação de certificado TLS correta (<code>server_hostname</code> = host original, não o IP). Cada redirecionamento 3xx do Control Room passa de novo por essa validação antes de ser seguido (<code>_NoFollowRedirectHandler</code> desliga o redirect automático do <code>urllib</code>) — sem isso, um Control Room malicioso/comprometido podia responder <code>302 Location: http://169.254.169.254/...</code> e o proxy seguia sem checar de novo (corrigido 2026-09-27, ver <a href="../SECURITY.md">SECURITY.md</a>).</td></tr>
+                    <tr><td>XSS armazenado — <code>execution_id</code></td><td><code>execution_id</code> (vem direto do log, não sanitizado) escapava de <code>U.esc()</code> em 5 pontos de <code>investigacao.html</code>/<code>diagnostico.html</code>/<code>rpa-dashboard.html</code>, interpolado cru em <code>innerHTML</code> e em <code>onclick="RPAUI.open...('${...}')"</code> — escapar HTML sozinho não bastaria nesse último caso: o navegador decodifica entidades HTML antes de compilar um handler inline, então um <code>'</code> escapado como <code>&amp;#39;</code> ainda vira aspas de verdade na hora de compilar o JS. Corrigido removendo todo <code>onclick</code> inline do projeto: o id vai só em atributos <code>data-open-investigation</code>/<code>data-open-diagnostic</code> (sempre via <code>U.esc()</code>) lidos como string pura por um único listener delegado, <code>RPAUI.bindExecutionLinks()</code> (ver <a href="#kit-ui-compartilhado">Kit de UI compartilhado</a>) — nunca mais reinterpretados como código (corrigido 2026-09-27, ver <a href="../SECURITY.md">SECURITY.md</a>).</td></tr>
                     <tr><td>Limite de corpo da requisição</td><td><code>do_POST</code> rejeita (413) qualquer corpo acima de <code>MAX_POST_BODY_BYTES</code> (2 MB) — e drena a conexão em pedaços antes de responder, para não deixar o cliente com um <em>connection reset</em> no meio do envio.</td></tr>
                     <tr><td>Sem cache HTTP</td><td><code>Cache-Control: no-store, no-cache, must-revalidate, max-age=0</code> em toda resposta — os dados mudam a cada reprocessamento, nunca devem ficar presos em cache do navegador.</td></tr>
                     <tr><td>Sem fallback de navegação direta</td><td>Nenhuma das 3 páginas avulsas aceita abrir sem parâmetro válido na URL (ver <a href="#paginas-avulsas">Páginas avulsas</a>).</td></tr>
@@ -1116,7 +1139,11 @@ if (typeof module !== 'undefined' && module.exports) {
                 </table></div>
                 <div class="callout callout-warn">
                     <div class="icon-dot">!</div>
-                    <p><strong>Antes de mexer em <code>Handler</code>:</strong> qualquer resposta <code>.html</code> nova precisa continuar passando por <code>_serve_html_with_nonce</code> (não por <code>super().do_GET()</code> direto) para manter o nonce de CSP; qualquer rota POST nova que mude estado precisa entrar na lista <code>protected</code> de <code>do_POST</code> para herdar a checagem de CSRF/Origin automaticamente.</p>
+                    <p><strong>Antes de mexer em <code>Handler</code>:</strong> qualquer resposta <code>.html</code> nova precisa continuar passando por <code>_serve_html_with_nonce</code> (não por <code>super().do_GET()</code> direto) para manter o nonce de CSP; qualquer rota POST nova que mude estado precisa entrar na lista <code>protected</code> de <code>do_POST</code> para herdar a checagem de CSRF/Origin automaticamente; qualquer transporte HTTP novo que fale com um destino configurado pelo usuário (não só o Automation Anywhere) precisa seguir o padrão de <code>_resolve_pinned_ip</code>/<code>_PinnedHTTPConnection</code> — nunca <code>urllib.request.urlopen</code> puro, que resolve DNS de novo e segue redirect sem revalidar; qualquer valor vindo de log/API renderizado em HTML precisa passar por <code>U.esc()</code>/<code>Fmt.escapeHtml</code>, e nunca em <code>onclick="...('${...}')"</code> inline (ver <a href="#seguranca">XSS em execution_id</a> acima) — use um atributo <code>data-*</code> escapado + listener delegado.</p>
+                </div>
+                <div class="callout callout-ok">
+                    <div class="icon-dot">✓</div>
+                    <p>Política de segurança completa, histórico de correções (causa/impacto/vetor/fix/teste) e threat model versionados em <a href="../SECURITY.md"><code>SECURITY.md</code></a> e <a href="../THREAT_MODEL.md"><code>THREAT_MODEL.md</code></a>, na raiz do projeto — atualizar os dois sempre que uma vulnerabilidade nova for encontrada e corrigida, seguindo o mesmo formato das entradas já registradas.</p>
                 </div>
             </section>
 
@@ -1139,6 +1166,8 @@ if (typeof module !== 'undefined' && module.exports) {
                     <tr><td>"Recarregar dados" fica desabilitado / não faz nada</td><td>Painel aberto via <code>file://</code> — o recurso exige o servidor local (checado explicitamente em <code>RpaDataStore.reloadData</code>).</td></tr>
                     <tr><td>Integração AA presa em "Conectando…"</td><td>Verificar o checklist no modal (<code>auth</code>/<code>activity</code>/<code>capabilities</code>) para saber em qual etapa travou; em modo mock, confirmar que a API Key digitada tem ≥6 caracteres.</td></tr>
                     <tr><td>Botão "Automation Anywhere" mostra "Sessão expirada"</td><td>O backend devolveu <code>SESSION_EXPIRED</code> numa chamada — basta reconectar pelo mesmo botão; nada foi perdido no dashboard original.</td></tr>
+                    <tr><td>Painel abre numa janela sem barra de endereço/abas</td><td>Esperado: <code>python3 server.py</code> abre o Chrome/Edge em "modo app" de propósito (ver <a href="#inicio-rapido">Início rápido</a>). Para ver a URL de verdade, abra as ferramentas de desenvolvedor (a barra de endereço fica oculta por design, não é um bug).</td></tr>
+                    <tr><td>Botão "Investigar"/"Diagnóstico"/"Dashboard ↗" não abre nada</td><td>Eles usam <code>window.open(...)</code> (<code>RPAUI.openInvestigation</code>/<code>openDiagnostic</code>/<code>openRpa</code>) — verificar se o navegador bloqueou o popup para esta origem (ícone na barra de endereço, ou configuração de "Pop-ups e redirecionamentos" do navegador) e liberar. Automação de browser/CDP também pode bloquear <code>window.open</code> mesmo com clique real, por não contar como gesto de usuário "genuíno" para o navegador.</td></tr>
                 </table></div>
             </section>
 

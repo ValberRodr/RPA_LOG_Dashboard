@@ -105,6 +105,7 @@ class InvestigacaoPage {
         this.vm = U.getVmContext(executionId);
 
         U.initToolbar(`Investigação ${executionId}`);
+        U.bindExecutionLinks();
         this.renderHero();
         this.renderKpis();
         this.renderSteps();
@@ -218,6 +219,14 @@ class InvestigacaoPage {
         document.querySelector('#evidence').innerHTML = evidence.map(x => `<div class="evidence"><span>${U.esc(x[0])}</span><span class="mono">${U.esc(x[1])}</span></div>`).join('');
     }
 
+    /* execution_id vem direto do log (não confiável — ver SECURITY.md/
+     * THREAT_MODEL.md) e por isso nunca vai num onclick="...('${...}')"
+     * inline: o navegador decodifica entidades HTML antes de compilar um
+     * handler inline, então escapar HTML sozinho não bloquearia um
+     * execution_id malicioso de fechar a string JS e injetar código. Em vez
+     * disso, o id fica só num atributo data-open-investigation (escapado
+     * via U.esc) e é lido como string pura pelo listener delegado em
+     * RPAUI.bindExecutionLinks() — nunca reinterpretado como código. */
     renderRelated() {
         const { U, events, executionId } = this;
         const errorStep = events.find(e => e.status === 'ERROR');
@@ -231,7 +240,7 @@ class InvestigacaoPage {
         const related = U.D.recurrenceByExecution[executionId] || [];
         document.querySelector('#related').innerHTML =
             (paretoNote ? `<div class="callout warning" style="margin-bottom:10px">${paretoNote}</div>` : '') +
-            (related.length ? `<div class="mini-list">${related.map(x => `<div class="mini-item clickable" onclick="RPAUI.openInvestigation('${x.executionId}')"><strong class="mono">${x.executionId}</strong><span class="muted">${U.fmtDateTime(x.start)} · ${U.esc(x.step)} · ${x.durationMin} min · ${U.esc(x.machine)}</span></div>`).join('')}</div>` : '<div class="empty">Não há recorrências equivalentes na janela analisada.</div>');
+            (related.length ? `<div class="mini-list">${related.map(x => `<div class="mini-item clickable" data-open-investigation="${U.esc(x.executionId)}"><strong class="mono">${U.esc(x.executionId)}</strong><span class="muted">${U.fmtDateTime(x.start)} · ${U.esc(x.step)} · ${x.durationMin} min · ${U.esc(x.machine)}</span></div>`).join('')}</div>` : '<div class="empty">Não há recorrências equivalentes na janela analisada.</div>');
     }
 
     /* Arquivos de dependência da RPA (base cadastral, não log): cruza a data
@@ -258,7 +267,7 @@ class InvestigacaoPage {
                     <div class="callout warning" style="margin-top:8px">
                         <strong>Correlação candidata</strong><br>
                         ${d.errorsBefore30d} erro(s) nos 30 dias anteriores à alteração · ${d.errorsAfter30d} erro(s) nos dias seguintes.
-                        ${first ? ` Primeiro erro após a alteração: <span class="mono clickable" onclick="RPAUI.openInvestigation('${first.executionId}')">${first.executionId}</span>, ${first.hoursAfter}h depois.` : ''}
+                        ${first ? ` Primeiro erro após a alteração: <span class="mono clickable" data-open-investigation="${U.esc(first.executionId)}">${U.esc(first.executionId)}</span>, ${first.hoursAfter}h depois.` : ''}
                         Correlação temporal — confirme se a alteração é a causa antes de agir.
                     </div>
                 </div>`;

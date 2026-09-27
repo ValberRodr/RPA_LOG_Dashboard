@@ -48,6 +48,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
@@ -437,6 +438,47 @@ class TestAutomationAnywhereSsrfGuard(unittest.TestCase):
         self.assertIsNone(raw)
         self.assertIn('SSRF_BLOCKED', net_err)
 
+    def test_redirect_to_blocked_target_is_not_followed(self):
+        # Regressão: uma Control Room comprometida/maliciosa respondendo um
+        # 302 para localhost/metadata não deve ser seguida — cada salto de
+        # redirecionamento precisa revalidar o destino, não só a URL inicial
+        # (`_forward` chamava `urlopen` puro antes, que segue 3xx sozinho
+        # sem checar de novo). Mocka só o transporte (`_do_one_request`),
+        # nunca a validação real (`_resolve_pinned_ip`), para que o teste
+        # continue exercitando de verdade a lógica que bloqueia o segundo
+        # salto.
+        with unittest.mock.patch.object(
+            self.gateway, '_do_one_request',
+            return_value=(302, b'', 'http://127.0.0.1:9999/v2/roubo'),
+        ) as mocked:
+            status, raw, net_err = self.gateway._forward('GET', 'http://8.8.8.8/v2/x', {}, None)
+        mocked.assert_called_once()  # nunca chegou a tentar o segundo salto
+        self.assertEqual(status, 0)
+        self.assertIsNone(raw)
+        self.assertIn('SSRF_BLOCKED', net_err)
+
+    def test_redirect_to_allowed_target_is_followed(self):
+        # Garante que a revalidação por salto não quebrou o caso legítimo:
+        # uma Control Room atrás de um load balancer que responde 302 para
+        # outro IP permitido continua funcionando.
+        responses = [(302, b'', 'http://10.0.0.9/v2/final'), (200, b'{"ok":true}', None)]
+        with unittest.mock.patch.object(self.gateway, '_do_one_request', side_effect=responses) as mocked:
+            status, raw, net_err = self.gateway._forward('GET', 'http://8.8.8.8/v2/x', {}, None)
+        self.assertEqual(mocked.call_count, 2)
+        self.assertEqual(status, 200)
+        self.assertEqual(raw, b'{"ok":true}')
+        self.assertIsNone(net_err)
+
+    def test_forward_gives_up_after_too_many_redirects(self):
+        with unittest.mock.patch.object(
+            self.gateway, '_do_one_request',
+            return_value=(302, b'', 'http://8.8.8.8/v2/loop'),
+        ) as mocked:
+            status, raw, net_err = self.gateway._forward('GET', 'http://8.8.8.8/v2/x', {}, None)
+        self.assertEqual(mocked.call_count, self.gateway.MAX_REDIRECTS + 1)
+        self.assertEqual(status, 0)
+        self.assertIn('NETWORK_ERROR', net_err)
+
 
 class TestDatasetBuilds(unittest.TestCase):
     """Smoke test do pipeline real de dados — só roda se ./logs existir."""
@@ -606,7 +648,7 @@ class TestHttpServerRoutes(unittest.TestCase):
     def test_post_with_matching_origin_is_accepted(self):
         status, body = self._post_json(
             '/api/aa/authenticate', {'baseUrl': '', 'username': '', 'apiKey': 'chave-de-teste-123'},
-            headers={'Origin': server.ALLOWED_ORIGIN},
+            headers={'Origin': f'http://{server.HOST}:{server.PORT}'},
         )
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(body)['ok'])

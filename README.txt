@@ -9,7 +9,14 @@ INÍCIO RÁPIDO
 --------------------------------------------------------------------------------
 - macOS: dê duplo clique em Iniciar_Monitoramento.command
 - Windows: dê duplo clique em Iniciar_Monitoramento.bat
-- Alternativa: execute `python3 server.py` e abra http://127.0.0.1:8765/index.html
+- Alternativa: execute `python3 server.py` — abre sozinho uma janela do
+  Chrome/Edge em "modo app" (sem barra de endereço, abas ou menus, com cara
+  de aplicativo próprio) em http://bs.rpa-monitor.localhost:8765/index.html
+  (nome amigável em vez de "127.0.0.1"; funciona sem configuração extra no
+  Windows e no macOS — Chrome/Edge/Firefox resolvem qualquer nome
+  ".localhost" para 127.0.0.1 nativamente). Sem Chrome/Edge instalado, cai
+  para o navegador padrão numa aba normal. Para mudar o nome ou a porta, use
+  as variáveis de ambiente RPA_MONITOR_HOSTNAME e RPA_MONITOR_PORT.
 - Testes locais: `python3 test_server.py` (sem dependências, usa unittest da
   biblioteca padrão — ver seção TESTES mais abaixo).
 

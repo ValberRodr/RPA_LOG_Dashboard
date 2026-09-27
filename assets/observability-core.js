@@ -162,6 +162,27 @@
         openRpa(rpaId) { window.open(`rpa-dashboard.html?rpa_id=${encodeURIComponent(rpaId)}`, '_blank'); }
         exportPdf() { window.print(); }
 
+        /** Delegação de clique para abrir investigação/diagnóstico a partir de
+         * uma linha/célula renderizada dinamicamente a partir de dado de log
+         * (execution_id não é confiável — ver README.txt, seção SEGURANÇA).
+         * Em vez de `onclick="RPAUI.openInvestigation('${execution_id}')"`
+         * embutido na string HTML (o valor entra dentro de uma string JS
+         * dentro de um atributo HTML — escapar HTML não fecha essa segunda
+         * camada, então um execution_id malicioso ainda quebraria para fora
+         * da chamada), o id fica só num atributo `data-*` (que só precisa de
+         * escape HTML de verdade) e é lido como string pura via `.dataset`,
+         * nunca reinterpretado como código. Chamado uma vez por página —
+         * sobrevive a qualquer novo innerHTML dos containers internos porque
+         * o listener fica no body, não nos elementos recriados. */
+        bindExecutionLinks() {
+            document.body.addEventListener('click', (event) => {
+                const inv = event.target.closest('[data-open-investigation]');
+                if (inv) return this.openInvestigation(inv.dataset.openInvestigation);
+                const diag = event.target.closest('[data-open-diagnostic]');
+                if (diag) return this.openDiagnostic(diag.dataset.openDiagnostic);
+            });
+        }
+
         initToolbar(label, formatter) {
             const back = document.querySelector('#btnBack');
             if (back) back.addEventListener('click', () => window.close());
@@ -216,6 +237,7 @@
         openRpa: id => navigator.openRpa(id),
         exportPdf: () => navigator.exportPdf(),
         initToolbar: label => navigator.initToolbar(label, formatter),
+        bindExecutionLinks: () => navigator.bindExecutionLinks(),
 
         lineSvg: (rows, series, options) => chartRenderer.lineSvg(rows, series, options),
         barSvg: (rows, key, labelKey, options) => chartRenderer.barSvg(rows, key, labelKey, options),

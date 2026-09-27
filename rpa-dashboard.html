@@ -78,6 +78,7 @@ class RpaDashboardPage {
 
         this.agg = U.D.rpaAggregates[this.rpaId];
         U.initToolbar(`Dashboard ${this.rpa.name}`);
+        U.bindExecutionLinks();
         this.renderHero();
         this.renderKpis();
         this.renderErrors();
@@ -163,6 +164,12 @@ class RpaDashboardPage {
         document.querySelector('#volumeChart').innerHTML = U.lineSvg(daily, [{ key: 'processedItems', label: 'Itens processados' }], { min: 0, labelX: r => r.date.slice(5).split('-').reverse().join('/'), formatY: v => Math.round(v).toLocaleString('pt-BR') });
     }
 
+    /* execution_id vem direto do log (não confiável — ver SECURITY.md/
+     * THREAT_MODEL.md): nunca em onclick="...('${...}')" inline (o
+     * navegador decodifica entidades HTML antes de compilar um handler
+     * inline, então U.esc() sozinho não bloquearia a injeção de JS ali).
+     * Fica só em data-open-investigation/data-open-diagnostic (escapado) e
+     * é lido como string pura por RPAUI.bindExecutionLinks(). */
     renderTable() {
         const { U, rpaId, status, search } = this;
         const n = Number(this.period.value);
@@ -174,7 +181,7 @@ class RpaDashboardPage {
         if (q) rows = rows.filter(x => (x.executionId + ' ' + x.machine).toLowerCase().includes(q));
         rows.sort((a, b) => b.start.localeCompare(a.start));
         document.querySelector('#tableCount').textContent = `${rows.length} execução(ões)`;
-        document.querySelector('#executions').innerHTML = rows.map(x => `<tr><td class="mono">${x.executionId}</td><td class="nowrap">${U.fmtDateTime(x.start)}</td><td>${U.statusBadge(x.status)}</td><td>${x.durationMin.toFixed(1)} min</td><td>${x.processedItems}/${x.totalItems}</td><td>${x.retryCount}</td><td>${x.deadlineCompliance}</td><td class="mono">${U.esc(x.machine)}</td><td class="nowrap"><button class="btn" onclick="RPAUI.openInvestigation('${x.executionId}')">Investigar</button> <button class="btn" onclick="RPAUI.openDiagnostic('${x.executionId}')">Diagnóstico</button></td></tr>`).join('') || '<tr><td colspan="9" class="empty">Sem execuções para o filtro.</td></tr>';
+        document.querySelector('#executions').innerHTML = rows.map(x => `<tr><td class="mono">${U.esc(x.executionId)}</td><td class="nowrap">${U.fmtDateTime(x.start)}</td><td>${U.statusBadge(x.status)}</td><td>${x.durationMin.toFixed(1)} min</td><td>${x.processedItems}/${x.totalItems}</td><td>${x.retryCount}</td><td>${x.deadlineCompliance}</td><td class="mono">${U.esc(x.machine)}</td><td class="nowrap"><button class="btn" data-open-investigation="${U.esc(x.executionId)}">Investigar</button> <button class="btn" data-open-diagnostic="${U.esc(x.executionId)}">Diagnóstico</button></td></tr>`).join('') || '<tr><td colspan="9" class="empty">Sem execuções para o filtro.</td></tr>';
     }
 }
 

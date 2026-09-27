@@ -86,6 +86,7 @@ class DiagnosticoPage {
         this.warnings = this.events.filter(e => e.status === 'WARNING');
 
         U.initToolbar(`Diagnóstico ${executionId}`);
+        U.bindExecutionLinks();
         this.renderHero();
         this.renderKpis();
         this.renderSummary();
@@ -150,10 +151,17 @@ class DiagnosticoPage {
         document.querySelector('#stepDuration').innerHTML = U.barSvg(stepRows, 'value', 'label', { format: v => U.duration(v) });
     }
 
+    /* execution_id vem direto do log (não confiável — ver SECURITY.md/
+     * THREAT_MODEL.md): nunca em onclick="...('${...}')" inline (o
+     * navegador decodifica entidades HTML antes de compilar um handler
+     * inline, então U.esc() sozinho não bloquearia a injeção de JS ali).
+     * Fica só num atributo data-open-diagnostic/data-open-investigation
+     * (escapado) e é lido como string pura por RPAUI.bindExecutionLinks() —
+     * mesmo padrão em renderNeighbors() logo abaixo. */
     renderRecurrence() {
         const { U, executionId } = this;
         const related = U.D.recurrenceByExecution[executionId] || [];
-        document.querySelector('#recurrence').innerHTML = related.length ? `<div class="mini-list">${related.map(x => `<div class="mini-item clickable" onclick="RPAUI.openDiagnostic('${x.executionId}')"><strong class="mono">${x.executionId}</strong><span class="muted">${U.fmtDateTime(x.start)} · ${U.esc(x.step)} · ${x.durationMin} min</span></div>`).join('')}</div>` : '<div class="empty">Não há recorrência equivalente nos 30 dias ao redor desta execução.</div>';
+        document.querySelector('#recurrence').innerHTML = related.length ? `<div class="mini-list">${related.map(x => `<div class="mini-item clickable" data-open-diagnostic="${U.esc(x.executionId)}"><strong class="mono">${U.esc(x.executionId)}</strong><span class="muted">${U.fmtDateTime(x.start)} · ${U.esc(x.step)} · ${x.durationMin} min</span></div>`).join('')}</div>` : '<div class="empty">Não há recorrência equivalente nos 30 dias ao redor desta execução.</div>';
     }
 
     renderVmChart() {
@@ -199,7 +207,7 @@ class DiagnosticoPage {
         const same = U.D.executions.filter(x => x.rpaId === ex.rpaId).sort((a, b) => a.start.localeCompare(b.start));
         const idx = same.findIndex(x => x.executionId === executionId);
         const neighbors = same.slice(Math.max(0, idx - 4), Math.min(same.length, idx + 5));
-        document.querySelector('#neighbors').innerHTML = neighbors.map(x => `<tr class="${x.executionId === executionId ? 'WARNING' : ''}"><td class="mono">${x.executionId}</td><td>${U.fmtDateTime(x.start)}</td><td>${U.statusBadge(x.status)}</td><td>${x.durationMin.toFixed(1)} min</td><td>${x.retryCount}</td><td class="mono">${U.esc(x.machine)}</td><td><button class="btn" onclick="RPAUI.openInvestigation('${x.executionId}')">Investigar</button></td></tr>`).join('');
+        document.querySelector('#neighbors').innerHTML = neighbors.map(x => `<tr class="${x.executionId === executionId ? 'WARNING' : ''}"><td class="mono">${U.esc(x.executionId)}</td><td>${U.fmtDateTime(x.start)}</td><td>${U.statusBadge(x.status)}</td><td>${x.durationMin.toFixed(1)} min</td><td>${x.retryCount}</td><td class="mono">${U.esc(x.machine)}</td><td><button class="btn" data-open-investigation="${U.esc(x.executionId)}">Investigar</button></td></tr>`).join('');
     }
 }
 
