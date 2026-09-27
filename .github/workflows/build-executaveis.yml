@@ -3,6 +3,12 @@ name: Build executáveis (Windows/macOS)
 # Manual de propósito (workflow_dispatch): empacotar não precisa rodar a
 # cada commit, só quando alguém quer um executável novo pra distribuir.
 # Rode em Actions → "Build executáveis (Windows/macOS)" → "Run workflow".
+#
+# Além de subir os dois builds como artifact (7 dias, uso interno do CI),
+# o job "release" republica os dois na tag fixa "executaveis-latest" — uma
+# página fixa e fácil de achar no repositório (Releases), sem precisar
+# saber o que é um "artifact do Actions". Cada execução SUBSTITUI a release
+# anterior (mesma tag), então ela sempre reflete o código mais recente.
 on:
   workflow_dispatch: {}
 
@@ -17,10 +23,13 @@ jobs:
       - name: Build
         shell: cmd
         run: packaging\build_windows.bat
+      - name: Compactar
+        shell: pwsh
+        run: Compress-Archive -Path dist/RPA_Ops_Monitor/* -DestinationPath RPA_Ops_Monitor-Windows.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: RPA_Ops_Monitor-windows
-          path: dist/RPA_Ops_Monitor
+          name: RPA_Ops_Monitor-Windows
+          path: RPA_Ops_Monitor-Windows.zip
 
   macos:
     runs-on: macos-latest
@@ -33,7 +42,56 @@ jobs:
         run: |
           chmod +x packaging/build_macos.sh
           packaging/build_macos.sh
+      - name: Compactar
+        run: (cd dist/RPA_Ops_Monitor && zip -rq ../../RPA_Ops_Monitor-macOS.zip .)
       - uses: actions/upload-artifact@v4
         with:
-          name: RPA_Ops_Monitor-macos
-          path: dist/RPA_Ops_Monitor
+          name: RPA_Ops_Monitor-macOS
+          path: RPA_Ops_Monitor-macOS.zip
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # só este job precisa escrever (criar a release) — os de build não
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publicar/atualizar a release "executaveis-latest"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          DATE=$(date -u +%Y-%m-%d)
+          cat > release-notes.md <<EOF
+          Executáveis gerados automaticamente a partir do commit \`$SHA\` ($DATE) — não precisa instalar Python.
+
+          ## Qual baixar
+
+          - **Usa Windows?** Baixe \`RPA_Ops_Monitor-Windows.zip\`
+          - **Usa Mac?** Baixe \`RPA_Ops_Monitor-macOS.zip\`
+
+          ## Como usar
+
+          1. Baixe o arquivo do seu sistema operacional (acima, em **Assets**)
+          2. Descompacte a pasta inteira em qualquer lugar
+          3. Abra o executável que está dentro:
+             - Windows: \`RPA_Ops_Monitor.exe\`
+             - macOS: clique com o **botão direito** em \`RPA_Ops_Monitor\` → **Abrir** (só na primeira vez)
+          4. O painel abre sozinho no navegador
+
+          Já vem com \`config/\`/\`logs/\` de demonstração — troque pelos seus dados reais (ver \`packaging/README.md\`).
+
+          Nenhum dos dois é assinado digitalmente — o aviso do sistema operacional na primeira abertura é esperado.
+          EOF
+          gh release delete executaveis-latest --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+          gh release create executaveis-latest \
+            "artifacts/RPA_Ops_Monitor-Windows/RPA_Ops_Monitor-Windows.zip" \
+            "artifacts/RPA_Ops_Monitor-macOS/RPA_Ops_Monitor-macOS.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "RPA Ops Monitor — executáveis prontos (Windows/macOS)" \
+            --notes-file release-notes.md \
+            --latest
