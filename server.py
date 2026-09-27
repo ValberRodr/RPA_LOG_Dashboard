@@ -62,7 +62,10 @@ RPA_LOG_ROOT = LOG_BASE / 'Logs'
 VM_ROOT = LOG_BASE / 'VMS' / 'Historico'
 META_FILE = ROOT / 'config' / 'rpa_metadata.json'
 AA_CONFIG_FILE = ROOT / 'config' / 'aa_config.json'
-HOST = '127.0.0.1'
+# Padrão de fábrica inalterado: só muda se alguém definir RPA_MONITOR_HOST
+# explicitamente (ver docs/servidor-em-rede.html — expor além de loopback
+# exige entender que esta aplicação não tem autenticação embutida).
+HOST = os.environ.get('RPA_MONITOR_HOST', '127.0.0.1')
 PORT = int(os.environ.get('RPA_MONITOR_PORT', '8765'))
 # Nome amigável para abrir o painel (em vez de "127.0.0.1"). Usa o sufixo
 # ".localhost", que Chrome/Edge/Firefox resolvem para 127.0.0.1 nativamente
@@ -78,6 +81,15 @@ APP_URL = f'http://{APP_HOSTNAME}:{PORT}'
 # válida — assim o CSRF (camada 2) não quebra se alguém abrir por um nome ou
 # outro.
 ALLOWED_ORIGINS = {APP_URL.lower(), f'http://{HOST}:{PORT}'.lower(), f'http://localhost:{PORT}'.lower()}
+# RPA_MONITOR_EXTRA_ORIGINS (lista separada por vírgula): origens extras
+# confiáveis, além das derivadas acima — necessário quando um proxy reverso
+# com TLS fica na frente (ver docs/servidor-em-rede.html). Nesse caso o
+# navegador manda Origin com esquema "https://" e sem porta explícita (ex.:
+# "https://rpa-monitor.empresa.local"), formato que as origens derivadas
+# acima (sempre "http://host:porta") nunca cobririam.
+_extra_origins = os.environ.get('RPA_MONITOR_EXTRA_ORIGINS', '')
+if _extra_origins:
+    ALLOWED_ORIGINS |= {o.strip().rstrip('/').lower() for o in _extra_origins.split(',') if o.strip()}
 
 DEFAULT_WINDOW_DAYS = 90
 EXEC_FNAME_RE = re.compile(r'^RPA_(\d{4}-\d{2}-\d{2})(?:_(.+))?\.log$')
@@ -2247,7 +2259,19 @@ def main():
     print('Dados: ./logs (janela padrão de 90 dias; reprocessados de forma incremental quando houver alteração)')
     print('Atualização do navegador: incremental, a cada 20 minutos')
     print('Para encerrar: Ctrl+C\n')
-    threading.Timer(1.0,lambda:_open_as_app_window(url)).start()
+    if HOST not in ('127.0.0.1', 'localhost', '::1'):
+        # RPA_MONITOR_HOST foi definido explicitamente para algo além de
+        # loopback — não é o padrão de fábrica. Aviso alto de propósito: esta
+        # aplicação não tem autenticação embutida (ver docs/servidor-em-
+        # rede.html/SECURITY.md) — quem alcançar a porta vê e edita tudo.
+        print('=' * 78)
+        print('ATENÇÃO: RPA_MONITOR_HOST != 127.0.0.1 — o servidor vai aceitar conexões')
+        print('de outras máquinas na rede. Esta aplicação NÃO tem autenticação')
+        print('embutida: qualquer um que alcançar esta porta vê e edita tudo. Leia')
+        print('docs/servidor-em-rede.html antes de expor isso numa rede compartilhada.')
+        print('=' * 78 + '\n')
+    if not os.environ.get('RPA_MONITOR_NO_BROWSER'):
+        threading.Timer(1.0,lambda:_open_as_app_window(url)).start()
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally: server.server_close()

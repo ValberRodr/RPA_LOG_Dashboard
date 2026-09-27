@@ -269,7 +269,7 @@
             <div class="topbar-title">RPA Ops Monitor · Documentação técnica</div>
             <div class="topbar-actions">
                 <button class="btn-chip" id="themeToggle">🌙 Tema</button>
-                <button class="btn-chip" onclick="window.print()">🖨 Exportar PDF</button>
+                <button class="btn-chip" id="btnPdf">🖨 Exportar PDF</button>
             </div>
         </div>
 
@@ -369,7 +369,8 @@ node --test test_dashboard.js</code></pre>
 │   ├── build_windows.bat          <span class="c"># gera dist\RPA_Ops_Monitor\ no Windows</span>
 │   └── README.md                  <span class="c"># arquitetura do empacotamento (por que config/logs ficam fora do bundle)</span>
 ├── <span class="d">docs/</span>
-│   └── documentacao.html          <span class="c"># ESTE arquivo</span>
+│   ├── documentacao.html          <span class="c"># ESTE arquivo</span>
+│   └── servidor-em-rede.html      <span class="c"># guia avançado opcional: expor o painel pra vários usuários pela rede</span>
 ├── <span class="d">assets/</span>
 │   ├── dashboard-app.js           <span class="c"># toda a lógica de index.html, 15 classes</span>
 │   ├── observability-core.js      <span class="c"># kit de UI (window.RPAUI) das 3 páginas avulsas</span>
@@ -1129,8 +1130,8 @@ if (typeof module !== 'undefined' && module.exports) {
                 <p>Duas auditorias de segurança desta aplicação (mesmo sendo <code>127.0.0.1</code>-only) já encontraram e corrigiram vulnerabilidades reais e comprovadas com PoC: 4 na primeira rodada, e mais 3 MEDIUM em 2026-09-27 (SSRF via redirecionamento não revalidado, SSRF via TOCTOU/DNS rebinding, XSS armazenado em <code>execution_id</code>) — nenhuma exigiu o servidor exposto na rede: todas exploráveis a partir do próprio navegador do operador, ou a partir de quem controla/compromete o Control Room configurado.</p>
                 <div class="table-wrap"><table>
                     <tr><th>Controle</th><th>Onde / como</th></tr>
-                    <tr><td>Servidor só local</td><td><code>HOST = '127.0.0.1'</code> em <code>server.py</code> — nunca escuta na rede.</td></tr>
-                    <tr><td>CSRF em rotas de mutação</td><td>Toda rota POST que muda estado exige o header <code>X-CSRF-Token</code> (<code>Handler._csrf_token_is_valid</code>, comparação em tempo constante via <code>hmac.compare_digest</code>), obtido em <code>GET /api/csrf-token</code> — token gerado uma vez por processo. No frontend, a classe <code>CsrfTokenStore</code> (dashboard-app.js) busca e cacheia esse token uma única vez (<code>CsrfTokenStore.get()</code>); o alias de topo <code>getCsrfToken</code> deixa <code>aa-integration.js</code> reaproveitá-lo pelo mesmo padrão de escopo compartilhado do resto do arquivo (ver <a href="#escopo-compartilhado">Escopo léxico compartilhado</a>). Camada 2: <code>Handler._origin_is_allowed</code> rejeita qualquer <code>Origin</code> presente que não seja a própria origem do app. <code>/api/reload</code> deixou de ser GET por causa disso (uma GET com efeito colateral é disparável só com uma <code>&lt;img&gt;</code>).</td></tr>
+                    <tr><td>Servidor só local (padrão de fábrica)</td><td><code>HOST = os.environ.get('RPA_MONITOR_HOST', '127.0.0.1')</code> em <code>server.py</code> — sem definir a variável, nunca escuta na rede. Só existe uma forma sancionada e documentada de sair disso: <a href="servidor-em-rede.html">Rodando como Servidor de Rede</a> — não faça isso sem ler o guia inteiro primeiro, a aplicação não tem autenticação embutida.</td></tr>
+                    <tr><td>CSRF em rotas de mutação</td><td>Toda rota POST que muda estado exige o header <code>X-CSRF-Token</code> (<code>Handler._csrf_token_is_valid</code>, comparação em tempo constante via <code>hmac.compare_digest</code>), obtido em <code>GET /api/csrf-token</code> — token gerado uma vez por processo. No frontend, a classe <code>CsrfTokenStore</code> (dashboard-app.js) busca e cacheia esse token uma única vez (<code>CsrfTokenStore.get()</code>); o alias de topo <code>getCsrfToken</code> deixa <code>aa-integration.js</code> reaproveitá-lo pelo mesmo padrão de escopo compartilhado do resto do arquivo (ver <a href="#escopo-compartilhado">Escopo léxico compartilhado</a>). Camada 2: <code>Handler._origin_is_allowed</code> rejeita qualquer <code>Origin</code> presente que não esteja em <code>ALLOWED_ORIGINS</code> — origens extras (necessárias atrás de um proxy reverso com TLS, ver <a href="servidor-em-rede.html">Servidor de Rede</a>) entram via <code>RPA_MONITOR_EXTRA_ORIGINS</code>, nunca reescrevendo o header em si. <code>/api/reload</code> deixou de ser GET por causa disso (uma GET com efeito colateral é disparável só com uma <code>&lt;img&gt;</code>).</td></tr>
                     <tr><td>Bloqueio de dotfiles e directory listing</td><td><code>Handler._path_has_dotfile_segment</code> devolve 404 para qualquer segmento de caminho começando com "." (nunca mais serve <code>.git/</code>, <code>.DS_Store</code>) e <code>Handler.list_directory</code> é sobrescrito para nunca listar o conteúdo de uma pasta.</td></tr>
                     <tr><td>Content-Security-Policy</td><td><code>Handler.end_headers()</code>: <code>script-src</code> usa um <strong>nonce por requisição</strong> em vez de <code>'unsafe-inline'</code> — toda resposta <code>.html</code> passa por <code>_serve_html_with_nonce</code>, que injeta o nonce em cada <code>&lt;script&gt;</code> inline daquela página. <code>style-src</code> mantém <code>'unsafe-inline'</code> por trade-off deliberado (documentado no próprio código): remover exigiria reescrever toda a geração de <code>style="..."</code> dinâmico do frontend, e CSS injetado não executa JavaScript arbitrário.</td></tr>
                     <tr><td>Path traversal no Cadastro de RPAs</td><td><code>RpaRegistryStore.validate_payload</code> rejeita qualquer <code>dependencyFiles[].path</code> absoluto ou que escape da pasta do projeto (checado com <code>resolve()</code> + <code>relative_to()</code>); <code>DependencyAnalyzer._dependency_file_status</code> repete a mesma checagem no ponto de uso, como defesa em profundidade.</td></tr>
@@ -1249,6 +1250,12 @@ packaging\build_windows.bat</code></pre>
 <script>
 (function () {
     'use strict';
+
+    // ---- exportar PDF (nunca onclick inline: a CSP desta página não
+    // permite 'unsafe-inline' em script-src, então um handler inline seria
+    // bloqueado silenciosamente — ver SECURITY.md/THREAT_MODEL.md) ----
+    var pdfBtn = document.getElementById('btnPdf');
+    if (pdfBtn) pdfBtn.addEventListener('click', function () { window.print(); });
 
     // ---- tema (persistido) ----
     var themeBtn = document.getElementById('themeToggle');

@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>RPA Ops Monitor — Rodando como Servidor de Rede</title>
+<style>
+    :root {
+        --bg: #111217; --bg-soft: #17191f; --panel: #1c1e25; --panel-2: #22252d; --panel-3: #282b35;
+        --border: rgba(255,255,255,.075); --border-strong: rgba(255,255,255,.13);
+        --text: #f4f5f9; --text-2: #a8adbd; --text-3: #747a8e;
+        --primary: #6c68e7; --primary-soft: rgba(108,104,231,.15);
+        --cyan: #43c6d9; --success: #35c58b; --success-soft: rgba(53,197,139,.13);
+        --warning: #f2b84b; --warning-soft: rgba(242,184,75,.14);
+        --danger: #f06464; --danger-soft: rgba(240,100,100,.14);
+        --info: #63a4ff;
+        --shadow: 0 18px 45px rgba(0,0,0,.25);
+        --radius: 12px;
+        --sidebar-w: 280px;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    html[data-theme="light"] {
+        --bg: #f4f6fb; --bg-soft: #eef1f6; --panel: #ffffff; --panel-2: #f7f8fb; --panel-3: #eef1f6;
+        --border: rgba(22,32,54,.09); --border-strong: rgba(22,32,54,.16);
+        --text: #172036; --text-2: #55607a; --text-3: #8891a6;
+        --shadow: 0 12px 35px rgba(32,50,85,.08);
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+        margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans);
+        font-size: 14.5px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--primary); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code, pre, .mono { font-family: var(--mono); }
+    code { background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-size: .89em; color: var(--cyan); }
+    pre.code-block {
+        background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 14px 16px; overflow-x: auto; font-size: 12.6px; line-height: 1.55; color: var(--text-2);
+        position: relative; margin: 14px 0;
+    }
+    pre.code-block code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; }
+    pre.code-block .lang-tag {
+        position: absolute; top: 8px; right: 12px; font: 700 9.5px/1 var(--sans); letter-spacing: .06em;
+        text-transform: uppercase; color: var(--text-3);
+    }
+    h1, h2, h3, h4 { font-weight: 800; letter-spacing: -.01em; color: var(--text); scroll-margin-top: 84px; }
+    h2 { font-size: 21px; margin: 0 0 6px; display: flex; align-items: center; gap: 8px; }
+    h3 { font-size: 16.5px; margin: 26px 0 8px; padding-top: 4px; }
+    h4 { font-size: 13.5px; margin: 18px 0 6px; color: var(--text-2); text-transform: uppercase; letter-spacing: .05em; }
+    p { margin: 0 0 12px; color: var(--text-2); }
+    .lead { font-size: 15.5px; color: var(--text); }
+    ul, ol { color: var(--text-2); padding-left: 22px; margin: 0 0 14px; }
+    li { margin-bottom: 5px; }
+    strong { color: var(--text); }
+
+    .doc-shell { display: flex; min-height: 100vh; }
+    .sidebar {
+        width: var(--sidebar-w); flex: none; position: fixed; top: 0; left: 0; bottom: 0;
+        background: var(--bg-soft); border-right: 1px solid var(--border); overflow-y: auto;
+        padding: 18px 14px 40px; z-index: 20;
+    }
+    .sidebar-brand { display: flex; align-items: center; gap: 9px; padding: 4px 8px 16px; }
+    .sidebar-brand .mark {
+        width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg, var(--danger), var(--warning));
+        display: flex; align-items: center; justify-content: center; flex: none; color: #fff; font-weight: 800; font-size: 13px;
+    }
+    .sidebar-brand .name { font-weight: 800; font-size: 13.5px; line-height: 1.25; }
+    .sidebar-brand .name small { display: block; font-weight: 600; color: var(--text-3); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; }
+    .back-link { display: block; padding: 8px 8px 16px; font-size: 12.3px; color: var(--text-3); }
+    .toc-group { margin-bottom: 4px; }
+    .toc-group-title {
+        font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: var(--text-3);
+        padding: 12px 8px 6px;
+    }
+    .toc-link {
+        display: block; padding: 6px 8px; border-radius: 7px; font-size: 12.8px; color: var(--text-2);
+        border-left: 2px solid transparent; margin-bottom: 1px;
+    }
+    .toc-link:hover { background: var(--panel); color: var(--text); text-decoration: none; }
+    .toc-link.active { background: var(--primary-soft); color: var(--primary); border-left-color: var(--primary); font-weight: 700; }
+
+    .content-wrap { margin-left: var(--sidebar-w); flex: 1; min-width: 0; }
+    .topbar {
+        position: sticky; top: 0; z-index: 15; display: flex; align-items: center; justify-content: space-between;
+        gap: 12px; padding: 10px 34px; background: color-mix(in srgb, var(--bg) 88%, transparent);
+        backdrop-filter: blur(10px); border-bottom: 1px solid var(--border);
+    }
+    .topbar-title { font-size: 12.5px; font-weight: 700; color: var(--text-2); }
+    .btn-chip {
+        display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px;
+        border: 1px solid var(--border-strong); background: var(--panel); color: var(--text-2); font: 700 11.5px/1 var(--sans);
+        cursor: pointer;
+    }
+    .btn-chip:hover { color: var(--text); border-color: var(--primary); }
+
+    main.content { max-width: 860px; margin: 0 auto; padding: 40px 34px 120px; }
+    .doc-hero { padding: 10px 0 34px; border-bottom: 1px solid var(--border); margin-bottom: 34px; }
+    .doc-hero .eyebrow { font: 800 11px/1 var(--sans); letter-spacing: .09em; text-transform: uppercase; color: var(--danger); margin-bottom: 10px; }
+    .doc-hero h1 { font-size: 30px; margin: 0 0 12px; }
+    .doc-hero p { font-size: 15.5px; max-width: 660px; }
+    .hero-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    .chip { font: 700 11px/1 var(--sans); padding: 6px 10px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); color: var(--text-2); }
+
+    section.section { margin-bottom: 48px; }
+
+    .callout { border-radius: var(--radius); border: 1px solid var(--border); padding: 14px 16px; margin: 16px 0; display: flex; gap: 11px; }
+    .callout .icon-dot { width: 20px; height: 20px; border-radius: 6px; flex: none; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:12px; }
+    .callout p, .callout ul { margin: 0; font-size: 13.3px; }
+    .callout ul { margin-top: 6px; }
+    .callout-warn { background: var(--warning-soft); border-color: rgba(242,184,75,.35); }
+    .callout-warn .icon-dot { background: var(--warning); color: #241a03; }
+    .callout-danger { background: var(--danger-soft); border-color: rgba(240,100,100,.35); }
+    .callout-danger .icon-dot { background: var(--danger); color: #2b0808; }
+    .callout-ok { background: var(--success-soft); border-color: rgba(53,197,139,.35); }
+    .callout-ok .icon-dot { background: var(--success); color: #06281b; }
+    .callout-info { background: var(--primary-soft); border-color: rgba(108,104,231,.35); }
+    .callout-info .icon-dot { background: var(--primary); color: #fff; }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); margin: 14px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 12.8px; background: var(--panel); }
+    th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { background: var(--panel-2); color: var(--text-3); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; font-weight: 800; white-space: nowrap; }
+    tr:last-child td { border-bottom: none; }
+    td code { white-space: nowrap; }
+
+    .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font: 800 10.3px/1.4 var(--sans); text-transform: uppercase; letter-spacing: .03em; }
+    .badge.success { background: var(--success-soft); color: var(--success); }
+    .badge.warning { background: var(--warning-soft); color: var(--warning); }
+    .badge.danger  { background: var(--danger-soft);  color: var(--danger); }
+
+    .step-list { list-style: none; padding: 0; margin: 20px 0; counter-reset: step; }
+    .step-item { position: relative; padding: 0 0 24px 42px; border-left: 2px solid var(--border-strong); margin-left: 15px; }
+    .step-item:last-child { border-left-color: transparent; padding-bottom: 0; }
+    .step-item::before {
+        counter-increment: step; content: counter(step);
+        position: absolute; left: -15px; top: 0; width: 30px; height: 30px; border-radius: 50%;
+        background: var(--primary); color: #fff; font: 800 13px/30px var(--sans); text-align: center;
+    }
+    .step-item h4 { margin: 3px 0 8px; text-transform: none; letter-spacing: 0; color: var(--text); font-size: 14.5px; }
+
+    .anchor-link { opacity: 0; margin-left: 6px; font-size: 13px; color: var(--text-3); }
+    h2:hover .anchor-link, h3:hover .anchor-link { opacity: 1; }
+
+    footer.doc-footer { padding: 30px 34px 60px; color: var(--text-3); font-size: 12px; border-top: 1px solid var(--border); max-width: 860px; margin: 0 auto; }
+
+    @media (max-width: 980px) {
+        .sidebar { display: none; }
+        .content-wrap { margin-left: 0; }
+    }
+    @media print {
+        .sidebar, .topbar { display: none !important; }
+        .content-wrap { margin-left: 0; }
+        body { background: #fff; color: #111; }
+        a { color: #111; }
+        pre.code-block, table, .callout, .step-item { break-inside: avoid; }
+    }
+</style>
+</head>
+<body>
+<div class="doc-shell">
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+            <div class="mark">⚠</div>
+            <div class="name">RPA Ops Monitor<small>Guia avançado</small></div>
+        </div>
+        <a class="back-link" href="documentacao.html">← Voltar para a documentação técnica</a>
+
+        <div class="toc-group">
+            <div class="toc-group-title">Antes de tudo</div>
+            <a class="toc-link" href="#introducao">O que este guia é (e não é)</a>
+            <a class="toc-link" href="#antes-de-decidir">Antes de decidir</a>
+        </div>
+        <div class="toc-group">
+            <div class="toc-group-title">Requisitos</div>
+            <a class="toc-link" href="#pre-requisitos">Pré-requisitos obrigatórios</a>
+            <a class="toc-link" href="#variaveis-de-ambiente">Variáveis de ambiente</a>
+        </div>
+        <div class="toc-group">
+            <div class="toc-group-title">Passo a passo</div>
+            <a class="toc-link" href="#metodo-recomendado">Método recomendado (proxy)</a>
+            <a class="toc-link" href="#metodo-alternativo">Alternativa sem proxy</a>
+            <a class="toc-link" href="#testar">Testar antes de liberar</a>
+            <a class="toc-link" href="#rollback">Como voltar atrás</a>
+        </div>
+        <div class="toc-group">
+            <div class="toc-group-title">Riscos</div>
+            <a class="toc-link" href="#o-que-nao-resolve">O que isso NÃO resolve</a>
+            <a class="toc-link" href="#checklist-final">Checklist final</a>
+        </div>
+    </nav>
+
+    <div class="content-wrap">
+        <div class="topbar">
+            <div class="topbar-title">RPA Ops Monitor · Servidor de rede</div>
+            <button class="btn-chip" id="btnPdf">🖨 Exportar PDF</button>
+        </div>
+
+        <main class="content">
+            <header class="doc-hero">
+                <div class="eyebrow">Guia opcional · avançado · leia até o fim antes de agir</div>
+                <h1>Rodando como Servidor de Rede</h1>
+                <p class="lead">Por padrão o RPA Ops Monitor roda <strong>só na máquina do próprio usuário</strong> (<code>127.0.0.1</code>) e <strong>não tem nenhum sistema de login</strong>. Este guia é para quem decidiu, de forma consciente, que vários usuários vão acessar o mesmo painel pela rede — e cobre os pré-requisitos e o passo a passo pra fazer isso sem abrir um buraco de segurança na empresa.</p>
+                <div class="hero-chips">
+                    <span class="chip">Ver SECURITY.md · seção 1</span>
+                    <span class="chip">Ver THREAT_MODEL.md</span>
+                    <span class="chip">Sem autenticação embutida no app</span>
+                </div>
+            </header>
+
+            <section class="section" id="introducao">
+                <h2>O que este guia é (e não é)<a class="anchor-link" href="#introducao">#</a></h2>
+                <p>É para o cenário: <strong>uma máquina roda o servidor, várias pessoas acessam pelo navegador</strong>. Não é necessário para o cenário mais comum — cada usuário rodando o app na própria máquina, mesmo que os arquivos de log fiquem numa pasta de rede compartilhada. Esse segundo caso já funciona hoje, sem nenhuma mudança de configuração, porque cada instância continua ouvindo só em <code>127.0.0.1</code> na própria máquina.</p>
+                <div class="callout callout-danger">
+                    <div class="icon-dot">!</div>
+                    <p><strong>O ponto mais importante deste documento:</strong> o RPA Ops Monitor não verifica identidade de ninguém. Toda a segurança de hoje depende de uma única premissa — só o próprio operador consegue alcançar a porta do servidor. Assim que essa premissa deixa de ser verdade (o app aceita conexão de outras máquinas), qualquer pessoa que alcançar a porta consegue ver todos os dados operacionais das RPAs <strong>e editar o Cadastro de RPAs</strong>, sem nenhum registro de quem fez o quê. Os pré-requisitos abaixo existem pra reconstruir, na frente do app, a barreira que ele mesmo não tem.</p>
+                </div>
+            </section>
+
+            <section class="section" id="antes-de-decidir">
+                <h2>Antes de decidir<a class="anchor-link" href="#antes-de-decidir">#</a></h2>
+                <div class="table-wrap"><table>
+                    <tr><th>Cenário</th><th>Precisa deste guia?</th><th>Recomendação</th></tr>
+                    <tr><td>Cada usuário roda o app na própria máquina; só os arquivos de log/cadastro ficam numa pasta de rede</td><td>Não</td><td><span class="badge success">Preferencial</span> — nenhuma mudança de segurança, funciona hoje</td></tr>
+                    <tr><td>Um servidor central, mas só pra um grupo pequeno e de confiança, numa rede já isolada (ex.: VLAN de automação sem acesso de usuário comum)</td><td>Sim</td><td><span class="badge warning">Só com os pré-requisitos</span> desta página</td></tr>
+                    <tr><td>Um servidor central acessível por qualquer um na rede corporativa geral, sem autenticação</td><td>—</td><td><span class="badge danger">Não recomendado</span> sob nenhuma circunstância</td></tr>
+                </table></div>
+            </section>
+
+            <section class="section" id="pre-requisitos">
+                <h2>Pré-requisitos obrigatórios<a class="anchor-link" href="#pre-requisitos">#</a></h2>
+                <p>Não pule nenhum item abaixo — cada um cobre uma lacuna real que o app deixa em aberto quando sai de <code>127.0.0.1</code>.</p>
+                <ul>
+                    <li><strong>Autenticação na frente do app</strong> — Basic Auth com senha forte no mínimo; idealmente integrado ao SSO/Active Directory da empresa. O app em si nunca pergunta usuário/senha.</li>
+                    <li><strong>TLS (HTTPS)</strong> entre o navegador dos usuários e o que quer que autentique — sem isso, credenciais e dados operacionais trafegam em texto claro na rede.</li>
+                    <li><strong>Firewall restringindo a origem</strong> — só a sub-rede/VLAN pretendida alcança a porta; nunca deixe a porta alcançável pela internet ou pela rede corporativa inteira sem necessidade.</li>
+                    <li><strong>Alguém responsável por manter isso atualizado</strong> — certificado TLS expira, senha precisa trocar, e "configurei uma vez e esqueci" é como esse tipo de exposição vira incidente meses depois.</li>
+                    <li><strong>Aceitar o risco de concorrência no Cadastro de RPAs</strong> — <code>config/rpa_metadata.json</code> não tem lock; duas pessoas editando ao mesmo tempo pelo mesmo servidor central podem sobrescrever a alteração uma da outra (perda de dado, não uma falha de segurança).</li>
+                    <li><strong>Atualizar o <code>SECURITY.md</code>/<code>THREAT_MODEL.md</code> da sua cópia</strong> registrando esse desvio do padrão documentado — data, quem aprovou, e os controles compensatórios (proxy, firewall) que foram colocados.</li>
+                </ul>
+            </section>
+
+            <section class="section" id="variaveis-de-ambiente">
+                <h2>Variáveis de ambiente<a class="anchor-link" href="#variaveis-de-ambiente">#</a></h2>
+                <p>Todas opcionais — sem definir nenhuma, o comportamento continua sendo o padrão de sempre (só <code>127.0.0.1</code>).</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Variável</th><th>Padrão</th><th>Efeito</th></tr>
+                    <tr><td><code>RPA_MONITOR_HOST</code></td><td><code>127.0.0.1</code></td><td>Endereço em que o servidor escuta. Só muda isso no <a href="#metodo-alternativo">método alternativo sem proxy</a> — no método recomendado, o app continua em <code>127.0.0.1</code>.</td></tr>
+                    <tr><td><code>RPA_MONITOR_PORT</code></td><td><code>8765</code></td><td>Porta do servidor.</td></tr>
+                    <tr><td><code>RPA_MONITOR_HOSTNAME</code></td><td><code>bs.rpa-monitor.localhost</code></td><td>Nome usado para abrir o painel automaticamente. Num deploy de servidor isso importa pouco (ninguém vai estar sentado no servidor vendo o navegador abrir).</td></tr>
+                    <tr><td><code>RPA_MONITOR_EXTRA_ORIGINS</code></td><td><em>(vazio)</em></td><td>Lista separada por vírgula de origens extras aceitas na checagem de CSRF (camada 2) — <strong>use esta</strong> para declarar o endereço público real que os usuários vão digitar no navegador (ex.: <code>https://rpa-monitor.empresa.local</code>), já que ele normalmente não bate com o formato que o app deriva sozinho (esquema HTTPS, sem porta explícita).</td></tr>
+                    <tr><td><code>RPA_MONITOR_NO_BROWSER</code></td><td><em>(desligado)</em></td><td>Definir com qualquer valor não vazio impede a tentativa de abrir um navegador automaticamente — necessário num servidor sem interface gráfica (senão a tentativa de abrir o navegador gera um traceback inofensivo, mas confuso, no log de inicialização).</td></tr>
+                </table></div>
+            </section>
+
+            <section class="section" id="metodo-recomendado">
+                <h2>Método recomendado: proxy reverso na mesma máquina<a class="anchor-link" href="#metodo-recomendado">#</a></h2>
+                <p>A ideia central: <strong>o app nunca muda</strong> — continua ouvindo só em <code>127.0.0.1</code>, exatamente como no uso normal. Quem fica exposto à rede é um proxy reverso (nginx, Caddy, IIS) na mesma máquina, que exige login e HTTPS antes de repassar a requisição pro app local. O app nunca recebe uma conexão direta de fora.</p>
+                <ol class="step-list">
+                    <li class="step-item">
+                        <h4>Preparar a máquina servidora</h4>
+                        <p>Qualquer máquina com Python 3 (ou o <a href="documentacao.html#empacotamento">executável empacotado</a>, se preferir não instalar Python) e um proxy reverso instalado. Não precisa ser potente — a carga é a mesma de hoje, só que servida pra mais gente.</p>
+                    </li>
+                    <li class="step-item">
+                        <h4>Rodar o app normalmente, sem nenhuma variável nova</h4>
+                        <pre class="code-block"><span class="lang-tag">shell</span><code>python3 server.py
+# ou o executável empacotado — RPA_Ops_Monitor.exe / RPA_Ops_Monitor
+# segue ouvindo só em 127.0.0.1, igual sempre</code></pre>
+                    </li>
+                    <li class="step-item">
+                        <h4>Configurar o proxy com TLS + autenticação</h4>
+                        <p>Exemplo com nginx e Basic Auth (adapte para Caddy/IIS ou para o SSO da empresa, se disponível):</p>
+                        <pre class="code-block"><span class="lang-tag">nginx</span><code>server {
+    listen 443 ssl;
+    server_name rpa-monitor.empresa.local;
+    ssl_certificate     /caminho/para/cert.pem;
+    ssl_certificate_key /caminho/para/key.pem;
+
+    auth_basic           "RPA Ops Monitor";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+
+    location / {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_set_header Host $host;
+        # NUNCA reescreva o header Origin aqui — o app usa ele pra
+        # validar CSRF. Deixe o navegador mandar o Origin real.
+    }
+}</code></pre>
+                        <div class="callout callout-warn">
+                            <div class="icon-dot">!</div>
+                            <p>Gere o <code>.htpasswd</code> com uma senha forte e única (<code>htpasswd -c /etc/nginx/.htpasswd usuario</code>) — nunca reaproveite uma senha de outro sistema da empresa aqui.</p>
+                        </div>
+                    </li>
+                    <li class="step-item">
+                        <h4>Declarar a origem pública real pro app</h4>
+                        <p>O navegador vai mandar <code>Origin: https://rpa-monitor.empresa.local</code> (HTTPS, sem porta) — declare isso antes de subir o app:</p>
+                        <pre class="code-block"><span class="lang-tag">shell</span><code>RPA_MONITOR_EXTRA_ORIGINS=https://rpa-monitor.empresa.local python3 server.py</code></pre>
+                    </li>
+                    <li class="step-item">
+                        <h4>Firewall</h4>
+                        <p>Libere a porta 443 (do proxy) só pra sub-rede/VLAN pretendida. A porta 8765 (do app) não precisa — e não deve — estar acessível de fora da própria máquina, já que só o proxy fala com ela.</p>
+                    </li>
+                </ol>
+                <div class="callout callout-ok">
+                    <div class="icon-dot">✓</div>
+                    <p>Nesse modelo, mesmo que alguém descubra a porta 8765 na rede, ela simplesmente não responde — só aceita conexão vinda da própria máquina (do proxy). A superfície de ataque real é o proxy, que é um software desenhado e mantido especificamente pra ficar exposto e autenticar gente.</p>
+                </div>
+            </section>
+
+            <section class="section" id="metodo-alternativo">
+                <h2>Alternativa sem proxy (menos recomendada)<a class="anchor-link" href="#metodo-alternativo">#</a></h2>
+                <p>Se um proxy reverso realmente não for viável (ex.: teste rápido numa rede já totalmente isolada e de confiança, tipo uma VLAN de laboratório sem usuário externo), dá pra fazer o app escutar direto na rede — <strong>mas sem autenticação nenhuma</strong>, então só faça isso numa rede onde "qualquer um que alcançar essa VLAN já é confiável" seja literalmente verdade.</p>
+                <pre class="code-block"><span class="lang-tag">shell</span><code>RPA_MONITOR_HOST=0.0.0.0 \
+RPA_MONITOR_HOSTNAME=192.168.1.50 \
+RPA_MONITOR_NO_BROWSER=1 \
+python3 server.py</code></pre>
+                <p>O startup vai imprimir um aviso grande no console confirmando que o app não está mais restrito a loopback — isso é de propósito, pra ninguém subir isso sem perceber.</p>
+                <div class="callout callout-danger">
+                    <div class="icon-dot">!</div>
+                    <p>Sem proxy, qualquer máquina que alcançar <code>192.168.1.50:8765</code> tem acesso completo de leitura e escrita ao painel, sem login. Prefira sempre o <a href="#metodo-recomendado">método recomendado</a>.</p>
+                </div>
+            </section>
+
+            <section class="section" id="testar">
+                <h2>Testar antes de liberar<a class="anchor-link" href="#testar">#</a></h2>
+                <ul>
+                    <li>Acesse a partir de outra máquina na rede (não a servidora) e confirme que o login do proxy é exigido antes de qualquer coisa do painel aparecer.</li>
+                    <li>Confirme que as ações que mudam estado funcionam (ex.: editar uma RPA no Cadastro, clicar "Recarregar dados") — se <code>RPA_MONITOR_EXTRA_ORIGINS</code> estiver errado, elas falham com <code>CSRF_CHECK_FAILED</code>/403 mesmo com o resto funcionando.</li>
+                    <li>Tente acessar a porta do app (8765) diretamente, pulando o proxy — se conseguir, o firewall não está configurado corretamente.</li>
+                    <li>Combine com quem for usar: qualquer edição no Cadastro de RPAs agora é compartilhada entre todo mundo, em tempo real.</li>
+                </ul>
+            </section>
+
+            <section class="section" id="rollback">
+                <h2>Como voltar atrás<a class="anchor-link" href="#rollback">#</a></h2>
+                <p>Pare o processo, remova todas as variáveis <code>RPA_MONITOR_*</code> do ambiente (ou simplesmente não as defina mais) e rode <code>python3 server.py</code> normalmente — volta a escutar só em <code>127.0.0.1</code>, o padrão de fábrica. Nenhuma mudança de código é necessária para reverter; tudo aqui é opt-in via variável de ambiente.</p>
+            </section>
+
+            <section class="section" id="o-que-nao-resolve">
+                <h2>O que isso NÃO resolve<a class="anchor-link" href="#o-que-nao-resolve">#</a></h2>
+                <ul>
+                    <li><strong>Autorização granular</strong> — o Basic Auth do proxy dá acesso completo (tudo ou nada) a quem passar; não existe "usuário só leitura" vs. "usuário que edita o Cadastro" dentro do próprio app.</li>
+                    <li><strong>Auditoria de quem fez o quê</strong> — o app não registra qual usuário autenticado fez uma mudança no Cadastro de RPAs (só o proxy sabe quem autenticou, e só se você configurar log de acesso nele).</li>
+                    <li><strong>Concorrência de escrita</strong> — duas pessoas editando o Cadastro ao mesmo tempo pelo servidor central ainda podem se sobrescrever (ver <a href="../THREAT_MODEL.md">THREAT_MODEL.md</a>).</li>
+                    <li><strong>Integração com Automation Anywhere mais exposta</strong> — qualquer usuário autenticado no proxy também consegue usar o proxy da integração AA deste servidor para falar com a Control Room configurada.</li>
+                </ul>
+            </section>
+
+            <section class="section" id="checklist-final">
+                <h2>Checklist final<a class="anchor-link" href="#checklist-final">#</a></h2>
+                <div class="table-wrap"><table>
+                    <tr><th>Item</th><th>Feito?</th></tr>
+                    <tr><td>Proxy reverso com TLS configurado e testado</td><td>☐</td></tr>
+                    <tr><td>Autenticação (Basic Auth forte ou SSO) exigida antes do painel</td><td>☐</td></tr>
+                    <tr><td><code>RPA_MONITOR_EXTRA_ORIGINS</code> declarado com a origem pública real</td><td>☐</td></tr>
+                    <tr><td>Firewall restringindo a porta pública só à sub-rede pretendida</td><td>☐</td></tr>
+                    <tr><td>Porta 8765 (do app) confirmada como INacessível de fora da máquina servidora</td><td>☐</td></tr>
+                    <tr><td>Time avisado sobre concorrência no Cadastro de RPAs</td><td>☐</td></tr>
+                    <tr><td><code>SECURITY.md</code>/<code>THREAT_MODEL.md</code> internos atualizados com esse desvio do padrão</td><td>☐</td></tr>
+                </table></div>
+            </section>
+        </main>
+        <footer class="doc-footer">
+            Guia opcional para o caso específico de servidor central compartilhado. O padrão do projeto continua sendo <code>127.0.0.1</code>-only, sem autenticação, conforme <a href="../SECURITY.md">SECURITY.md</a>. Mantenha este documento sincronizado com qualquer mudança nas variáveis de ambiente de <code>server.py</code>.
+        </footer>
+    </div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    var pdfBtn = document.getElementById('btnPdf');
+    if (pdfBtn) pdfBtn.addEventListener('click', function () { window.print(); });
+
+    var saved = localStorage.getItem('rpa-docs-theme');
+    if (saved) document.documentElement.setAttribute('data-theme', saved);
+
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc-link'));
+    var sections = links.map(function (l) { return document.querySelector(l.getAttribute('href')); }).filter(Boolean);
+    var observer = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+            if (!entry.isIntersecting) return;
+            var id = '#' + entry.target.id;
+            links.forEach(function (l) { l.classList.toggle('active', l.getAttribute('href') === id); });
+        });
+    }, { rootMargin: '-15% 0px -75% 0px', threshold: 0 });
+    sections.forEach(function (s) { observer.observe(s); });
+})();
+</script>
+</body>
+</html>

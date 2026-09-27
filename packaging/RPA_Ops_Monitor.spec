@@ -35,11 +35,14 @@ datas = [
     (str(PROJECT_ROOT / 'investigacao.html'), '.'),
     (str(PROJECT_ROOT / 'diagnostico.html'), '.'),
     (str(PROJECT_ROOT / 'rpa-dashboard.html'), '.'),
-    (str(PROJECT_ROOT / 'docs' / 'documentacao.html'), 'docs'),
 ]
 for f in sorted((PROJECT_ROOT / 'assets').iterdir()):
     if f.is_file() and f.name not in EXCLUDED_ASSET_FILES:
         datas.append((str(f), 'assets'))
+# Todos os .html de docs/ (documentacao.html, servidor-em-rede.html, e
+# qualquer um adicionado depois) — sem listar arquivo por arquivo.
+for f in sorted((PROJECT_ROOT / 'docs').glob('*.html')):
+    datas.append((str(f), 'docs'))
 
 a = Analysis(
     [str(PROJECT_ROOT / 'server.py')],
