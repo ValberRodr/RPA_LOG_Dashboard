@@ -703,9 +703,8 @@ class DatasetBuilder:
         )
 
         meta = rpa_registry._load()
-        rpas = meta.get('rpas', [])
-        schedules = meta.get('schedules', [])
-        by_process = {r.get('process'): r for r in rpas if r.get('process')}
+        rpas = list(meta.get('rpas', []))
+        schedules = list(meta.get('schedules', []))
 
         db_stats = log_store.stats()
         if db_stats.get('syncWarning'):
@@ -722,6 +721,61 @@ class DatasetBuilder:
         _build_status.update(phase='consultando execuções no SQLite', percent=62)
         raw_execs = log_store.read_rows('execution', window_start, window_end)
         raw_execs.sort(key=lambda x: x.get('start_time') or '')
+
+        # Se o Cadastro_RPA ainda estiver vazio/incompleto, não escondemos as
+        # automações existentes nem derrubamos o dashboard. Processos presentes
+        # no banco mas ausentes do cadastro entram como registros inferidos,
+        # claramente marcados como "NÃO CADASTRADA". Nada é gravado
+        # automaticamente no cadastro; o usuário continua decidindo quando
+        # completar/salvar cada RPA pela tela Cadastro.
+        declared_processes = {r.get('process') for r in rpas if r.get('process')}
+        raw_by_process = defaultdict(list)
+        for row in raw_execs:
+            process = row.get('process_name')
+            if process:
+                raw_by_process[process].append(row)
+        for process, rows in raw_by_process.items():
+            if process in declared_processes:
+                continue
+            latest = max(rows, key=lambda x: x.get('start_time') or '')
+            durations = [float(x.get('duration_seconds') or 0) / 60 for x in rows]
+            durations = [x for x in durations if x >= 0]
+            expected = round(median(durations), 1) if durations else 0
+            warning = round(max(expected, pctl(durations, .95)), 1) if durations else 0
+            maximum = round(max(warning, max(durations, default=0)), 1)
+            rpas.append({
+                'rpaId': 'AUTO-' + hashlib.sha1(process.encode('utf-8')).hexdigest()[:8].upper(),
+                'process': process,
+                'name': process,
+                'businessArea': 'Não cadastrada',
+                'businessProcess': 'Não cadastrado',
+                'criticality': 'NÃO CADASTRADA',
+                'supportPriority': '—',
+                'application': '—',
+                'supportTeam': '—',
+                'businessImpact': 'Cadastro pendente; dados operacionais inferidos automaticamente dos logs.',
+                'primaryVm': latest.get('machine_name') or '—',
+                'backupVm': '',
+                'orchestrator': latest.get('orchestrator') or '',
+                'robotName': latest.get('robot_name') or '',
+                'schedule': [],
+                'calendar': 'weekdays',
+                'expectedDurationMin': expected,
+                'warningDurationMin': warning,
+                'maxDurationMin': maximum,
+                'startToleranceMin': 0,
+                'maxRetries': 0,
+                'volumeMin': 0,
+                'volumeMax': 0,
+                'runbook': '',
+                'steps': [],
+                'benefits': [],
+                'owners': [],
+                'dependencyFiles': [],
+                'autoDiscovered': True,
+            })
+
+        by_process = {r.get('process'): r for r in rpas if r.get('process')}
 
         executions = []
         for e in raw_execs:
