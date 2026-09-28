@@ -368,7 +368,7 @@ class NavigationController {
         DomUtils.$('#refreshButton').addEventListener('click', () => {
             const icon = DomUtils.$('#refreshButton .icon');
             icon.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }], { duration: 480 });
-            reloadData(DATA.loadStats?.mode || '90d');
+            reloadData(DATA.loadStats?.mode || '30d', true);
         });
 
         DomUtils.$('#globalSearch').addEventListener('input', (event) => {
@@ -412,9 +412,13 @@ class RpaDataStore {
     static PHASE_LABELS = {
         'localizando arquivos': 'Localizando arquivos',
         'filtrando período': 'Filtrando período',
-        'lendo logs de execução': 'Lendo logs de execução',
-        'lendo logs de etapas': 'Lendo logs de etapas',
-        'lendo telemetria das VMs': 'Lendo telemetria das VMs',
+        'indexando histórico no SQLite': 'Criando banco SQLite com o histórico',
+        'sincronizando novos logs': 'Sincronizando arquivos novos/alterados',
+        'consultando banco SQLite': 'Consultando banco SQLite',
+        'consultando execuções no SQLite': 'Carregando execuções do banco',
+        'consultando etapas no SQLite': 'Carregando etapas do banco',
+        'consultando telemetria no SQLite': 'Carregando telemetria do banco',
+        'aguardando atualização': 'Preparando atualização',
         'vinculando execuções e agenda': 'Vinculando execuções e agenda',
         'calculando indicadores': 'Calculando indicadores',
         'atualizando visualizações': 'Atualizando visualizações',
@@ -494,7 +498,7 @@ class RpaDataStore {
 
     static async pollLoadStatus() {
         const started = Date.now();
-        while (Date.now() - started < 60000) {
+        while (Date.now() - started < 10 * 60 * 1000) {
             let status;
             try {
                 status = await fetch('/api/load-status', { cache: 'no-store' }).then(r => r.json());
@@ -511,7 +515,8 @@ class RpaDataStore {
     static fetchScript(src) {
         return new Promise((resolve, reject) => {
             const el = document.createElement('script');
-            el.src = `${src}?t=${Date.now()}`;
+            const separator = src.includes('?') ? '&' : '?';
+            el.src = `${src}${separator}t=${Date.now()}`;
             el.onload = () => { el.remove(); resolve(); };
             el.onerror = () => { el.remove(); reject(new Error(`Falha ao carregar ${src}`)); };
             document.head.appendChild(el);
@@ -523,7 +528,7 @@ class RpaDataStore {
        acompanha o progresso real por fase via /api/load-status, e só então
        rebusca os dois arquivos de dados — sem jamais recarregar a página
        (preserva página ativa, filtros e scroll). */
-    static async reloadData(mode) {
+    static async reloadData(mode, syncSource = true) {
         if (RpaDataStore._reloadInFlight) return;
         if (location.protocol !== 'http:' && location.protocol !== 'https:') {
             UiFeedback.showToast('Recarregar dados exige o servidor local (server.py). Abra via http://127.0.0.1:8765/.');
@@ -533,19 +538,26 @@ class RpaDataStore {
         const reloadButton = DomUtils.$('#reloadButton');
         if (reloadButton) reloadButton.disabled = true;
         try {
-            await fetch(`/api/reload?mode=${mode}`, { method: 'POST', cache: 'no-store', headers: { 'X-CSRF-Token': await CsrfTokenStore.get() } });
+            const response = await fetch(`/api/reload?mode=${encodeURIComponent(mode)}&sync=${syncSource ? '1' : '0'}`, {
+                method: 'POST',
+                cache: 'no-store',
+                headers: { 'X-CSRF-Token': await CsrfTokenStore.get() },
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const finalStatus = await RpaDataStore.pollLoadStatus();
             if (finalStatus && finalStatus.phase === 'erro') {
                 UiFeedback.showToast(`Falha ao atualizar dados: ${finalStatus.error || 'erro desconhecido'}.`);
                 return;
             }
-            await RpaDataStore.fetchScript('/assets/observability-data.js');
-            await RpaDataStore.fetchScript('/assets/index-data.js');
+            await RpaDataStore.fetchScript(`/assets/observability-data.js?mode=${encodeURIComponent(mode)}`);
+            await RpaDataStore.fetchScript(`/assets/index-data.js?mode=${encodeURIComponent(mode)}`);
             DATA = window.INDEX_DATA;
             DATA.auditExecutions = RpaDataStore.buildAuditExecutions(window.OBS_DATA);
             window.ACTIVE_EXECUTION_ID = DATA.executionDetail?.executionId || DATA.timeline?.[0]?.executionId || window.ACTIVE_EXECUTION_ID;
             renderAll();
-            UiFeedback.showToast(mode === 'full' ? 'Histórico completo carregado.' : 'Dados atualizados (últimos 90 dias).');
+            const labels = { '30d': 'Últimos 30 dias', '90d': 'Últimos 90 dias', '120d': 'Últimos 120 dias', full: 'Todos os logs' };
+            const sourceMsg = syncSource ? ' · banco atualizado' : '';
+            UiFeedback.showToast(`${labels[mode] || 'Período atualizado'}${sourceMsg}.`);
         } catch (exc) {
             UiFeedback.showToast('Não foi possível atualizar os dados agora.');
         } finally {
@@ -2093,7 +2105,7 @@ class RegistryPage {
             }
             RegistryPage.closeForm();
             showToast(editing ? 'RPA atualizada.' : 'RPA cadastrada.');
-            await reloadData(DATA.loadStats?.mode || '90d');
+            await reloadData(DATA.loadStats?.mode || '30d', false);
             await RegistryPage.render();
         } catch (exc) {
             DomUtils.$('#registryFormError').innerHTML = `<div class="registry-error">Falha de comunicação com o servidor local. O Cadastro de RPAs exige o servidor local (server.py).</div>`;
@@ -2194,16 +2206,20 @@ class RpaOpsApp {
         if (savedPage && document.getElementById(`page-${savedPage}`)) NavigationController.goToPage(savedPage);
 
         DomUtils.$('#executionPeriod').addEventListener('change', () => {
-            // Filtro ainda não implementado (não é comportamento de mock —
-            // a mensagem anterior sugeria erroneamente que só faltava sair
-            // do modo mock, mas o gráfico não recarrega em NENHUM ambiente,
-            // real ou de demonstração). Mensagem honesta em vez de prometer
-            // um comportamento que ainda não existe.
-            UiFeedback.showToast('Este filtro de período ainda não está implementado — o painel mostra os últimos 90 dias (ou o histórico completo, via "Recarregar dados" com histórico completo).');
+            UiFeedback.showToast('O período global do dashboard é controlado no seletor do topo.');
         });
 
+        const dataWindowSelect = DomUtils.$('#dataWindowSelect');
+        if (dataWindowSelect) {
+            dataWindowSelect.value = DATA.loadStats?.mode || '30d';
+            dataWindowSelect.addEventListener('change', () => {
+                // Troca de período consulta apenas o SQLite: não relê arquivos.
+                RpaDataStore.reloadData(dataWindowSelect.value, false);
+            });
+        }
+
         DomUtils.$('#reloadButton').addEventListener('click', () => {
-            RpaDataStore.reloadData(DomUtils.$('#fullHistoryToggle').checked ? 'full' : '90d');
+            RpaDataStore.reloadData(dataWindowSelect?.value || DATA.loadStats?.mode || '30d', true);
         });
 
         DomUtils.$('#registryNewBtn').addEventListener('click', () => RegistryPage.openForm(null));
@@ -2351,7 +2367,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && window.I
 
     // Ponto de integração usado pelo refresh automático de 20 minutos
     // (assets/auto-refresh.js) para evitar um location.reload() cego.
-    window.RPA_INCREMENTAL_REFRESH = () => reloadData(DATA.loadStats?.mode || '90d');
+    window.RPA_INCREMENTAL_REFRESH = () => reloadData(DATA.loadStats?.mode || '30d', true);
 
     init();
 
