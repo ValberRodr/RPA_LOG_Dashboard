@@ -34,6 +34,7 @@ import math
 import mimetypes
 import os
 import re
+import ssl
 import secrets
 import socket
 import statistics
@@ -2000,14 +2001,44 @@ class AutomationAnywhereGateway:
         return (host, int(port)) if port else (host, 80)
 
     # ---- transporte HTTP com a Control Room real -----------------------
+    # Rede desta empresa faz inspeção de TLS: o proxy corporativo (AA_PROXY)
+    # reemite um certificado próprio no meio do túnel CONNECT, e esse
+    # certificado tem um defeito técnico real (falta a extensão X.509
+    # "Authority Key Identifier") — confirmado em produção via o log [AA]:
+    # "CERTIFICATE_VERIFY_FAILED ... Missing Authority Key Identifier". O
+    # Windows/navegador aceita porque a raiz da empresa está instalada no
+    # armazém de certificados do SO e a validação da CryptoAPI é mais
+    # tolerante a essa falta; o validador estrito do OpenSSL usado pelo
+    # Python rejeita mesmo assim. Não há workaround que preserve a
+    # verificação sem envolver o time de TI corrigindo o certificado do
+    # proxy — decisão explícita do responsável do projeto (2026-09-28):
+    # desligar a verificação SÓ nesta chamada via proxy, nunca no modo
+    # direto (`_do_one_request`/`_PinnedHTTPSConnection`, usado quando não
+    # há proxy configurado, continua validando normalmente). Ver
+    # THREAT_MODEL.md, cenário 11, e SECURITY.md para o registro completo
+    # dessa decisão e o risco aceito.
+    _PROXY_TLS_CONTEXT = None
+
+    @classmethod
+    def _proxy_tls_context(cls):
+        if cls._PROXY_TLS_CONTEXT is None:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            cls._PROXY_TLS_CONTEXT = ctx
+        return cls._PROXY_TLS_CONTEXT
+
     def _do_one_request_via_proxy(self, method, url, headers, body_bytes, proxy_host, proxy_port):
         """Como `_do_one_request`, mas encaminhando através do proxy HTTP
         corporativo (túnel CONNECT para HTTPS) — usa o `ProxyHandler` nativo
         do urllib, que já resolve o handshake CONNECT e o SNI corretos; não
-        reimplementa transporte HTTP na mão."""
+        reimplementa transporte HTTP na mão. Não valida o certificado
+        apresentado no túnel — ver docstring de `_PROXY_TLS_CONTEXT`."""
         proxy_url = f'http://{proxy_host}:{proxy_port}'
         opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url}), _NoFollowRedirectHandler(),
+            urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url}),
+            urllib.request.HTTPSHandler(context=self._proxy_tls_context()),
+            _NoFollowRedirectHandler(),
         )
         req = urllib.request.Request(url, data=body_bytes, method=method)
         for k, v in headers.items():

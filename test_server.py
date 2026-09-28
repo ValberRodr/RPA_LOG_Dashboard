@@ -46,6 +46,7 @@ import sys
 import tempfile
 import threading
 import time
+import ssl
 import unittest
 import unittest.mock
 import urllib.error
@@ -691,6 +692,16 @@ class TestAutomationAnywhereProxyMode(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertIsNone(raw)
         self.assertIn('SSRF_BLOCKED', net_err)
+
+    def test_proxy_tls_context_skips_certificate_verification(self):
+        # Rede desta empresa faz inspeção de TLS e o certificado que o proxy
+        # reemite no túnel tem um defeito real (falta Authority Key
+        # Identifier) que o OpenSSL rejeita mesmo sendo aceito pelo Windows —
+        # decisão explícita: não validar certificado nesta chamada via proxy
+        # (nunca no modo direto). Ver THREAT_MODEL.md, cenário 11.
+        ctx = self.gateway._proxy_tls_context()
+        self.assertFalse(ctx.check_hostname)
+        self.assertEqual(ctx.verify_mode, ssl.CERT_NONE)
 
     def test_redirect_to_blocked_target_is_not_followed_in_proxy_mode(self):
         with unittest.mock.patch.object(server, 'AA_PROXY', 'proxy.bradseg.com.br:80'), \

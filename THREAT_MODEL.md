@@ -134,6 +134,27 @@ revalidado antes de seguir, igual ao modo direto.
 **Status: corrigido** — ver SECURITY.md, Histórico de correções (2026-09-28,
 "Proxy corporativo obrigatório bloqueava a integração AA").
 
+### 12. Certificado TLS do proxy corporativo (inspeção de TLS) sem validação
+O proxy corporativo (cenário 11) faz inspeção de TLS: reemite um certificado
+próprio dentro do túnel CONNECT em vez de deixar passar o certificado real do
+Automation Anywhere. Esse certificado reemitido tem um defeito técnico real
+(falta a extensão X.509 "Authority Key Identifier", confirmado em produção
+via `[AA] ... CERTIFICATE_VERIFY_FAILED ... Missing Authority Key Identifier`)
+que o validador estrito do OpenSSL (usado pelo `ssl`/`urllib` do Python)
+rejeita, mesmo o Windows/navegador aceitando (CryptoAPI é mais tolerante a
+essa falta específica).
+**Risco:** `_do_one_request_via_proxy` desliga a verificação de certificado
+(`ssl.CERT_NONE`) só para essa chamada — sem isso, a chamada real ao
+Automation Anywhere falha sempre nesta rede. Isso remove a proteção contra um
+MITM diferente do proxy corporativo *entre o proxy e o Control Room real*
+(um atacante nessa posição específica da rede da empresa, depois do proxy).
+**Aceito como está** (decisão explícita do responsável do projeto,
+2026-09-28) — a alternativa seria a própria empresa corrigir o certificado do
+proxy de inspeção (fora do controle deste projeto). Escopo estritamente
+limitado ao modo com proxy: o modo direto (`_do_one_request`/
+`_PinnedHTTPSConnection`, usado sempre que `AA_PROXY` não está configurado)
+continua validando certificado normalmente, sem nenhuma mudança.
+
 ## Fora de escopo (por design)
 
 - Múltiplos usuários / múltiplas máquinas: a aplicação é explicitamente
