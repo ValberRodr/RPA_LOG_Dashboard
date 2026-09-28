@@ -794,11 +794,24 @@ class OverviewPage {
         }
         const target = DomUtils.$('#dataQualityList');
         if (!target) return;
+
+        const db = DATA.loadStats?.database || {};
+        const dbStatus = `
+            <div class="quality-row">
+                <div class="q-file mono">${Fmt.escapeHtml(db.file || 'rpa_ops_monitor.sqlite3')}
+                    <div class="q-meta">Cache persistente SQLite</div>
+                </div>
+                <div class="q-meta">${Number(db.sourceFiles || 0).toLocaleString('pt-BR')} arquivos-fonte indexados</div>
+                <div class="q-error">${Number(db.records || 0).toLocaleString('pt-BR')} registros no banco</div>
+                <div class="q-action">Última sincronização: ${db.lastSyncAt ? Fmt.fmtDateTime(db.lastSyncAt) : 'ainda não registrada'}</div>
+            </div>
+        `;
+
         if (!issues.length) {
-            target.innerHTML = `<div class="empty-state">Nenhum arquivo inválido ou ignorado na carga atual.</div>`;
+            target.innerHTML = dbStatus + `<div class="empty-state">Nenhum arquivo inválido ou ignorado na carga atual.</div>`;
             return;
         }
-        target.innerHTML = issues.slice(0, 20).map(i => `
+        target.innerHTML = dbStatus + issues.slice(0, 20).map(i => `
             <div class="quality-row">
                 <div class="q-file mono">${Fmt.escapeHtml(i.file)}<div class="q-meta">${Fmt.escapeHtml(i.path)}</div></div>
                 <div class="q-meta">${Fmt.escapeHtml(i.type)} • fase: ${Fmt.escapeHtml(i.phase)}</div>
