@@ -645,6 +645,62 @@ class TestAutomationAnywhereSsrfGuard(unittest.TestCase):
         self.assertIn('NETWORK_ERROR', net_err)
 
 
+class TestDatasetWithEmptyRegistry(unittest.TestCase):
+    """Regressão do erro visto em produção: rpa_metadata.json = {} não pode
+    terminar em KeyError: 'rpas' nem impedir o dashboard de subir."""
+
+    def test_empty_registry_keeps_log_process_visible_as_auto_discovered_rpa(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            logs = root / 'Logs'
+            vms = root / 'VMS'
+            vms.mkdir()
+            day = date.today()
+            process = 'PROC_SEM_CADASTRO'
+            folder = logs / f'{day.year:04d}' / f'{day.month:02d}' / process
+            folder.mkdir(parents=True)
+            record = {
+                'execution_id': 'EXE-001',
+                'process_name': process,
+                'robot_name': 'BOT-01',
+                'orchestrator': 'ORQ-01',
+                'environment': 'PRD',
+                'start_time': f'{day.isoformat()}T08:00:00',
+                'end_time': f'{day.isoformat()}T08:05:00',
+                'duration_seconds': 300,
+                'status': 'SUCCESS',
+                'total_items': 10,
+                'processed_items': 10,
+                'success_items': 10,
+                'warning_items': 0,
+                'error_items': 0,
+                'retry_count': 0,
+                'machine_name': 'VM-01',
+                'version': '1.0',
+            }
+            (folder / f'RPA_{day.isoformat()}.log').write_text(
+                json.dumps(record) + '\n', encoding='utf-8'
+            )
+            meta = root / 'rpa_metadata.json'
+            meta.write_text('{}', encoding='utf-8')
+            store = server.SQLiteLogStore(
+                root / 'cache.sqlite3', logs, vms,
+                server.EXEC_FNAME_RE, server.VM_FNAME_RE,
+            )
+            registry = server.RpaRegistryStore(meta)
+
+            with unittest.mock.patch.object(server, 'log_store', store), \
+                 unittest.mock.patch.object(server, 'rpa_registry', registry):
+                obs, idx = server.build_dataset('30d')
+
+            self.assertEqual(len(obs['executions']), 1)
+            self.assertEqual(obs['executions'][0]['process'], process)
+            self.assertEqual(len(obs['rpas']), 1)
+            self.assertTrue(obs['rpas'][0]['autoDiscovered'])
+            self.assertEqual(obs['rpas'][0]['criticality'], 'NÃO CADASTRADA')
+            self.assertEqual(idx['summary']['totalRpas'], 1)
+
+
 class TestDatasetBuilds(unittest.TestCase):
     """Smoke test do pipeline real de dados — só roda se ./logs existir."""
 
