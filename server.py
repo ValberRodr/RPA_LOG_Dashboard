@@ -928,6 +928,13 @@ class DatasetBuilder:
                 'filesSkippedWindow': _build_status['filesSkippedWindow'], 'filesInvalid': _build_status['filesInvalid'],
                 'executions': len(executions), 'events': _build_status['events'], 'vmSnapshots': _build_status['vmSnapshots'],
                 'issueCount': len(issues),
+                'database': {
+                    'file': db_stats.get('dbFile'),
+                    'lastSyncAt': db_stats.get('lastSyncAt'),
+                    'sourceFiles': db_stats.get('sourceFiles', 0),
+                    'records': db_stats.get('records', 0),
+                    'syncWarning': db_stats.get('syncWarning'),
+                },
             },
         }
         index = build_index(obs, vm_history, expected_runs, exec_by_id)
@@ -1263,40 +1270,47 @@ class IndexBuilder:
 
 
 class DataCache:
-    """Cache em memória do dataset já construído (obs, index), guardado
-    junto de um fingerprint barato (contagem/tamanho/mtime dos arquivos) —
-    uma requisição repetida sem nada alterado em disco não reprocessa nada."""
+    """Cache do dataset renderizado sobre o SQLite persistente.
+
+    Arquivos-fonte só são examinados no startup e quando uma atualização é
+    solicitada. Trocar a janela 30/90/120/full apenas refaz as agregações a
+    partir do SQLite, sem reabrir .log/.jsonl.
+    """
+
+    VALID_MODES = {'30d', '90d', '120d', 'full'}
 
     @staticmethod
-    def get_data(mode=None):
+    def get_data(mode=None, force_sync=False):
         with _build_lock:
-            effective_mode = mode or _cache['mode'] or '90d'
-            # fingerprint barato (stat, sem leitura) apenas para saber se algo no
-            # disco mudou desde a última carga já concluída neste modo.
-            count, newest, size = 0, 0, 0
-            for root in (RPA_LOG_ROOT, VM_ROOT):
-                if not root.exists(): continue
-                for base, _, files in os.walk(root):
-                    for name in files:
-                        if not (name.endswith('.log') or name.endswith('.jsonl')):
-                            continue
-                        p = Path(base) / name
-                        try: st = p.stat()
-                        except OSError: continue
-                        count += 1; size += st.st_size; newest = max(newest, st.st_mtime_ns)
+            requested = mode or _cache['mode'] or '30d'
+            effective_mode = requested if requested in DataCache.VALID_MODES else '30d'
             try:
-                st = META_FILE.stat(); newest = max(newest, st.st_mtime_ns); size += st.st_size
-            except OSError:
-                pass
-            fp = (count, newest, size)
-            if _cache['obs'] is None or _cache['fingerprint'] != fp or _cache['mode'] != effective_mode:
+                log_store.ensure_ready()
+                if force_sync:
+                    log_store.sync(full_scan=(effective_mode == 'full'))
+
+                revision = log_store.revision()
                 try:
+                    st = META_FILE.stat()
+                    meta_fp = (st.st_mtime_ns, st.st_size)
+                except OSError:
+                    meta_fp = (0, 0)
+                fp = (revision, meta_fp)
+
+                if (_cache['obs'] is None or _cache['fingerprint'] != fp
+                        or _cache['mode'] != effective_mode):
                     obs, index = build_dataset(effective_mode)
-                except Exception as exc:
-                    _build_status.update(phase='erro', error=str(exc))
-                    raise
-                _cache.update({'fingerprint': fp, 'mode': effective_mode, 'obs': obs, 'index': index})
-            return _cache['obs'], _cache['index']
+                    _cache.update({
+                        'fingerprint': fp, 'mode': effective_mode,
+                        'obs': obs, 'index': index,
+                    })
+                return _cache['obs'], _cache['index']
+            except Exception as exc:
+                _build_status.update(
+                    phase='erro', error=str(exc),
+                    finishedAt=datetime.now().isoformat(timespec='seconds'),
+                )
+                raise
 
 
 # =============================================================================
@@ -1438,7 +1452,32 @@ class RpaRegistryStore:
 
     # ---- leitura/escrita cruas -------------------------------------------
     def _load(self):
-        return json.loads(self.meta_file.read_text(encoding='utf-8'))
+        """Carrega o cadastro tolerando arquivo vazio/sem as chaves-base.
+
+        Um cadastro recém-criado como {} não pode derrubar o dashboard com
+        KeyError: 'rpas'. As listas ausentes passam a vazias. JSON inválido ou
+        tipos incompatíveis continuam gerando erro claro para evitar sobrescrever
+        silenciosamente conteúdo possivelmente corrompido.
+        """
+        if not self.meta_file.exists():
+            return {'rpas': [], 'schedules': []}
+        try:
+            data = json.loads(self.meta_file.read_text(encoding='utf-8'))
+        except Exception as exc:
+            raise RpaRegistryValidationError(
+                f'Cadastro de RPAs inválido em {self.meta_file}: {exc}'
+            ) from exc
+        if not isinstance(data, dict):
+            raise RpaRegistryValidationError('Cadastro de RPAs precisa ser um objeto JSON.')
+        rpas = data.get('rpas', [])
+        schedules = data.get('schedules', [])
+        if not isinstance(rpas, list) or not isinstance(schedules, list):
+            raise RpaRegistryValidationError(
+                'Cadastro de RPAs inválido: "rpas" e "schedules" precisam ser listas.'
+            )
+        data['rpas'] = rpas
+        data['schedules'] = schedules
+        return data
 
     def _save(self, data):
         """Escrita atômica: grava num arquivo temporário e só então substitui
