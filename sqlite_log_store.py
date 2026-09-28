@@ -421,7 +421,16 @@ class SQLiteLogStore:
                         self._status(phase=phase, percent=min(52, pct),
                                      filesProcessed=idx, filesInvalid=invalid)
 
-                    revision = self._bump_revision(conn) if imported_files else self.revision(conn)
+                    if imported_files:
+                        revision = self._bump_revision(conn)
+                    else:
+                        revision = self.revision(conn)
+                        conn.execute(
+                            """INSERT INTO store_meta(key,value) VALUES('last_sync_at',?)
+                               ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                            (datetime.now().isoformat(timespec='seconds'),),
+                        )
+                        conn.commit()
                     self._last_sync_warning = None
                     return {
                         'revision': revision,
