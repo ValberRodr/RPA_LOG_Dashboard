@@ -38,7 +38,7 @@ class SQLiteLogStore:
         self.exec_pattern = exec_pattern
         self.vm_pattern = vm_pattern
         self.status_callback = status_callback
-        self._process_lock = threading.Lock()
+        self._process_lock = threading.RLock()
         self._ready = False
         self._last_sync_warning = None
 
