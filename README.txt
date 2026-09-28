@@ -17,8 +17,8 @@ INÍCIO RÁPIDO
   ".localhost" para 127.0.0.1 nativamente). Sem Chrome/Edge instalado, cai
   para o navegador padrão numa aba normal. Para mudar o nome ou a porta, use
   as variáveis de ambiente RPA_MONITOR_HOSTNAME e RPA_MONITOR_PORT.
-- Testes locais: `python3 test_server.py` (sem dependências, usa unittest da
-  biblioteca padrão — ver seção TESTES mais abaixo).
+- Testes locais: `python -m unittest -v test_server.py test_sqlite_log_store.py`
+  e `node test_dashboard.js`. Não há workflow automático de testes.
 - Executável sem precisar de Python instalado: `packaging/build_macos.sh`
   (macOS) ou `packaging/build_windows.bat` (Windows) geram uma pasta com o
   binário dentro (`dist/RPA_Ops_Monitor/`) — ou baixe pronto em Actions →
@@ -28,8 +28,8 @@ INÍCIO RÁPIDO
   `RPA_Ops_Monitor.log`, criado ao lado do executável; é o primeiro lugar a
   olhar se o painel abrir vazio ou algo parecer errado.
 - Tela de carregamento inicial (2026-09-28): index.html mostra um overlay
-  com % e fase enquanto o dataset é montado (sonda /api/load-status, mesmo
-  endpoint da barra de "Recarregar dados") — evita a aba parecer travada
+  com % e fase enquanto o SQLite é criado/sincronizado e o dataset é montado
+  (sonda /api/load-status, mesmo endpoint usado pela barra de atualização) — evita a aba parecer travada
   quando há muito mais arquivos que no dataset sintético local (ex.: log
   numa pasta de rede corporativa). Se a montagem falhar, o overlay mostra a
   mensagem real e não desaparece sozinho.
@@ -43,8 +43,10 @@ upload, internet ou dependências externas.
 --------------------------------------------------------------------------------
 MAPA DE ARQUIVOS
 --------------------------------------------------------------------------------
-server.py                      parser dos logs + servidor HTTP local + a
-                                integração opcional com Automation Anywhere.
+server.py                      servidor HTTP local + montagem dos datasets sobre
+                                SQLite + integração opcional com Automation Anywhere.
+sqlite_log_store.py             cache persistente incremental dos logs; controla
+                                offset por byte, manifesto e retries de leitura.
                                 Pipeline de dataset organizado em classes
                                 (TimeMath, IntervalMath,
                                 VmReliabilityClassifier,
@@ -114,29 +116,35 @@ logs/                          logs fictícios de execução, eventos e
 ARQUITETURA — VISÃO GERAL
 --------------------------------------------------------------------------------
 
-    logs/*.log, logs/*.jsonl
+    Logs/*.log + VMS/*.jsonl
+             │
+             │ primeira execução: importa o histórico
+             │ atualizações: somente arquivos novos/alterados
+             ▼
+    sqlite_log_store.py → rpa_ops_monitor.sqlite3
+             │
+             ├── manifesto por arquivo
+             ├── processed_bytes / line_count / guard_hash
+             ├── append-only: lê somente bytes novos
+             └── retry de leitura: 8s → 30s → 90s quando o banco está ocupado
              │
              ▼
-    server.py: DatasetBuilder.build_dataset(mode)  ← parseia e filtra por
-             │                         janela de datas antes de abrir cada
-             │                         arquivo (barato)
-             ▼
-    obs (dict "de detalhe": execuções, eventos por etapa, telemetria de VM)
+    server.py: DatasetBuilder.build_dataset(mode)
              │
+             ├── 30 dias (padrão)
+             ├── 90 dias
+             ├── 120 dias
+             └── todos os logs
              ▼
-    server.py: IndexBuilder.build_index(obs, ...)  ← agrega: KPIs, tendências,
-             │                         Pareto de erros, confiabilidade/
-             │                         utilização de VM, sugestão de
-             │                         consolidação
-             ▼
-    idx (dict "agregado", consumido principalmente por index.html)
+    obs → IndexBuilder.build_index(obs, ...) → idx
              │
-             ├── GET /assets/observability-data.js → window.OBS_DATA = obs
-             └── GET /assets/index-data.js          → window.INDEX_DATA = idx
+             ├── /assets/observability-data.js
+             └── /assets/index-data.js
 
-`DataCache.get_data(mode)` cacheia (obs, idx) em memória por modo ('90d' ou
-'full') e só reconstrói quando o fingerprint dos arquivos (contagem/
-tamanho/mtime) muda — por isso um GET repetido não reprocessa os logs à toa.
+Trocar o período consulta apenas o SQLite. O botão Atualizar sincroniza a
+origem. Arquivos inalterados não são reabertos; arquivos que só cresceram são
+lidos a partir do último byte confirmado. Truncamento/reescrita causa
+reindexação daquele arquivo.
 
 BACK-END — server.py (organização em classes)
 O pipeline de dataset é organizado em classes por responsabilidade, cada
