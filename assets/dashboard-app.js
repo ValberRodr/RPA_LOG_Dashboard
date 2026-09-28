@@ -418,6 +418,8 @@ class RpaDataStore {
         'consultando execuções no SQLite': 'Carregando execuções do banco',
         'consultando etapas no SQLite': 'Carregando etapas do banco',
         'consultando telemetria no SQLite': 'Carregando telemetria do banco',
+        'aguardando leitura do SQLite': 'Aguardando acesso ao banco SQLite',
+        'SQLite ocupado — aguardando nova tentativa': 'Banco SQLite ocupado — aguardando nova tentativa',
         'aguardando atualização': 'Preparando atualização',
         'vinculando execuções e agenda': 'Vinculando execuções e agenda',
         'calculando indicadores': 'Calculando indicadores',
@@ -488,7 +490,11 @@ class RpaDataStore {
         label.classList.add('active');
         fill.style.width = `${status.percent || 0}%`;
         const phaseText = RpaDataStore.PHASE_LABELS[status.phase] || status.phase;
-        label.textContent = `Atualizando dados — ${phaseText}… ${status.percent || 0}% · ${status.filesProcessed || 0}/${status.filesFound || 0} arquivos`;
+        if (status.dbRetryActive && status.dbRetryMessage) {
+            label.textContent = `Atualizando dados — ${status.dbRetryMessage} · ${status.percent || 0}%`;
+        } else {
+            label.textContent = `Atualizando dados — ${phaseText}… ${status.percent || 0}% · ${status.filesProcessed || 0}/${status.filesFound || 0} arquivos`;
+        }
     }
 
     static hideLoadProgress() {
