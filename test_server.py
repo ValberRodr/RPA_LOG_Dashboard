@@ -44,9 +44,11 @@ executar `python3 test_server.py` sem instalar nada.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import unittest.mock
 import urllib.error
@@ -286,6 +288,77 @@ class TestRpaRegistryStore(unittest.TestCase):
     def test_update_rpa_ignores_unknown_extra_fields_mass_assignment(self):
         updated = self.store.update_rpa('RPA001', _valid_registry_payload(process='VND_Teste', **{'isAdmin': True}))
         self.assertNotIn('isAdmin', updated)
+
+    # ---- trava de escrita concorrente (cadastro numa pasta de rede) -------
+    def test_create_rpa_waits_for_lock_then_succeeds(self):
+        # Simula outra máquina no meio de uma gravação (arquivo .lock já
+        # existe) que termina bem antes do timeout — create_rpa deve esperar
+        # e completar normalmente, não falhar na primeira tentativa.
+        lock_path = Path(str(self.meta_file) + '.lock')
+        lock_path.touch()
+        self.store.LOCK_TIMEOUT_SECONDS = 2
+        self.store.LOCK_POLL_SECONDS = 0.02
+        threading.Timer(0.1, lock_path.unlink).start()
+        rpa = self.store.create_rpa(_valid_registry_payload())
+        self.assertEqual(rpa['rpaId'], 'RPA002')
+
+    def test_create_rpa_raises_clear_error_when_lock_held_too_long(self):
+        # Trava "recente" (mtime agora) que nunca é liberada dentro do
+        # timeout configurado — deve desistir com uma mensagem clara em vez
+        # de travar a requisição indefinidamente.
+        lock_path = Path(str(self.meta_file) + '.lock')
+        lock_path.touch()
+        self.store.LOCK_TIMEOUT_SECONDS = 0.2
+        self.store.LOCK_POLL_SECONDS = 0.02
+        try:
+            with self.assertRaises(server.RpaRegistryValidationError) as ctx:
+                self.store.create_rpa(_valid_registry_payload())
+            self.assertIn('outra pessoa está editando', str(ctx.exception))
+        finally:
+            lock_path.unlink()
+
+    def test_stale_lock_is_reclaimed_instead_of_blocking(self):
+        # Trava antiga (mtime muito no passado) simula um processo que
+        # travou e morreu sem limpar — deve ser retomada quase
+        # imediatamente, não esperar o timeout inteiro.
+        lock_path = Path(str(self.meta_file) + '.lock')
+        lock_path.touch()
+        old = time.time() - (self.store.LOCK_STALE_SECONDS + 5)
+        os.utime(lock_path, (old, old))
+        self.store.LOCK_TIMEOUT_SECONDS = 5
+        self.store.LOCK_POLL_SECONDS = 0.02
+        started = time.monotonic()
+        rpa = self.store.create_rpa(_valid_registry_payload())
+        elapsed = time.monotonic() - started
+        self.assertEqual(rpa['rpaId'], 'RPA002')
+        self.assertLess(elapsed, 1.0)  # bem menor que LOCK_TIMEOUT_SECONDS=5
+
+    def test_concurrent_create_from_two_threads_does_not_lose_either_write(self):
+        # Regressão do cenário real: cadastro numa pasta de rede, duas
+        # máquinas criando uma RPA ao mesmo tempo. Sem a trava serializando
+        # leitura+escrita, a segunda gravação pode sobrescrever a primeira
+        # (last-write-wins) — as duas devem sobreviver.
+        self.store.LOCK_TIMEOUT_SECONDS = 5
+        self.store.LOCK_POLL_SECONDS = 0.01
+        results = []
+        errors = []
+
+        def worker(process_name):
+            try:
+                results.append(self.store.create_rpa(_valid_registry_payload(process=process_name)))
+            except Exception as exc:  # pragma: no cover - só reportaria falha do teste
+                errors.append(exc)
+
+        t1 = threading.Thread(target=worker, args=('VND_Concorrente1',))
+        t2 = threading.Thread(target=worker, args=('VND_Concorrente2',))
+        t1.start(); t2.start()
+        t1.join(timeout=5); t2.join(timeout=5)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertEqual({r['rpaId'] for r in results}, {'RPA002', 'RPA003'})
+        data = json.loads(self.meta_file.read_text(encoding='utf-8'))
+        self.assertEqual({r['rpaId'] for r in data['rpas']}, {'RPA001', 'RPA002', 'RPA003'})
 
 
 class TestLogFilenamePatterns(unittest.TestCase):

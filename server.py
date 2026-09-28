@@ -2,7 +2,8 @@
 """Servidor local do RPA Ops Monitor.
 
 - Serve os HTMLs e assets apenas em 127.0.0.1.
-- Lê os arquivos .log e telemetria diretamente no compartilhamento oficial de Monitoramento.
+- Lê os arquivos .log e telemetria em ./logs (padrão) ou, no Windows, no
+  compartilhamento UNC oficial da empresa por padrão — ver RPA_MONITOR_DATA_ROOT.
 - Por padrão, considera somente os últimos 90 dias (Seção 20 do briefing de
   evolução enterprise); o modo "histórico completo" pode ser solicitado via
   /api/reload?mode=full e nunca persiste entre reinicializações do processo.
@@ -22,6 +23,7 @@ from datetime import datetime, timedelta, date
 from collections import defaultdict, Counter
 from urllib.parse import urlparse, urljoin, parse_qs
 import bisect
+import contextlib
 import hashlib
 import hmac
 import http.client
@@ -37,6 +39,7 @@ import statistics
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 import webbrowser
@@ -58,11 +61,17 @@ else:
     ROOT = BUNDLE_DIR
 
 # Fonte oficial de dados corporativos. O app/executável pode ficar em qualquer
-# pasta local: os logs são lidos diretamente deste compartilhamento UNC.
-# Para homologação/desenvolvimento, RPA_MONITOR_DATA_ROOT permite sobrescrever
-# a raiz sem alterar o código.
-DEFAULT_DATA_ROOT = Path(
-    r'\\d7156ws1011\DirGeralAdmFin\Organizacao&Processos\Melhoria_Continua\Monitoramento'
+# pasta local: os logs são lidos diretamente deste compartilhamento UNC. Só
+# se aplica no Windows de propósito — barra invertida não é separador de
+# caminho no macOS/Linux, então usar esse literal ali não navega pra lugar
+# nenhum; nesses casos cai no padrão local de sempre (pasta ./logs ao lado
+# do script/.exe), preservando o fluxo de desenvolvimento/teste/CI. Para
+# homologação/desenvolvimento no próprio Windows, RPA_MONITOR_DATA_ROOT
+# permite sobrescrever a raiz sem alterar o código.
+DEFAULT_DATA_ROOT = (
+    Path(r'\\d7156ws1011\DirGeralAdmFin\Organizacao&Processos\Melhoria_Continua\Monitoramento')
+    if sys.platform.startswith('win')
+    else ROOT / 'logs' / 'Organizacao&Processos' / 'Melhoria_Continua' / 'Monitoramento'
 )
 LOG_BASE = Path(os.environ.get('RPA_MONITOR_DATA_ROOT', str(DEFAULT_DATA_ROOT)))
 RPA_LOG_ROOT = LOG_BASE / 'Logs'
@@ -74,9 +83,18 @@ _VM_BASE = LOG_BASE / 'VMS'
 _VM_DEFAULT = (_VM_BASE / 'Historico') if (_VM_BASE / 'Historico').is_dir() else _VM_BASE
 VM_ROOT = Path(os.environ.get('RPA_MONITOR_VM_ROOT', str(_VM_DEFAULT)))
 
-# Configurações editáveis continuam ao lado do script/.exe e não no share.
-META_FILE = ROOT / 'config' / 'rpa_metadata.json'
-AA_CONFIG_FILE = ROOT / 'config' / 'aa_config.json'
+# Cadastro de RPAs: no Windows, mesma pasta oficial de Logs/VMS (irmã delas
+# em Monitoramento\Cadastro_RPA\) — várias máquinas passam a ler/escrever o
+# MESMO arquivo (ver RpaRegistryStore._locked, mais abaixo, para a trava que
+# evita duas gravações concorrentes corromperem o arquivo). Em qualquer outro
+# SO (dev/teste/CI), continua ao lado do script — comportamento inalterado.
+# Os arquivos de dependência (config/dependencies/...) e seus caminhos
+# armazenados no cadastro continuam relativos a ROOT (pasta do executável),
+# não a CONFIG_ROOT — não fazem parte desta migração.
+DEFAULT_CONFIG_ROOT = (LOG_BASE / 'Cadastro_RPA') if sys.platform.startswith('win') else (ROOT / 'config')
+CONFIG_ROOT = Path(os.environ.get('RPA_MONITOR_CONFIG_ROOT', str(DEFAULT_CONFIG_ROOT)))
+META_FILE = CONFIG_ROOT / 'rpa_metadata.json'
+AA_CONFIG_FILE = CONFIG_ROOT / 'aa_config.json'
 # Padrão de fábrica inalterado: só muda se alguém definir RPA_MONITOR_HOST
 # explicitamente (ver docs/servidor-em-rede.html — expor além de loopback
 # exige entender que esta aplicação não tem autenticação embutida).
@@ -1301,8 +1319,57 @@ class RpaRegistryStore:
     OPTIONAL_FIELDS = ('volumeMin', 'volumeMax', 'runbook', 'steps', 'benefits', 'owners', 'dependencyFiles')
     OPTIONAL_DEFAULTS = {'volumeMin': 0, 'volumeMax': 0, 'runbook': '', 'steps': [], 'benefits': [], 'owners': [], 'dependencyFiles': []}
 
+    LOCK_TIMEOUT_SECONDS = 10
+    LOCK_POLL_SECONDS = 0.2
+    LOCK_STALE_SECONDS = 30  # processo morto segurando a trava não deve travar todo mundo pra sempre
+
     def __init__(self, meta_file: Path):
         self.meta_file = meta_file
+
+    # ---- trava de escrita -------------------------------------------------
+    @contextlib.contextmanager
+    def _locked(self):
+        """Serializa create/update/delete quando `meta_file` é compartilhado
+        por mais de uma máquina (ver CONFIG_ROOT — cadastro numa pasta de
+        rede). `os.open(..., O_CREAT | O_EXCL)` cria o arquivo de trava de
+        forma atômica (mesma chamada de sistema não pode ser "ganha" por dois
+        processos ao mesmo tempo, inclusive em compartilhamento SMB/UNC) —
+        se já existir, outra máquina está no meio de uma gravação: espera e
+        tenta de novo até LOCK_TIMEOUT_SECONDS, depois desiste com um erro
+        claro em vez de travar a requisição indefinidamente. Uma trava mais
+        velha que LOCK_STALE_SECONDS é tratada como abandonada (processo que
+        segurava ela morreu sem limpar) e é retomada, para não bloquear todo
+        mundo pra sempre por causa de um crash."""
+        lock_path = Path(str(self.meta_file) + '.lock')
+        deadline = time.monotonic() + self.LOCK_TIMEOUT_SECONDS
+        fd = None
+        while fd is None:
+            try:
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    age = time.time() - lock_path.stat().st_mtime
+                except OSError:
+                    age = 0  # sumiu entre o open() falhar e o stat() — outro processo já terminou, tenta de novo
+                if age > self.LOCK_STALE_SECONDS:
+                    try:
+                        lock_path.unlink()
+                    except OSError:
+                        pass
+                    continue
+                if time.monotonic() >= deadline:
+                    raise RpaRegistryValidationError(
+                        'Não foi possível salvar: outra pessoa está editando o Cadastro de RPAs agora. Tente novamente em alguns segundos.'
+                    )
+                time.sleep(self.LOCK_POLL_SECONDS)
+        try:
+            yield
+        finally:
+            os.close(fd)
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
 
     # ---- leitura/escrita cruas -------------------------------------------
     def _load(self):
@@ -1434,36 +1501,45 @@ class RpaRegistryStore:
         return out
 
     # ---- CRUD ---------------------------------------------------------
+    # Cada método segura a trava (`_locked`) por todo o ciclo leitura →
+    # validação → escrita, não só na escrita final — assim, se duas máquinas
+    # tentarem gravar ao mesmo tempo, a segunda só começa depois que a
+    # primeira já terminou, e por isso lê a versão JÁ ATUALIZADA como base
+    # (evita não só corromper o arquivo, mas também perder silenciosamente a
+    # mudança de quem gravou por último "por cima" da do outro).
     def create_rpa(self, payload):
-        data = self._load()
-        self.validate_payload(payload, data['rpas'])
-        rpa = self._extract_editable_fields(payload)
-        rpa['rpaId'] = self._next_rpa_id(data['rpas'])
-        data['rpas'].append(rpa)
-        data['schedules'] = [s for s in data['schedules'] if s['rpaId'] != rpa['rpaId']] + self.build_schedules_for(rpa)
-        self._save(data)
-        return rpa
+        with self._locked():
+            data = self._load()
+            self.validate_payload(payload, data['rpas'])
+            rpa = self._extract_editable_fields(payload)
+            rpa['rpaId'] = self._next_rpa_id(data['rpas'])
+            data['rpas'].append(rpa)
+            data['schedules'] = [s for s in data['schedules'] if s['rpaId'] != rpa['rpaId']] + self.build_schedules_for(rpa)
+            self._save(data)
+            return rpa
 
     def update_rpa(self, rpa_id, payload):
-        data = self._load()
-        existing = next((r for r in data['rpas'] if r['rpaId'] == rpa_id), None)
-        if existing is None:
-            raise RpaRegistryValidationError(f'RPA {rpa_id} não encontrada no cadastro.')
-        self.validate_payload(payload, data['rpas'], editing_rpa_id=rpa_id)
-        updated = self._extract_editable_fields(payload)
-        updated['rpaId'] = rpa_id
-        data['rpas'] = [updated if r['rpaId'] == rpa_id else r for r in data['rpas']]
-        data['schedules'] = [s for s in data['schedules'] if s['rpaId'] != rpa_id] + self.build_schedules_for(updated)
-        self._save(data)
-        return updated
+        with self._locked():
+            data = self._load()
+            existing = next((r for r in data['rpas'] if r['rpaId'] == rpa_id), None)
+            if existing is None:
+                raise RpaRegistryValidationError(f'RPA {rpa_id} não encontrada no cadastro.')
+            self.validate_payload(payload, data['rpas'], editing_rpa_id=rpa_id)
+            updated = self._extract_editable_fields(payload)
+            updated['rpaId'] = rpa_id
+            data['rpas'] = [updated if r['rpaId'] == rpa_id else r for r in data['rpas']]
+            data['schedules'] = [s for s in data['schedules'] if s['rpaId'] != rpa_id] + self.build_schedules_for(updated)
+            self._save(data)
+            return updated
 
     def delete_rpa(self, rpa_id):
-        data = self._load()
-        if not any(r['rpaId'] == rpa_id for r in data['rpas']):
-            raise RpaRegistryValidationError(f'RPA {rpa_id} não encontrada no cadastro.')
-        data['rpas'] = [r for r in data['rpas'] if r['rpaId'] != rpa_id]
-        data['schedules'] = [s for s in data['schedules'] if s['rpaId'] != rpa_id]
-        self._save(data)
+        with self._locked():
+            data = self._load()
+            if not any(r['rpaId'] == rpa_id for r in data['rpas']):
+                raise RpaRegistryValidationError(f'RPA {rpa_id} não encontrada no cadastro.')
+            data['rpas'] = [r for r in data['rpas'] if r['rpaId'] != rpa_id]
+            data['schedules'] = [s for s in data['schedules'] if s['rpaId'] != rpa_id]
+            self._save(data)
 
 
 rpa_registry = RpaRegistryStore(META_FILE)

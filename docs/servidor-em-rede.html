@@ -238,7 +238,7 @@
                     <li><strong>TLS (HTTPS)</strong> entre o navegador dos usuários e o que quer que autentique — sem isso, credenciais e dados operacionais trafegam em texto claro na rede.</li>
                     <li><strong>Firewall restringindo a origem</strong> — só a sub-rede/VLAN pretendida alcança a porta; nunca deixe a porta alcançável pela internet ou pela rede corporativa inteira sem necessidade.</li>
                     <li><strong>Alguém responsável por manter isso atualizado</strong> — certificado TLS expira, senha precisa trocar, e "configurei uma vez e esqueci" é como esse tipo de exposição vira incidente meses depois.</li>
-                    <li><strong>Aceitar o risco de concorrência no Cadastro de RPAs</strong> — <code>config/rpa_metadata.json</code> não tem lock; duas pessoas editando ao mesmo tempo pelo mesmo servidor central podem sobrescrever a alteração uma da outra (perda de dado, não uma falha de segurança).</li>
+                    <li><strong>Concorrência no Cadastro de RPAs já é tratada</strong> — se <code>rpa_metadata.json</code> ficar numa pasta de rede (<code>RPA_MONITOR_CONFIG_ROOT</code>), <code>RpaRegistryStore._locked()</code> serializa as gravações com um arquivo de trava (timeout de 10s, com reclamação automática de trava abandonada) — duas edições simultâneas não corrompem o arquivo nem se perdem silenciosamente. Se a espera exceder 10s, a pessoa vê uma mensagem clara pra tentar de novo, em vez de travar ou perder a alteração.</li>
                     <li><strong>Atualizar o <code>SECURITY.md</code>/<code>THREAT_MODEL.md</code> da sua cópia</strong> registrando esse desvio do padrão documentado — data, quem aprovou, e os controles compensatórios (proxy, firewall) que foram colocados.</li>
                 </ul>
             </section>
@@ -344,7 +344,7 @@ python3 server.py</code></pre>
                 <ul>
                     <li><strong>Autorização granular</strong> — o Basic Auth do proxy dá acesso completo (tudo ou nada) a quem passar; não existe "usuário só leitura" vs. "usuário que edita o Cadastro" dentro do próprio app.</li>
                     <li><strong>Auditoria de quem fez o quê</strong> — o app não registra qual usuário autenticado fez uma mudança no Cadastro de RPAs (só o proxy sabe quem autenticou, e só se você configurar log de acesso nele).</li>
-                    <li><strong>Concorrência de escrita</strong> — duas pessoas editando o Cadastro ao mesmo tempo pelo servidor central ainda podem se sobrescrever (ver <a href="../THREAT_MODEL.md">THREAT_MODEL.md</a>).</li>
+                    <li><strong>Alta concorrência</strong> — a trava de escrita do Cadastro (<code>RpaRegistryStore._locked</code>) é um arquivo comum, não um lock distribuído de verdade; serializa bem algumas pessoas fazendo mudanças esporádicas, não um cenário de muitas gravações simultâneas (ver <a href="../SECURITY.md">SECURITY.md</a>).</li>
                     <li><strong>Integração com Automation Anywhere mais exposta</strong> — qualquer usuário autenticado no proxy também consegue usar o proxy da integração AA deste servidor para falar com a Control Room configurada.</li>
                 </ul>
             </section>
@@ -358,7 +358,7 @@ python3 server.py</code></pre>
                     <tr><td><code>RPA_MONITOR_EXTRA_ORIGINS</code> declarado com a origem pública real</td><td>☐</td></tr>
                     <tr><td>Firewall restringindo a porta pública só à sub-rede pretendida</td><td>☐</td></tr>
                     <tr><td>Porta 8765 (do app) confirmada como INacessível de fora da máquina servidora</td><td>☐</td></tr>
-                    <tr><td>Time avisado sobre concorrência no Cadastro de RPAs</td><td>☐</td></tr>
+                    <tr><td>Time avisado que, sob concorrência muito alta, a trava do Cadastro pode devolver "tente novamente"</td><td>☐</td></tr>
                     <tr><td><code>SECURITY.md</code>/<code>THREAT_MODEL.md</code> internos atualizados com esse desvio do padrão</td><td>☐</td></tr>
                 </table></div>
             </section>
