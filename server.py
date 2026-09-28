@@ -2314,8 +2314,16 @@ class AutomationAnywhereGateway:
             return {'ok': True, 'capabilities': dict(self.MOCK_CAPABILITIES)}
         capabilities = {'activity': 'AVAILABLE'}  # já validado pela autenticação + Activity List
         for name, (method, path) in self.CAPABILITY_PROBE.items():
-            status, _raw, net_err = self._forward(method, base_url + path, {'X-Authorization': token}, None)
+            status, raw, net_err = self._forward(method, base_url + path, {'X-Authorization': token}, None)
             capabilities[name] = self._classify_status(status, net_err)
+            if not net_err and (status < 200 or status >= 300):
+                self._log_upstream_error(method, base_url + path, status, raw)
+        # Diagnóstico (2026-09-28): cada botão de capacidade no menu só
+        # aparece quando o valor aqui é 'AVAILABLE' (ver
+        # AANavController._render em aa-integration.js) — logar o resultado
+        # inteiro deixa claro, sem precisar de mais uma rodada de captura de
+        # tela, o que a Control Room real respondeu para cada uma.
+        print(f'[AA] discover({base_url}) -> {capabilities}')
         return {'ok': True, 'capabilities': capabilities}
 
     def activity_list(self, base_url, token, filters):
@@ -2361,7 +2369,15 @@ class AutomationAnywhereGateway:
             data = json.loads(raw.decode('utf-8'))
         except (ValueError, AttributeError):
             return {'ok': False, 'error': 'UNSUPPORTED'}
-        return {'ok': True, 'total': data.get('page', {}).get('totalElements', len(data.get('list', []))), 'list': data.get('list', [])}
+        result_list = data.get('list', [])
+        # Diagnóstico (2026-09-28): loga o formato real da resposta (chaves
+        # de nível 1 + tamanho da lista) na primeira vez que a lista vem
+        # vazia — se a chave de verdade não for `list` (ex.: `content`,
+        # `data`), isso aparece aqui sem precisar de mais uma captura de
+        # tela. Nunca loga activities inteiras (podem ter dado de negócio).
+        if not result_list:
+            print(f'[AA] {url} -> HTTP 200 mas lista vazia; chaves da resposta: {sorted(data.keys())}')
+        return {'ok': True, 'total': data.get('page', {}).get('totalElements', len(result_list)), 'list': result_list}
 
     def activity_detail(self, base_url, token, activity_id):
         if self.is_mock(base_url):

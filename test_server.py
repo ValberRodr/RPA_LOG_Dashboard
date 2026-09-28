@@ -591,12 +591,24 @@ class TestAutomationAnywhereUpstreamErrorLogging(unittest.TestCase):
         self.assertIn('403', out.getvalue())
         self.assertIn('Forbidden', out.getvalue())
 
-    def test_activity_list_does_not_log_on_success(self):
-        with unittest.mock.patch.object(self.gateway, '_forward', return_value=(200, b'{"list":[]}', None)):
+    def test_activity_list_does_not_log_when_list_is_non_empty(self):
+        with unittest.mock.patch.object(self.gateway, '_forward', return_value=(200, b'{"list":[{"id":"AA-1"}]}', None)):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 self.gateway.activity_list('https://empresa.my.automationanywhere.digital', 'tok', {})
         self.assertNotIn('[AA]', out.getvalue())
+
+    def test_activity_list_logs_response_keys_when_list_is_empty(self):
+        # Diagnóstico (2026-09-28): resposta HTTP 200 mas sem nenhum item —
+        # loga as chaves de nível 1 da resposta para revelar se a chave real
+        # da lista é outra (`content`/`data`/etc.) sem precisar de mais uma
+        # rodada de captura de tela.
+        with unittest.mock.patch.object(self.gateway, '_forward', return_value=(200, b'{"list":[]}', None)):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.gateway.activity_list('https://empresa.my.automationanywhere.digital', 'tok', {})
+        self.assertIn('[AA]', out.getvalue())
+        self.assertIn('lista vazia', out.getvalue())
 
     def test_activity_list_sends_page_as_object_not_flat_int(self):
         # Regressão de produção (2026-09-28): a Activity List real da
