@@ -99,11 +99,6 @@ class SQLiteLogStore:
         conn.row_factory = sqlite3.Row
         conn.execute(f'PRAGMA busy_timeout={max(1, int(float(timeout_seconds) * 1000))}')
         conn.execute('PRAGMA foreign_keys=ON')
-        # WAL depende de shared-memory local e não é seguro/portável em SMB.
-        try:
-            conn.execute('PRAGMA journal_mode=DELETE')
-        except sqlite3.DatabaseError:
-            pass
         conn.execute('PRAGMA synchronous=FULL')
         return conn
 
@@ -186,6 +181,13 @@ class SQLiteLogStore:
         ) from last_exc
 
     def _ensure_schema(self, conn):
+        # WAL depende de shared-memory local e não é apropriado ao share SMB.
+        # Executamos a definição do journal apenas no caminho de escrita/schema,
+        # não em cada conexão de leitura.
+        try:
+            conn.execute('PRAGMA journal_mode=DELETE')
+        except sqlite3.DatabaseError:
+            pass
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS store_meta (
             key TEXT PRIMARY KEY,
@@ -503,7 +505,8 @@ class SQLiteLogStore:
 
     def _full_reindex(self, conn, path, kind, scope, file_date, stat, issues):
         try:
-            raw = path.read_bytes()
+            with path.open('rb') as fh:
+                raw = fh.read(stat.st_size)
         except Exception as exc:
             issues.append({
                 'file': path.name, 'path': str(path), 'type': 'READ_ERROR',
@@ -552,9 +555,10 @@ class SQLiteLogStore:
     def _append_incremental(self, conn, path, kind, scope, file_date, stat, existing, issues):
         processed = int(existing['processed_bytes'] or 0)
         try:
+            expected_bytes = max(0, int(stat.st_size) - processed)
             with path.open('rb') as fh:
                 fh.seek(processed)
-                chunk = fh.read()
+                chunk = fh.read(expected_bytes)
         except Exception as exc:
             issues.append({
                 'file': path.name, 'path': str(path), 'type': 'READ_ERROR',
@@ -563,6 +567,25 @@ class SQLiteLogStore:
                 'action': 'Arquivo mantido como estava no banco.',
             })
             return False, 0, 1
+
+        # Validação pós-leitura: se o prefixo que já estava confirmado mudou
+        # durante a leitura, não misturamos snapshots. Reindexamos o arquivo.
+        try:
+            current_stat = path.stat()
+            prefix_unchanged = (
+                current_stat.st_size >= processed and
+                self._guard_hash(path, processed) == existing['guard_hash']
+            )
+        except OSError:
+            prefix_unchanged = False
+        if not prefix_unchanged:
+            try:
+                fresh_stat = path.stat()
+            except OSError:
+                fresh_stat = stat
+            return self._full_reindex(
+                conn, path, kind, scope, file_date, fresh_stat, issues
+            )
 
         complete, consumed = self._complete_prefix(chunk)
         try:
@@ -655,10 +678,16 @@ class SQLiteLogStore:
     def has_data(self):
         if not self.db_path.exists():
             return False
-        return self._read_with_retry(
-            'verificando banco existente',
-            lambda conn: conn.execute('SELECT 1 FROM raw_records LIMIT 1').fetchone() is not None,
-        )
+
+        def reader(conn):
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='raw_records'"
+            ).fetchone()
+            if table is None:
+                return False
+            return conn.execute('SELECT 1 FROM raw_records LIMIT 1').fetchone() is not None
+
+        return self._read_with_retry('verificando banco existente', reader)
 
     def ensure_ready(self):
         """Na primeira consulta do processo: cria/importa tudo ou faz sync incremental."""
