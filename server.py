@@ -2,7 +2,7 @@
 """Servidor local do RPA Ops Monitor.
 
 - Serve os HTMLs e assets apenas em 127.0.0.1.
-- Lê os arquivos .log e telemetria em ./logs.
+- Lê os arquivos .log e telemetria diretamente no compartilhamento oficial de Monitoramento.
 - Por padrão, considera somente os últimos 90 dias (Seção 20 do briefing de
   evolução enterprise); o modo "histórico completo" pode ser solicitado via
   /api/reload?mode=full e nunca persiste entre reinicializações do processo.
@@ -57,9 +57,24 @@ else:
     BUNDLE_DIR = Path(__file__).resolve().parent
     ROOT = BUNDLE_DIR
 
-LOG_BASE = ROOT / 'logs' / 'Organizacao&Processos' / 'Melhoria_Continua' / 'Monitoramento'
+# Fonte oficial de dados corporativos. O app/executável pode ficar em qualquer
+# pasta local: os logs são lidos diretamente deste compartilhamento UNC.
+# Para homologação/desenvolvimento, RPA_MONITOR_DATA_ROOT permite sobrescrever
+# a raiz sem alterar o código.
+DEFAULT_DATA_ROOT = Path(
+    r'\\d7156ws1011\DirGeralAdmFin\Organizacao&Processos\Melhoria_Continua\Monitoramento'
+)
+LOG_BASE = Path(os.environ.get('RPA_MONITOR_DATA_ROOT', str(DEFAULT_DATA_ROOT)))
 RPA_LOG_ROOT = LOG_BASE / 'Logs'
-VM_ROOT = LOG_BASE / 'VMS' / 'Historico'
+
+# A estrutura histórica já usada pelo projeto é VMS/Historico. Se o ambiente
+# oficial armazenar ano/mês diretamente em VMS, detectamos isso automaticamente.
+# RPA_MONITOR_VM_ROOT continua disponível como override explícito.
+_VM_BASE = LOG_BASE / 'VMS'
+_VM_DEFAULT = (_VM_BASE / 'Historico') if (_VM_BASE / 'Historico').is_dir() else _VM_BASE
+VM_ROOT = Path(os.environ.get('RPA_MONITOR_VM_ROOT', str(_VM_DEFAULT)))
+
+# Configurações editáveis continuam ao lado do script/.exe e não no share.
 META_FILE = ROOT / 'config' / 'rpa_metadata.json'
 AA_CONFIG_FILE = ROOT / 'config' / 'aa_config.json'
 # Padrão de fábrica inalterado: só muda se alguém definir RPA_MONITOR_HOST
