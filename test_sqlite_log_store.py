@@ -2,6 +2,7 @@ import json
 import re
 import tempfile
 import unittest
+from unittest import mock
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -80,7 +81,7 @@ class TestSQLiteLogStore(unittest.TestCase):
         self.assertEqual(second['importedFiles'], 0)
         self.assertEqual(second['importedRows'], 0)
 
-    def test_changed_current_file_is_replaced_and_latest_per_rpa_advances(self):
+    def test_growing_file_reads_only_appended_bytes_and_latest_per_rpa_advances(self):
         today = date.today()
         self._write_exec(today, execution='E1')
         self.store.sync(full_scan=True)
@@ -90,12 +91,76 @@ class TestSQLiteLogStore(unittest.TestCase):
             execution='E2',
             extra={'start_time': f'{today.isoformat()}T09:00:00', 'end_time': f'{today.isoformat()}T09:03:00'},
         )
-        result = self.store.sync(full_scan=False)
+        # Em crescimento normal do arquivo, uma reindexação completa seria
+        # regressão de performance. Este patch torna o teste falhar caso o
+        # código tente reler tudo em vez de usar o offset persistido.
+        with mock.patch.object(
+            self.store, '_full_reindex',
+            side_effect=AssertionError('arquivo append-only foi relido por inteiro')
+        ):
+            result = self.store.sync(full_scan=False)
 
         self.assertEqual(result['importedFiles'], 1)
+        self.assertEqual(result['importedRows'], 1)
         rows = self.store.read_rows('execution', today, today)
         self.assertEqual({r['execution_id'] for r in rows}, {'E1', 'E2'})
         self.assertTrue(self.store.latest_per_rpa()['PROC_A'].startswith(today.isoformat()))
+
+    def test_truncated_file_is_reindexed_without_leaving_old_rows(self):
+        today = date.today()
+        path = self._write_exec(today, execution='E1')
+        self._write_exec(today, execution='E2')
+        self.store.sync(full_scan=True)
+
+        replacement = {
+            'execution_id': 'E3',
+            'process_name': 'PROC_A',
+            'start_time': f'{today.isoformat()}T10:00:00',
+            'end_time': f'{today.isoformat()}T10:02:00',
+            'duration_seconds': 120,
+            'status': 'SUCCESS',
+            'machine_name': 'VM01',
+        }
+        path.write_text(json.dumps(replacement) + '\n', encoding='utf-8')
+        self.store.sync(full_scan=False)
+
+        rows = self.store.read_rows('execution', today, today)
+        self.assertEqual([r['execution_id'] for r in rows], ['E3'])
+
+    def test_partial_trailing_line_waits_until_newline_before_importing(self):
+        today = date.today()
+        path = self._write_exec(today, execution='E1')
+        self.store.sync(full_scan=True)
+
+        row = {
+            'execution_id': 'E2',
+            'process_name': 'PROC_A',
+            'start_time': f'{today.isoformat()}T09:00:00',
+            'end_time': f'{today.isoformat()}T09:04:00',
+            'duration_seconds': 240,
+            'status': 'SUCCESS',
+            'machine_name': 'VM01',
+        }
+        payload = json.dumps(row)
+        cut = len(payload) // 2
+
+        with path.open('a', encoding='utf-8') as fh:
+            fh.write(payload[:cut])
+        first = self.store.sync(full_scan=False)
+        self.assertEqual(first['importedRows'], 0)
+        self.assertEqual(
+            [r['execution_id'] for r in self.store.read_rows('execution', today, today)],
+            ['E1'],
+        )
+
+        with path.open('a', encoding='utf-8') as fh:
+            fh.write(payload[cut:] + '\n')
+        second = self.store.sync(full_scan=False)
+        self.assertEqual(second['importedRows'], 1)
+        self.assertEqual(
+            {r['execution_id'] for r in self.store.read_rows('execution', today, today)},
+            {'E1', 'E2'},
+        )
 
     def test_window_queries_use_database_without_losing_full_history(self):
         today = date.today()
