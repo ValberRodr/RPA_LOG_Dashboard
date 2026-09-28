@@ -2532,10 +2532,11 @@
                             <p>Volume, sucesso, duração e comportamento das execuções ao longo do tempo.</p>
                         </div>
                         <div class="filter-bar">
-                            <select class="select-control" id="executionPeriod">
-                                <option>Últimos 14 dias</option>
-                                <option>Últimos 30 dias</option>
-                                <option>Últimos 90 dias</option>
+                            <select class="select-control" id="executionPeriod" aria-label="Período das execuções">
+                                <option value="30d" selected>Últimos 30 dias</option>
+                                <option value="90d">Últimos 90 dias</option>
+                                <option value="120d">Últimos 120 dias</option>
+                                <option value="full">Todos os logs</option>
                             </select>
                         </div>
                     </div>
