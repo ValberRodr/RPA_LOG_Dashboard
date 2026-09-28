@@ -71,9 +71,8 @@ python -m unittest -v test_server.py test_sqlite_log_store.py
 node test_dashboard.js
 ```
 
-O workflow **Validar aplicação** executa a suíte automaticamente em mudanças
-relevantes. O workflow de build também executa os testes antes de gerar os
-executáveis.
+Os testes são executados localmente. Não existe workflow automático de validação.
+O único workflow mantido é o build manual dos executáveis.
 
 
 ## Estratégia para arquivos append-only
@@ -87,3 +86,12 @@ Bancos criados pela versão anterior são migrados automaticamente para o schema
 v2. Na primeira alteração de cada arquivo migrado sem assinatura de continuidade,
 esse arquivo é reindexado uma única vez; a partir daí passa a usar leitura
 incremental por offset.
+
+
+## Retry de leitura em concorrência
+
+Quando uma leitura encontra o SQLite ocupado, o aplicativo tenta novamente com
+esperas progressivas de 8 s, 30 s e 90 s. O estado de cada tentativa é exposto
+em /api/load-status e aparece na tela de carregamento/atualização.
+
+Erros que não representam lock/busy não são mascarados pelo retry.
