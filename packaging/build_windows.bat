@@ -36,23 +36,34 @@ if errorlevel 1 (
 )
 
 call "%VENV_DIR%\Scripts\activate.bat"
-pip install --quiet --upgrade pip pyinstaller
+pip install --quiet --upgrade pip pyinstaller pillow
 if errorlevel 1 (
     echo Falha ao instalar o PyInstaller.
     exit /b 1
 )
 
-REM Reconstrói localmente o .ico versionado em Base64. Isso mantém o repositório
-REM textual e garante o mesmo ícone em qualquer build do Windows.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$b64 = Get-Content -Raw '%PKG_DIR%\RPA_Ops_Monitor.ico.b64'; [IO.File]::WriteAllBytes('%PKG_DIR%\RPA_Ops_Monitor.ico', [Convert]::FromBase64String($b64.Trim()))"
+REM Reconstrói o ícone-fonte versionado em Base64 e gera um ICO
+REM MULTIRRESOLUÇÃO (16/20/24/32/40/48/64/128/256). O arquivo anterior
+REM continha essencialmente a imagem grande; alguns Explorers do Windows
+REM acabavam exibindo o ícone genérico em tamanhos menores.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$b64 = Get-Content -Raw '%PKG_DIR%\RPA_Ops_Monitor.ico.b64'; [IO.File]::WriteAllBytes('%PKG_DIR%\RPA_Ops_Monitor.source.ico', [Convert]::FromBase64String($b64.Trim()))"
 if errorlevel 1 (
-    echo Falha ao preparar o icone do aplicativo.
+    echo Falha ao preparar o icone-fonte do aplicativo.
+    exit /b 1
+)
+
+python -c "from PIL import Image; p=r'%PKG_DIR%\RPA_Ops_Monitor.source.ico'; o=r'%PKG_DIR%\RPA_Ops_Monitor.ico'; im=Image.open(p).convert('RGBA'); im.save(o, format='ICO', sizes=[(16,16),(20,20),(24,24),(32,32),(40,40),(48,48),(64,64),(128,128),(256,256)])"
+if errorlevel 1 (
+    del /q "%PKG_DIR%\RPA_Ops_Monitor.source.ico" >nul 2>nul
+    echo Falha ao gerar o icone multirresolucao.
     exit /b 1
 )
 
 pyinstaller --noconfirm --clean "%PKG_DIR%\RPA_Ops_Monitor.spec"
 if errorlevel 1 (
     del /q "%PKG_DIR%\RPA_Ops_Monitor.ico" >nul 2>nul
+del /q "%PKG_DIR%\RPA_Ops_Monitor.source.ico" >nul 2>nul
+    del /q "%PKG_DIR%\RPA_Ops_Monitor.source.ico" >nul 2>nul
     echo Falha ao gerar o executavel.
     exit /b 1
 )
