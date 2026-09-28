@@ -9,13 +9,15 @@ Importante para compartilhamento SMB/UNC:
 - usa journal_mode=DELETE (WAL não é apropriado para filesystem de rede);
 - escritas são serializadas por um lock file externo;
 - conexões são curtas e busy_timeout é configurado;
-- cada arquivo alterado é substituído em uma transação atômica.
+- arquivos que só cresceram são lidos apenas a partir do último byte confirmado;
+- truncamento/reescrita é detectado e provoca reindexação atômica do arquivo.
 """
 from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
+import hashlib
 import json
 import os
 import sqlite3
@@ -24,11 +26,12 @@ import time
 
 
 class SQLiteLogStore:
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
     LOCK_TIMEOUT_SECONDS = 60
     LOCK_POLL_SECONDS = 0.25
     LOCK_STALE_SECONDS = 15 * 60
     INCREMENTAL_LOOKBACK_DAYS = 62
+    FILE_GUARD_BYTES = 512
 
     def __init__(self, db_path: Path, log_root: Path, vm_root: Path,
                  exec_pattern, vm_pattern, status_callback=None):
@@ -116,6 +119,9 @@ class SQLiteLogStore:
             file_date TEXT NOT NULL,
             mtime_ns INTEGER NOT NULL,
             size INTEGER NOT NULL,
+            processed_bytes INTEGER NOT NULL DEFAULT 0,
+            line_count INTEGER NOT NULL DEFAULT 0,
+            guard_hash TEXT,
             row_count INTEGER NOT NULL DEFAULT 0,
             invalid_lines INTEGER NOT NULL DEFAULT 0,
             imported_at TEXT NOT NULL
@@ -143,16 +149,41 @@ class SQLiteLogStore:
         CREATE INDEX IF NOT EXISTS idx_raw_machine_ts
             ON raw_records(machine_name, record_ts);
         """)
+        # Migração aditiva: bancos v1 já criados em produção continuam válidos.
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(source_files)').fetchall()}
+        if 'processed_bytes' not in columns:
+            conn.execute('ALTER TABLE source_files ADD COLUMN processed_bytes INTEGER NOT NULL DEFAULT 0')
+        if 'line_count' not in columns:
+            conn.execute('ALTER TABLE source_files ADD COLUMN line_count INTEGER NOT NULL DEFAULT 0')
+        if 'guard_hash' not in columns:
+            conn.execute('ALTER TABLE source_files ADD COLUMN guard_hash TEXT')
+
         row = conn.execute("SELECT value FROM store_meta WHERE key='schema_version'").fetchone()
-        if row is None:
-            conn.execute(
-                "INSERT INTO store_meta(key,value) VALUES('schema_version',?)",
-                (str(self.SCHEMA_VERSION),),
-            )
-        elif int(row['value']) != self.SCHEMA_VERSION:
+        current = int(row['value']) if row is not None else 0
+        if current > self.SCHEMA_VERSION:
             raise RuntimeError(
-                f'Versão do banco incompatível: {row["value"]}; esperado {self.SCHEMA_VERSION}.'
+                f'Versão do banco incompatível: {current}; esperado no máximo {self.SCHEMA_VERSION}.'
             )
+        if current < 2:
+            # O v1 sempre marcava o arquivo inteiro como lido. Preservamos esse
+            # offset e derivamos o maior número de linha já materializado. O
+            # guard_hash fica NULL de propósito: na primeira alteração desse
+            # arquivo fazemos uma reindexação completa e passamos ao modo append.
+            conn.execute('UPDATE source_files SET processed_bytes=size WHERE processed_bytes=0')
+            conn.execute("""
+                UPDATE source_files
+                   SET line_count=COALESCE(
+                       (SELECT MAX(r.row_no) FROM raw_records r WHERE r.source_path=source_files.path),
+                       row_count + invalid_lines,
+                       0
+                   )
+                 WHERE line_count=0
+            """)
+        conn.execute(
+            """INSERT INTO store_meta(key,value) VALUES('schema_version',?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+            (str(self.SCHEMA_VERSION),),
+        )
         conn.commit()
 
     @staticmethod
@@ -229,7 +260,10 @@ class SQLiteLogStore:
         start = None if full_scan else today - timedelta(days=self.INCREMENTAL_LOOKBACK_DAYS - 1)
         latest_process = self._latest_by(conn, 'execution', 'process_name')
         latest_machine = self._latest_by(conn, 'vm', 'machine_name')
-        candidates = []
+        candidates = {}
+
+        def add_candidate(path, kind, scope, file_date):
+            candidates[str(path)] = (path, kind, scope, file_date)
 
         for m_dir in self._iter_month_dirs(self.log_root, start, today):
             try:
@@ -254,7 +288,7 @@ class SQLiteLogStore:
                     if cutoff is not None and file_date < cutoff:
                         continue
                     kind = 'event' if match.group(2) else 'execution'
-                    candidates.append((path, kind, scope_dir.name, file_date))
+                    add_candidate(path, kind, scope_dir.name, file_date)
 
         for m_dir in self._iter_month_dirs(self.vm_root, start, today):
             try:
@@ -278,40 +312,96 @@ class SQLiteLogStore:
                         continue
                     if cutoff is not None and file_date < cutoff:
                         continue
-                    candidates.append((path, 'vm', machine_dir.name, file_date))
-        return candidates
+                    add_candidate(path, 'vm', machine_dir.name, file_date)
+
+        if not full_scan:
+            # Um arquivo pode continuar recebendo append mesmo sendo antigo.
+            # Portanto, além da janela recente, sempre rechecamos o arquivo
+            # mais recente já conhecido de cada RPA/VM/tipo. É apenas stat +
+            # leitura do trecho novo quando necessário, nunca releitura total.
+            rows = conn.execute("""
+                SELECT s.path, s.kind, s.scope, s.file_date
+                  FROM source_files s
+                  JOIN (
+                        SELECT kind, scope, MAX(file_date) AS latest_date
+                          FROM source_files
+                         GROUP BY kind, scope
+                  ) x
+                    ON x.kind=s.kind
+                   AND COALESCE(x.scope,'')=COALESCE(s.scope,'')
+                   AND x.latest_date=s.file_date
+            """).fetchall()
+            for row in rows:
+                path = Path(row['path'])
+                if path.is_file():
+                    try:
+                        file_date = date.fromisoformat(row['file_date'])
+                    except Exception:
+                        continue
+                    add_candidate(path, row['kind'], row['scope'], file_date)
+
+        return list(candidates.values())
 
     def _manifest_row(self, conn, path):
         return conn.execute(
-            'SELECT mtime_ns,size FROM source_files WHERE path=?', (str(path),)
+            """SELECT mtime_ns,size,processed_bytes,line_count,guard_hash,
+                      row_count,invalid_lines
+                 FROM source_files WHERE path=?""",
+            (str(path),),
         ).fetchone()
 
-    def _import_file(self, conn, path, kind, scope, file_date, issues):
+    @staticmethod
+    def _complete_prefix(data):
+        """Retorna somente bytes terminados por newline; fragmento final espera o próximo sync."""
+        if not data:
+            return b'', 0
+        last_lf = data.rfind(b'\n')
+        last_cr = data.rfind(b'\r')
+        end = max(last_lf, last_cr)
+        if end < 0:
+            return b'', 0
+        consumed = end + 1
+        return data[:consumed], consumed
+
+    def _guard_hash(self, path, processed_bytes):
+        """Assinatura barata do início+fim do prefixo já confirmado."""
+        processed_bytes = max(0, int(processed_bytes or 0))
+        digest = hashlib.sha256()
+        digest.update(str(processed_bytes).encode('ascii'))
+        if processed_bytes == 0:
+            return digest.hexdigest()
+        with path.open('rb') as fh:
+            head_len = min(self.FILE_GUARD_BYTES, processed_bytes)
+            digest.update(fh.read(head_len))
+            tail_start = max(0, processed_bytes - self.FILE_GUARD_BYTES)
+            fh.seek(tail_start)
+            digest.update(fh.read(processed_bytes - tail_start))
+        return digest.hexdigest()
+
+    def _is_safe_append(self, path, existing, new_size):
+        processed = int(existing['processed_bytes'] or 0)
+        if not existing['guard_hash']:
+            return False
+        if processed > int(existing['size']) or processed > new_size:
+            return False
         try:
-            stat = path.stat()
-        except OSError as exc:
-            issues.append({'file': path.name, 'path': str(path), 'type': 'STAT_ERROR',
-                           'error': str(exc), 'phase': 'sincronização SQLite',
-                           'timestamp': datetime.now().isoformat(timespec='seconds'),
-                           'action': 'Arquivo mantido como estava no banco.'})
-            return False, 0, 1
+            return self._guard_hash(path, processed) == existing['guard_hash']
+        except OSError:
+            return False
 
-        existing = self._manifest_row(conn, path)
-        if existing and existing['mtime_ns'] == stat.st_mtime_ns and existing['size'] == stat.st_size:
-            return False, 0, 0
-
+    def _parse_lines(self, data, start_row_no, path, kind, scope, file_date, issues):
+        if not data:
+            return [], 0, 0
         try:
-            raw_text = path.read_text(encoding='utf-8')
-        except Exception as exc:
-            issues.append({'file': path.name, 'path': str(path), 'type': 'READ_ERROR',
-                           'error': str(exc), 'phase': 'sincronização SQLite',
-                           'timestamp': datetime.now().isoformat(timespec='seconds'),
-                           'action': 'Arquivo mantido como estava no banco.'})
-            return False, 0, 1
+            text = data.decode('utf-8')
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(f'Falha UTF-8 em {path}: {exc}') from exc
 
+        lines = text.splitlines()
         parsed = []
         invalid = 0
-        for row_no, line in enumerate(raw_text.splitlines(), start=1):
+        for offset, line in enumerate(lines):
+            row_no = start_row_no + offset
             if not line.strip():
                 continue
             try:
@@ -322,20 +412,53 @@ class SQLiteLogStore:
             except Exception as exc:
                 invalid += 1
                 if invalid <= 3:
-                    issues.append({'file': path.name, 'path': str(path), 'type': 'JSON_ERROR',
-                                   'error': f'Linha {row_no} inválida: {exc}', 'phase': 'sincronização SQLite',
-                                   'timestamp': datetime.now().isoformat(timespec='seconds'),
-                                   'action': 'Linha ignorada; demais registros foram preservados.'})
+                    issues.append({
+                        'file': path.name, 'path': str(path), 'type': 'JSON_ERROR',
+                        'error': f'Linha {row_no} inválida: {exc}',
+                        'phase': 'sincronização SQLite',
+                        'timestamp': datetime.now().isoformat(timespec='seconds'),
+                        'action': 'Linha ignorada; demais registros foram preservados.',
+                    })
+        return parsed, invalid, len(lines)
+
+    def _full_reindex(self, conn, path, kind, scope, file_date, stat, issues):
+        try:
+            raw = path.read_bytes()
+        except Exception as exc:
+            issues.append({
+                'file': path.name, 'path': str(path), 'type': 'READ_ERROR',
+                'error': str(exc), 'phase': 'sincronização SQLite',
+                'timestamp': datetime.now().isoformat(timespec='seconds'),
+                'action': 'Arquivo mantido como estava no banco.',
+            })
+            return False, 0, 1
+
+        complete, consumed = self._complete_prefix(raw)
+        try:
+            parsed, invalid, line_count = self._parse_lines(
+                complete, 1, path, kind, scope, file_date, issues
+            )
+        except Exception as exc:
+            issues.append({
+                'file': path.name, 'path': str(path), 'type': 'READ_ERROR',
+                'error': str(exc), 'phase': 'sincronização SQLite',
+                'timestamp': datetime.now().isoformat(timespec='seconds'),
+                'action': 'Arquivo mantido como estava no banco.',
+            })
+            return False, 0, 1
 
         now = datetime.now().isoformat(timespec='seconds')
+        guard = self._guard_hash(path, consumed)
         with conn:
             conn.execute('DELETE FROM raw_records WHERE source_path=?', (str(path),))
             conn.execute('DELETE FROM source_files WHERE path=?', (str(path),))
             conn.execute(
-                """INSERT INTO source_files(path,kind,scope,file_date,mtime_ns,size,row_count,invalid_lines,imported_at)
-                   VALUES(?,?,?,?,?,?,?,?,?)""",
-                (str(path), kind, scope, file_date.isoformat(), stat.st_mtime_ns, stat.st_size,
-                 len(parsed), invalid, now),
+                """INSERT INTO source_files(
+                       path,kind,scope,file_date,mtime_ns,size,processed_bytes,
+                       line_count,guard_hash,row_count,invalid_lines,imported_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (str(path), kind, scope, file_date.isoformat(), stat.st_mtime_ns,
+                 stat.st_size, consumed, line_count, guard, len(parsed), invalid, now),
             )
             if parsed:
                 conn.executemany(
@@ -345,6 +468,93 @@ class SQLiteLogStore:
                     parsed,
                 )
         return True, len(parsed), invalid
+
+    def _append_incremental(self, conn, path, kind, scope, file_date, stat, existing, issues):
+        processed = int(existing['processed_bytes'] or 0)
+        try:
+            with path.open('rb') as fh:
+                fh.seek(processed)
+                chunk = fh.read()
+        except Exception as exc:
+            issues.append({
+                'file': path.name, 'path': str(path), 'type': 'READ_ERROR',
+                'error': str(exc), 'phase': 'sincronização SQLite',
+                'timestamp': datetime.now().isoformat(timespec='seconds'),
+                'action': 'Arquivo mantido como estava no banco.',
+            })
+            return False, 0, 1
+
+        complete, consumed = self._complete_prefix(chunk)
+        try:
+            parsed, invalid, physical_lines = self._parse_lines(
+                complete, int(existing['line_count'] or 0) + 1,
+                path, kind, scope, file_date, issues,
+            )
+        except Exception as exc:
+            issues.append({
+                'file': path.name, 'path': str(path), 'type': 'READ_ERROR',
+                'error': str(exc), 'phase': 'sincronização SQLite',
+                'timestamp': datetime.now().isoformat(timespec='seconds'),
+                'action': 'Arquivo mantido como estava no banco.',
+            })
+            return False, 0, 1
+
+        new_processed = processed + consumed
+        new_line_count = int(existing['line_count'] or 0) + physical_lines
+        guard = self._guard_hash(path, new_processed)
+        now = datetime.now().isoformat(timespec='seconds')
+
+        with conn:
+            if parsed:
+                conn.executemany(
+                    """INSERT INTO raw_records
+                       (source_path,row_no,kind,record_ts,process_name,execution_id,machine_name,payload_json)
+                       VALUES(?,?,?,?,?,?,?,?)""",
+                    parsed,
+                )
+            conn.execute(
+                """UPDATE source_files
+                      SET kind=?,scope=?,file_date=?,mtime_ns=?,size=?,
+                          processed_bytes=?,line_count=?,guard_hash=?,
+                          row_count=row_count+?,invalid_lines=invalid_lines+?,
+                          imported_at=?
+                    WHERE path=?""",
+                (kind, scope, file_date.isoformat(), stat.st_mtime_ns, stat.st_size,
+                 new_processed, new_line_count, guard, len(parsed), invalid, now, str(path)),
+            )
+
+        # Mesmo sem nova linha completa, o offset/manifesto pode ter sido
+        # atualizado por um fragmento ainda em escrita. Não há dataset novo
+        # nesse caso, então evitamos uma reconstrução desnecessária.
+        data_changed = bool(parsed or invalid or physical_lines)
+        return data_changed, len(parsed), invalid
+
+    def _import_file(self, conn, path, kind, scope, file_date, issues):
+        try:
+            stat = path.stat()
+        except OSError as exc:
+            issues.append({
+                'file': path.name, 'path': str(path), 'type': 'STAT_ERROR',
+                'error': str(exc), 'phase': 'sincronização SQLite',
+                'timestamp': datetime.now().isoformat(timespec='seconds'),
+                'action': 'Arquivo mantido como estava no banco.',
+            })
+            return False, 0, 1
+
+        existing = self._manifest_row(conn, path)
+        if existing and existing['mtime_ns'] == stat.st_mtime_ns and existing['size'] == stat.st_size:
+            return False, 0, 0
+
+        if (existing and stat.st_size > int(existing['size'])
+                and self._is_safe_append(path, existing, stat.st_size)):
+            return self._append_incremental(
+                conn, path, kind, scope, file_date, stat, existing, issues
+            )
+
+        # Novo arquivo, truncamento, rewrite de mesmo tamanho, rewrite+grow ou
+        # banco migrado do v1 sem guard_hash: reindexa inteiro para preservar
+        # consistência e evitar duplicidade/corrupção silenciosa.
+        return self._full_reindex(conn, path, kind, scope, file_date, stat, issues)
 
     def _bump_revision(self, conn):
         row = conn.execute("SELECT value FROM store_meta WHERE key='revision'").fetchone()
