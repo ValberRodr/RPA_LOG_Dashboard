@@ -147,6 +147,18 @@ class TestRpaRegistryStore(unittest.TestCase):
     def tearDown(self):
         self.tmp_dir.cleanup()
 
+    def test_load_empty_object_normalizes_missing_base_lists(self):
+        self.meta_file.write_text('{}', encoding='utf-8')
+        data = self.store._load()
+        self.assertEqual(data['rpas'], [])
+        self.assertEqual(data['schedules'], [])
+
+    def test_load_malformed_json_raises_clear_validation_error(self):
+        self.meta_file.write_text('{invalid', encoding='utf-8')
+        with self.assertRaises(server.RpaRegistryValidationError) as ctx:
+            self.store._load()
+        self.assertIn('Cadastro de RPAs inválido', str(ctx.exception))
+
     def test_create_rpa_generates_sequential_id_and_regenerates_schedules(self):
         rpa = self.store.create_rpa(_valid_registry_payload())
         self.assertEqual(rpa['rpaId'], 'RPA002')
@@ -375,11 +387,27 @@ class TestScanUnregisteredProcesses(unittest.TestCase):
 
         self.fake_log_root = Path(self.tmp_dir.name) / 'FakeLogs'
         self.fake_log_root.mkdir()
+        self.fake_vm_root = Path(self.tmp_dir.name) / 'FakeVms'
+        self.fake_vm_root.mkdir()
         self._patcher = unittest.mock.patch.object(server, 'RPA_LOG_ROOT', self.fake_log_root)
         self._patcher.start()
+
+        # O scan em produção consulta o cache SQLite persistente. Nos testes,
+        # aponta o store para os diretórios temporários para manter isolamento
+        # total e validar exatamente o mesmo caminho de execução.
+        self.fake_log_store = server.SQLiteLogStore(
+            Path(self.tmp_dir.name) / 'scan.sqlite3',
+            self.fake_log_root,
+            self.fake_vm_root,
+            server.EXEC_FNAME_RE,
+            server.VM_FNAME_RE,
+        )
+        self._store_patcher = unittest.mock.patch.object(server, 'log_store', self.fake_log_store)
+        self._store_patcher.start()
         server._file_cache.clear()
 
     def tearDown(self):
+        self._store_patcher.stop()
         self._patcher.stop()
         self.tmp_dir.cleanup()
 
