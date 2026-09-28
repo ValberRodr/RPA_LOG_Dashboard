@@ -2620,6 +2620,8 @@ def _open_as_app_window(url: str):
                     '--no-first-run',
                     '--no-default-browser-check',
                     '--disable-background-mode',
+                    '--disable-extensions',
+                    '--disable-component-extensions-with-background-pages',
                 ])
             args.append(f'--app={url}')
             proc = subprocess.Popen(args)
@@ -2647,6 +2649,10 @@ def _watch_managed_browser(server, proc, profile_dir):
 
 def main():
     server=ThreadingHTTPServer((HOST,PORT),Handler)
+    # Ao fechar a janela gerenciada, o processo deve conseguir terminar mesmo
+    # que alguma requisição de leitura/indexação ainda esteja em andamento.
+    server.daemon_threads = True
+    server.block_on_close = False
     url=f'{APP_URL}/index.html'
     print('\nRPA Ops Monitor')
     print(f'Painel: {url}')
