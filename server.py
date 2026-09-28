@@ -38,6 +38,8 @@ import secrets
 import socket
 import statistics
 import subprocess
+import tempfile
+import shutil
 import sys
 import threading
 import time
@@ -2594,19 +2596,53 @@ def _chrome_like_candidates() -> list[str]:
     return []
 
 
-def _open_as_app_window(url: str) -> None:
-    """Abre o painel numa janela "modo app" do Chrome/Edge — sem barra de
-    endereço, abas ou menus — para que pareça um aplicativo próprio em vez
-    de uma aba de navegador comum. Se nenhum dos dois estiver instalado,
-    cai para o navegador padrão do sistema numa aba normal."""
+def _open_as_app_window(url: str):
+    """Abre o painel em modo app e, no executável, usa um perfil temporário
+    exclusivo do navegador.
+
+    O perfil exclusivo evita o comportamento comum de Chrome/Edge de entregar
+    a nova janela para um processo já existente e encerrar imediatamente o
+    processo filho iniciado pelo RPA Ops Monitor. Assim conseguimos saber com
+    segurança quando a janela do aplicativo foi realmente fechada.
+    Retorna (processo, pasta_do_perfil) quando há Chrome/Edge monitorável.
+    """
+    managed = bool(getattr(sys, 'frozen', False))
     for exe in _chrome_like_candidates():
-        if exe and os.path.isfile(exe):
-            try:
-                subprocess.Popen([exe, f'--app={url}'])
-                return
-            except OSError:
-                continue
+        if not exe or not os.path.isfile(exe):
+            continue
+        profile_dir = None
+        try:
+            args = [exe]
+            if managed:
+                profile_dir = tempfile.mkdtemp(prefix='rpa-ops-monitor-browser-')
+                args.extend([
+                    f'--user-data-dir={profile_dir}',
+                    '--no-first-run',
+                    '--no-default-browser-check',
+                    '--disable-background-mode',
+                ])
+            args.append(f'--app={url}')
+            proc = subprocess.Popen(args)
+            return proc, profile_dir
+        except OSError:
+            if profile_dir:
+                shutil.rmtree(profile_dir, ignore_errors=True)
+            continue
     webbrowser.open(url)
+    return None, None
+
+
+def _watch_managed_browser(server, proc, profile_dir):
+    """Fecha o servidor local quando a janela gerenciada do EXE termina."""
+    try:
+        proc.wait()
+    finally:
+        if profile_dir:
+            shutil.rmtree(profile_dir, ignore_errors=True)
+        try:
+            server.shutdown()
+        except Exception:
+            pass
 
 
 def main():
@@ -2614,9 +2650,9 @@ def main():
     url=f'{APP_URL}/index.html'
     print('\nRPA Ops Monitor')
     print(f'Painel: {url}')
-    print('Dados: ./logs (janela padrão de 90 dias; reprocessados de forma incremental quando houver alteração)')
+    print('Dados: SQLite persistente (janela padrão de 30 dias; sincronização incremental)')
     print('Atualização do navegador: incremental, a cada 20 minutos')
-    print('Para encerrar: Ctrl+C\n')
+    print('Para encerrar: feche a janela do aplicativo ou use Ctrl+C\n')
     if HOST not in ('127.0.0.1', 'localhost', '::1'):
         # RPA_MONITOR_HOST foi definido explicitamente para algo além de
         # loopback — não é o padrão de fábrica. Aviso alto de propósito: esta
@@ -2628,10 +2664,46 @@ def main():
         print('embutida: qualquer um que alcançar esta porta vê e edita tudo. Leia')
         print('docs/servidor-em-rede.html antes de expor isso numa rede compartilhada.')
         print('=' * 78 + '\n')
+    browser_state = {'proc': None, 'profile': None}
+
+    def launch_browser():
+        proc, profile_dir = _open_as_app_window(url)
+        browser_state['proc'] = proc
+        browser_state['profile'] = profile_dir
+        # Só o executável empacotado deve encerrar junto com a janela.
+        # Em desenvolvimento, fechar o navegador não mata o servidor Python.
+        if proc is not None and getattr(sys, 'frozen', False):
+            watcher = threading.Thread(
+                target=_watch_managed_browser,
+                args=(server, proc, profile_dir),
+                name='browser-lifecycle',
+                daemon=True,
+            )
+            watcher.start()
+
     if not os.environ.get('RPA_MONITOR_NO_BROWSER'):
-        threading.Timer(1.0,lambda:_open_as_app_window(url)).start()
-    try: server.serve_forever()
-    except KeyboardInterrupt: pass
-    finally: server.server_close()
+        launch_timer = threading.Timer(1.0, launch_browser)
+        launch_timer.daemon = True
+        launch_timer.start()
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        proc = browser_state.get('proc')
+        if proc is not None and getattr(sys, 'frozen', False) and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        profile_dir = browser_state.get('profile')
+        if profile_dir:
+            shutil.rmtree(profile_dir, ignore_errors=True)
+        server.server_close()
 
 if __name__=='__main__': main()
