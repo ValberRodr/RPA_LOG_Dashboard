@@ -11,6 +11,7 @@ __pycache__/
 
 # Ícone binário reconstruído durante o build do Windows.
 /packaging/RPA_Ops_Monitor.ico
+/packaging/RPA_Ops_Monitor.source.ico
 
 # Cache persistente gerado em runtime (local/dev; em produção fica no share).
 *.sqlite3
