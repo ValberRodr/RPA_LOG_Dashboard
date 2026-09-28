@@ -2410,9 +2410,20 @@ class Handler(SimpleHTTPRequestHandler):
             payload = {}
         if path == '/api/reload':
             qs = parse_qs(parsed.query)
-            mode = 'full' if qs.get('mode',['90d'])[0] == 'full' else '90d'
-            threading.Thread(target=get_data, args=(mode,), daemon=True).start()
-            return self._send_json({'ok': True, 'mode': mode})
+            requested_mode = qs.get('mode', ['30d'])[0]
+            mode = requested_mode if requested_mode in DataCache.VALID_MODES else '30d'
+            force_sync = qs.get('sync', ['1'])[0] not in ('0', 'false', 'False')
+            # Evita corrida: o front começa a consultar /api/load-status logo
+            # após este POST. Marcamos "aguardando" antes de iniciar a thread
+            # para ele não confundir o "concluido" da carga anterior com a nova.
+            _build_status.update(
+                phase='aguardando atualização', percent=0, mode=mode, error=None,
+                startedAt=datetime.now().isoformat(timespec='seconds'), finishedAt=None,
+            )
+            threading.Thread(
+                target=get_data, args=(mode, force_sync), daemon=True
+            ).start()
+            return self._send_json({'ok': True, 'mode': mode, 'sync': force_sync})
         if path.startswith('/api/registry/rpas'):
             return self._handle_registry_post(path, payload)
         if path == '/api/aa/authenticate':
@@ -2466,7 +2477,18 @@ class Handler(SimpleHTTPRequestHandler):
             remaining -= len(data)
 
     def _send(self,payload,ctype,status=200):
-        body=payload.encode('utf-8'); self.send_response(status); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+        body=payload.encode('utf-8')
+        try:
+            self.send_response(status)
+            self.send_header('Content-Type',ctype)
+            self.send_header('Content-Length',str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            # O navegador pode cancelar uma requisição antiga ao trocar de
+            # página/atualizar. Isso não é falha do dataset e não deve gerar
+            # um segundo traceback que esconda o erro original.
+            return None
 
     def _send_json(self, obj, status=200):
         self._send(json.dumps(obj, ensure_ascii=False), 'application/json; charset=utf-8', status=status)
