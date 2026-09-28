@@ -784,6 +784,32 @@ class TestHttpServerRoutes(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 404)
         ctx.exception.close()
 
+    def test_observability_data_route_surfaces_data_error_instead_of_dropping_connection(self):
+        # Regressão: Cadastro/pasta de log inacessível (ex.: caminho de rede
+        # errado) antes derrubava a conexão sem nenhuma informação — painel
+        # ficava em branco sem pista nenhuma (ver SECURITY.md, 2026-09-28).
+        # Agora precisa vir como 500 com a mensagem real no corpo.
+        with unittest.mock.patch.object(server, 'get_data', side_effect=FileNotFoundError('rpa_metadata.json não encontrado')):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self._get('/assets/observability-data.js')
+            self.assertEqual(ctx.exception.code, 500)
+            body = ctx.exception.read().decode('utf-8')
+            ctx.exception.close()
+        # json.dumps() escapa acentos (\uXXXX) — checa a parte ASCII da
+        # mensagem, que sobrevive ao escape de qualquer jeito.
+        self.assertIn('rpa_metadata.json', body)
+        self.assertIn('window.OBS_DATA = null;', body)
+
+    def test_api_status_route_surfaces_data_error_instead_of_dropping_connection(self):
+        with unittest.mock.patch.object(server, 'get_data', side_effect=FileNotFoundError('rpa_metadata.json não encontrado')):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self._get('/api/status')
+            self.assertEqual(ctx.exception.code, 500)
+            body = json.loads(ctx.exception.read().decode('utf-8'))
+            ctx.exception.close()
+        self.assertEqual(body['ok'], False)
+        self.assertIn('rpa_metadata.json não encontrado', body['message'])
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -69,7 +69,11 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,
+    # Sem janela de terminal atrás do painel (server.py redireciona
+    # stdout/stderr para RPA_Ops_Monitor.log ao lado do executável quando
+    # roda nesse modo — ver o comentário logo no topo de server.py — então
+    # o diagnóstico continua existindo, só que em arquivo em vez de janela).
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

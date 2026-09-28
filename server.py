@@ -40,6 +40,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 import webbrowser
@@ -59,6 +60,21 @@ if getattr(sys, 'frozen', False):
 else:
     BUNDLE_DIR = Path(__file__).resolve().parent
     ROOT = BUNDLE_DIR
+
+# Executável empacotado em modo "sem console" (packaging/RPA_Ops_Monitor.spec,
+# console=False — pra não ter uma janela de terminal atrás do painel):
+# sempre redireciona stdout/stderr para um arquivo de log ao lado do
+# executável ANTES de qualquer print() rodar. No Windows, console=False
+# deixa sys.stdout/sys.stderr como None — sem isso, o primeiro print()
+# (o próprio banner de inicialização) derrubaria o processo inteiro com
+# AttributeError. No macOS, sys.stdout não fica None nesse modo, mas também
+# não vai a lugar nenhum visível — redirecionar sempre (não só quando é
+# None) garante o mesmo comportamento diagnosticável nos dois SOs. Em modo
+# script (dev), nada disso roda — prints continuam aparecendo no terminal.
+if getattr(sys, 'frozen', False):
+    _log_file = open(ROOT / 'RPA_Ops_Monitor.log', 'a', encoding='utf-8', buffering=1)
+    sys.stdout = _log_file
+    sys.stderr = _log_file
 
 # Fonte oficial de dados corporativos. O app/executável pode ficar em qualquer
 # pasta local: os logs são lidos diretamente deste compartilhamento UNC. Só
@@ -2177,13 +2193,25 @@ class Handler(SimpleHTTPRequestHandler):
         # preservando o modo que o usuário escolheu explicitamente na sessão.
         requested_mode = parse_qs(parsed.query).get('mode', [None])[0]
         if path == '/assets/observability-data.js':
-            obs,_=get_data(requested_mode); payload='/* Gerado em tempo real a partir dos arquivos .log. */\nwindow.OBS_DATA = '+json.dumps(obs,ensure_ascii=False,separators=(',',':'))+';\n'
+            try:
+                obs,_=get_data(requested_mode)
+            except Exception as exc:
+                return self._send_data_error(exc, 'window.OBS_DATA = null;')
+            payload='/* Gerado em tempo real a partir dos arquivos .log. */\nwindow.OBS_DATA = '+json.dumps(obs,ensure_ascii=False,separators=(',',':'))+';\n'
             return self._send(payload,'application/javascript; charset=utf-8')
         if path == '/assets/index-data.js':
-            _,idx=get_data(requested_mode); payload='/* Gerado em tempo real a partir dos arquivos .log. */\nwindow.INDEX_DATA = '+json.dumps(idx,ensure_ascii=False,separators=(',',':'))+';\n'
+            try:
+                _,idx=get_data(requested_mode)
+            except Exception as exc:
+                return self._send_data_error(exc, 'window.INDEX_DATA = null;')
+            payload='/* Gerado em tempo real a partir dos arquivos .log. */\nwindow.INDEX_DATA = '+json.dumps(idx,ensure_ascii=False,separators=(',',':'))+';\n'
             return self._send(payload,'application/javascript; charset=utf-8')
         if path == '/api/status':
-            obs,_=get_data(); payload=json.dumps({'ok':True,'snapshot':obs['snapshot'],'executions':len(obs['executions']),'events':sum(len(v) for v in obs['eventsByExecution'].values()),'loadStats':obs['loadStats']},ensure_ascii=False)
+            try:
+                obs,_=get_data()
+            except Exception as exc:
+                return self._send_json({'ok': False, 'error': 'DATA_ERROR', 'message': str(exc)}, status=500)
+            payload=json.dumps({'ok':True,'snapshot':obs['snapshot'],'executions':len(obs['executions']),'events':sum(len(v) for v in obs['eventsByExecution'].values()),'loadStats':obs['loadStats']},ensure_ascii=False)
             return self._send(payload,'application/json; charset=utf-8')
         if path == '/api/load-status':
             return self._send(json.dumps(_build_status,ensure_ascii=False),'application/json; charset=utf-8')
@@ -2301,6 +2329,19 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _send_json(self, obj, status=200):
         self._send(json.dumps(obj, ensure_ascii=False), 'application/json; charset=utf-8', status=status)
+
+    def _send_data_error(self, exc, js_null_assignment):
+        """Erro ao montar o dataset (Cadastro/pasta de logs inacessível, por
+        exemplo) chega aqui em vez de estourar como exceção não tratada —
+        sem isso, a conexão simplesmente é resetada sem nenhuma informação e
+        o painel fica em branco sem nenhuma pista visível (histórico:
+        SECURITY.md, 2026-09-28). Sempre loga o traceback completo (server-
+        side, nunca escondido) e devolve 500 com a mensagem real no corpo —
+        aparece no Network tab do DevTools em vez de "conexão resetada"."""
+        traceback.print_exc()
+        message = str(exc)
+        payload = f'console.error({json.dumps("RPA Ops Monitor: falha ao carregar dados — " + message)});\n{js_null_assignment}\n'
+        return self._send(payload, 'application/javascript; charset=utf-8', status=500)
 
     def log_message(self,fmt,*args):
         if '/api/' in self.path: print('[HTTP]',fmt%args)

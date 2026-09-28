@@ -16,6 +16,18 @@ dentro, não um `.exe`/binário único auto-extraível. Escolha deliberada:
   conhecido de dropper de malware, e dispara falso-positivo com frequência
   em ambiente corporativo (justamente o ambiente onde esta ferramenta roda).
 
+## Sem janela de terminal (`console=False`)
+
+O executável abre só o painel no navegador, sem uma janela de terminal atrás
+— mas isso não significa perda de diagnóstico: `server.py` redireciona
+`stdout`/`stderr` (o banner de inicialização, cada requisição `/api/...`, e
+qualquer traceback de erro não tratado) para `RPA_Ops_Monitor.log`, criado
+ao lado do executável na primeira execução. Se o painel abrir vazio ou algo
+parecer errado, esse arquivo é o primeiro lugar a olhar. Sem esse
+redirecionamento, o Windows deixa `sys.stdout`/`sys.stderr` como `None`
+nesse modo — o primeiro `print()` (o próprio banner) derrubaria o processo
+inteiro.
+
 ## Como gerar
 
 ```bash
