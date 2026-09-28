@@ -8,3 +8,6 @@ __pycache__/
 /build/
 /dist/
 .venv-build/
+
+# Ícone binário reconstruído durante o build do Windows.
+/packaging/RPA_Ops_Monitor.ico
