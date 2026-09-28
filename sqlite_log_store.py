@@ -488,6 +488,37 @@ class SQLiteLogStore:
             ).fetchall()
             return {row['process_name']: row['latest'] for row in rows}
 
+    def latest_execution_rows(self):
+        """Retorna só a execução mais recente de cada processo, direto do SQL."""
+        self.ensure_ready()
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            rows = conn.execute(
+                """SELECT r.payload_json
+                   FROM raw_records r
+                   JOIN (
+                       SELECT process_name, MAX(record_ts) AS latest
+                       FROM raw_records
+                       WHERE kind='execution' AND process_name IS NOT NULL
+                       GROUP BY process_name
+                   ) x
+                     ON x.process_name = r.process_name AND x.latest = r.record_ts
+                   WHERE r.kind='execution'
+                   ORDER BY r.process_name"""
+            ).fetchall()
+        result = []
+        seen = set()
+        for row in rows:
+            try:
+                payload = json.loads(row['payload_json'])
+            except Exception:
+                continue
+            process = payload.get('process_name')
+            if process and process not in seen:
+                seen.add(process)
+                result.append(payload)
+        return result
+
     def stats(self):
         if not self.db_path.exists():
             return {
