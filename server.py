@@ -2259,12 +2259,15 @@ class Handler(SimpleHTTPRequestHandler):
             return self._send(json.dumps(_build_status,ensure_ascii=False),'application/json; charset=utf-8')
         # ---- Cadastro de RPAs (CRUD sobre config/rpa_metadata.json) ----
         if path == '/api/registry/rpas':
-            return self._send_json({'ok': True, 'rpas': rpa_registry.list_rpas()})
+            try:
+                return self._send_json({'ok': True, 'rpas': rpa_registry.list_rpas()})
+            except Exception as exc:
+                return self._send_registry_error(exc)
         if path == '/api/registry/rpas/scan':
             try:
                 found = rpa_registry.scan_unregistered_processes()
             except Exception as exc:
-                return self._send_json({'ok': False, 'error': 'SCAN_ERROR', 'message': str(exc)}, status=500)
+                return self._send_registry_error(exc)
             return self._send_json({'ok': True, 'found': found})
         # ---- Automation Anywhere (opcional) — só responde a rotas /api/aa/*,
         # nunca é consultado pelo pipeline de dados existente acima. ----
@@ -2354,6 +2357,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_json({'ok': True})
         except RpaRegistryValidationError as exc:
             return self._send_json({'ok': False, 'error': str(exc)})
+        except Exception as exc:
+            return self._send_registry_error(exc)
         self.send_response(404); self.end_headers()
 
     def _aa_ctx_from_headers(self):
@@ -2390,6 +2395,18 @@ class Handler(SimpleHTTPRequestHandler):
         message = str(exc)
         payload = f'console.error({json.dumps("RPA Ops Monitor: falha ao carregar dados — " + message)});\n{js_null_assignment}\n'
         return self._send(payload, 'application/javascript; charset=utf-8', status=500)
+
+    def _send_registry_error(self, exc):
+        """Mesma ideia de `_send_data_error`, para as rotas do Cadastro de
+        RPAs (leitura, scan, criar/editar/remover) — um `Cadastro_RPA`
+        inacessível (pasta de rede fora do ar, ainda não criada) não deve
+        resetar a conexão sem nenhuma informação; sempre loga o traceback
+        completo. O campo `error` é a mensagem pronta pra UI, mesma
+        convenção de `RpaRegistryValidationError` — nunca um código
+        separado, pra não exigir que cada tela saiba um formato diferente
+        de resposta de erro."""
+        traceback.print_exc()
+        return self._send_json({'ok': False, 'error': str(exc)}, status=500)
 
     def log_message(self,fmt,*args):
         if '/api/' in self.path: print('[HTTP]',fmt%args)

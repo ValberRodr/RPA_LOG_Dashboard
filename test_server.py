@@ -745,6 +745,38 @@ class TestHttpServerRoutes(unittest.TestCase):
         self.assertTrue(data['ok'])
         self.assertGreaterEqual(len(data['rpas']), 1)
 
+    def test_registry_rpas_route_surfaces_error_instead_of_dropping_connection(self):
+        # Regressão (2026-09-28): Cadastro_RPA inacessível (pasta de rede
+        # fora do ar, ainda não criada) derrubava a conexão sem nenhuma
+        # informação — mesmo bug já corrigido para as rotas de dataset,
+        # faltava aqui.
+        with unittest.mock.patch.object(server.rpa_registry, 'list_rpas', side_effect=FileNotFoundError('rpa_metadata.json não encontrado')):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self._get('/api/registry/rpas')
+            self.assertEqual(ctx.exception.code, 500)
+            body = json.loads(ctx.exception.read().decode('utf-8'))
+            ctx.exception.close()
+        self.assertEqual(body['ok'], False)
+        self.assertIn('rpa_metadata.json', body['error'])
+
+    def test_registry_scan_route_surfaces_error_instead_of_dropping_connection(self):
+        with unittest.mock.patch.object(server.rpa_registry, 'scan_unregistered_processes', side_effect=FileNotFoundError('rpa_metadata.json não encontrado')):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self._get('/api/registry/rpas/scan')
+            self.assertEqual(ctx.exception.code, 500)
+            body = json.loads(ctx.exception.read().decode('utf-8'))
+            ctx.exception.close()
+        self.assertEqual(body['ok'], False)
+        self.assertIn('rpa_metadata.json', body['error'])
+
+    def test_registry_create_route_surfaces_error_instead_of_dropping_connection(self):
+        with unittest.mock.patch.object(server.rpa_registry, 'create_rpa', side_effect=FileNotFoundError('rpa_metadata.json.lock não encontrado')):
+            status, body = self._post_json('/api/registry/rpas', {'process': 'X'})
+        self.assertEqual(status, 500)
+        data = json.loads(body)
+        self.assertEqual(data['ok'], False)
+        self.assertIn('rpa_metadata.json.lock', data['error'])
+
     def test_csrf_token_route_returns_a_nonempty_token(self):
         status, body = self._get('/api/csrf-token')
         self.assertEqual(status, 200)

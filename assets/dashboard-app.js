@@ -1930,7 +1930,7 @@ class RegistryPage {
         try {
             const resp = await fetch('/api/registry/rpas/scan', { cache: 'no-store' }).then(r => r.json());
             if (!resp.ok) {
-                list.innerHTML = `<div class="registry-error">${Fmt.escapeHtml(resp.message || 'Não foi possível escanear os logs.')}</div>`;
+                list.innerHTML = `<div class="registry-error">${Fmt.escapeHtml(resp.error || 'Não foi possível escanear os logs.')}</div>`;
                 return;
             }
             if (!resp.found.length) {
