@@ -1990,14 +1990,24 @@ class AutomationAnywhereGateway:
         for _ in range(self.MAX_REDIRECTS + 1):
             pinned_ip, error = self._resolve_pinned_ip(current_url)
             if error:
+                print(f'[AA] {current_method} {current_url} -> {error}')
                 return 0, None, error
             try:
                 status, raw, location = self._do_one_request(current_method, current_url, headers, current_body, pinned_ip)
             except urllib.error.HTTPError as exc:
                 return exc.code, exc.read(), None
             except urllib.error.URLError as exc:
+                # Motivo mais comum em rede corporativa: proxy HTTP obrigatório
+                # para sair na internet (esta conexão vai direto no IP pinado,
+                # sem passar por HTTP_PROXY/HTTPS_PROXY nem pelo proxy do
+                # sistema — ver docstring de `_resolve_pinned_ip`). Log aqui
+                # porque o motivo real nunca chega à resposta da API (mensagem
+                # ao usuário é sempre genérica, de propósito, para não vazar
+                # detalhe de rede interna).
+                print(f'[AA] {current_method} {current_url} -> NETWORK_ERROR: {exc.reason}')
                 return 0, None, f'NETWORK_ERROR: {exc.reason}'
             except TimeoutError:
+                print(f'[AA] {current_method} {current_url} -> NETWORK_ERROR: timeout')
                 return 0, None, 'NETWORK_ERROR: timeout'
             if location:
                 current_url = urljoin(current_url, location)
@@ -2005,6 +2015,7 @@ class AutomationAnywhereGateway:
                     current_method, current_body = 'GET', None
                 continue
             return status, raw, None
+        print(f'[AA] {current_method} {current_url} -> NETWORK_ERROR: excesso de redirecionamentos.')
         return 0, None, 'NETWORK_ERROR: excesso de redirecionamentos.'
 
     def _classify_status(self, status, network_error):
