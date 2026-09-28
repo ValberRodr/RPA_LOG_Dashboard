@@ -2141,7 +2141,12 @@ class RpaOpsApp {
         if (savedPage && document.getElementById(`page-${savedPage}`)) NavigationController.goToPage(savedPage);
 
         DomUtils.$('#executionPeriod').addEventListener('change', () => {
-            UiFeedback.showToast('No mock, o gráfico permanece nos 14 dias embutidos. Em produção, o filtro deve recarregar a série correspondente.');
+            // Filtro ainda não implementado (não é comportamento de mock —
+            // a mensagem anterior sugeria erroneamente que só faltava sair
+            // do modo mock, mas o gráfico não recarrega em NENHUM ambiente,
+            // real ou de demonstração). Mensagem honesta em vez de prometer
+            // um comportamento que ainda não existe.
+            UiFeedback.showToast('Este filtro de período ainda não está implementado — o painel mostra os últimos 90 dias (ou o histórico completo, via "Recarregar dados" com histórico completo).');
         });
 
         DomUtils.$('#reloadButton').addEventListener('click', () => {

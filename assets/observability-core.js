@@ -188,8 +188,15 @@
             if (back) back.addEventListener('click', () => window.close());
             const pdf = document.querySelector('#btnPdf');
             if (pdf) pdf.addEventListener('click', () => this.exportPdf());
+            // Nunca rotular como "sintética"/"demo" aqui: este mesmo texto
+            // aparece com o dataset de exemplo do repositório E com dados
+            // reais depois do deploy (server.py lê de LOG_BASE/CONFIG_ROOT,
+            // que podem apontar pro compartilhamento real da empresa) — um
+            // rótulo fixo de "sintética" ficaria enganoso assim que dados de
+            // verdade estiverem carregados. Mesmo texto neutro que o
+            // dashboard principal (index.html) já usa.
             const snapshot = document.querySelector('#snapshot');
-            if (snapshot) snapshot.textContent = `Base sintética: ${formatter.fmtDate(this.repo.D.periodStart)} a ${formatter.fmtDate(this.repo.D.periodEnd)}`;
+            if (snapshot) snapshot.textContent = `Período dos dados: ${formatter.fmtDate(this.repo.D.periodStart)} a ${formatter.fmtDate(this.repo.D.periodEnd)}`;
             document.title = label + ' · RPA Ops Monitor';
         }
     }
