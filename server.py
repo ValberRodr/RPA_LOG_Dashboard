@@ -1512,27 +1512,24 @@ class RpaRegistryStore:
         os campos que exigem julgamento humano (criticidade, área de
         negócio, agenda, dependências) ficam para o usuário preencher no
         formulário de cadastro, pré-populado com esses dados."""
-        known_processes = {r['process'] for r in self._load()['rpas']}
+        known_processes = {r.get('process') for r in self._load()['rpas'] if r.get('process')}
         with _build_lock:
-            exec_files, _event_files = _collect_exec_files(None, date.today())
-            issues = []
-            discovered = {}
-            for f in exec_files:
-                for rec in _read_cached(f, issues):
-                    process = rec.get('process_name')
-                    if not process or process in known_processes:
-                        continue
-                    start = rec.get('start_time') or ''
-                    previous = discovered.get(process)
-                    if previous is None or start > previous['lastSeen']:
-                        discovered[process] = {
-                            'process': process,
-                            'lastSeen': start,
-                            'robotName': rec.get('robot_name') or '',
-                            'orchestrator': rec.get('orchestrator') or '',
-                            'environment': rec.get('environment') or '',
-                            'primaryVm': rec.get('machine_name') or '',
-                        }
+            # Usa o SQLite persistente: "Escanear RPAs" não volta a abrir
+            # todo o histórico de arquivos a cada clique.
+            rows = log_store.latest_execution_rows()
+        discovered = {}
+        for rec in rows:
+            process = rec.get('process_name')
+            if not process or process in known_processes:
+                continue
+            discovered[process] = {
+                'process': process,
+                'lastSeen': rec.get('start_time') or '',
+                'robotName': rec.get('robot_name') or '',
+                'orchestrator': rec.get('orchestrator') or '',
+                'environment': rec.get('environment') or '',
+                'primaryVm': rec.get('machine_name') or '',
+            }
         return sorted(discovered.values(), key=lambda d: d['process'])
 
     # ---- validação ---------------------------------------------------------
