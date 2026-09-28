@@ -1,0 +1,11 @@
+RPA Ops Monitor — ícone do executável Windows
+
+Ícone-base: "Gauge High" (Font Awesome Free 7.3.1)
+Autor: Fonticons, Inc.
+Fonte: https://fontawesome.com/icons/gauge-high
+Licença dos ícones Font Awesome Free: CC BY 4.0
+https://creativecommons.org/licenses/by/4.0/
+
+O desenho do ícone não foi recriado por IA. Foi utilizado o ícone Gauge High
+do Font Awesome Free, apenas rasterizado para o formato .ico e aplicado na
+cor azul #2563EB para uso no executável do RPA Ops Monitor.
