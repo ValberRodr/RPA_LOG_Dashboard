@@ -23,7 +23,10 @@ INÍCIO RÁPIDO
   (macOS) ou `packaging/build_windows.bat` (Windows) geram uma pasta com o
   binário dentro (`dist/RPA_Ops_Monitor/`) — ou baixe pronto em Actions →
   "Build executáveis (Windows/macOS)" → Run workflow, no GitHub. Ver
-  packaging/README.md.
+  packaging/README.md. O executável abre sem janela de terminal
+  (`console=False`, 2026-09-28) — stdout/stderr vão para
+  `RPA_Ops_Monitor.log`, criado ao lado do executável; é o primeiro lugar a
+  olhar se o painel abrir vazio ou algo parecer errado.
 
 POR QUE EXISTE UM SERVIDOR LOCAL?
 Navegadores bloqueiam a leitura automática de arquivos .log locais quando um
@@ -253,6 +256,18 @@ Rotas (sempre POST, mesmo para editar/remover — mesma convenção do proxy da
 integração AA, verbo lógico no caminho em vez de PUT/DELETE reais):
 GET /api/registry/rpas, POST /api/registry/rpas (criar),
 POST /api/registry/rpas/{id}/update, POST /api/registry/rpas/{id}/delete.
+
+"Escanear RPAs" (2026-09-28): botão na mesma página. GET
+/api/registry/rpas/scan (RpaRegistryStore.scan_unregistered_processes)
+varre TODO o histórico de logs por process_name sem entrada correspondente
+no cadastro — necessário porque DatasetBuilder.build_dataset descarta
+silenciosamente qualquer execução cujo processo não esteja cadastrado, então
+uma automação nova rodando em produção nunca aparece em lugar nenhum até
+alguém lembrar de cadastrar manualmente. Devolve, por processo, só o que dá
+pra inferir com segurança da execução mais recente (VM, orquestrador, robô)
+— nunca cria nada sozinho; cada resultado abre o formulário de criação
+normal (RegistryPage.openForm(null, prefill)) já preenchido, pra um humano
+revisar e completar antes de salvar.
 
 Toda mutação bem-sucedida dispara `RpaDataStore.reloadData()` no frontend —
 o dataset inteiro é recarregado e todas as páginas (KPIs, Catálogo,

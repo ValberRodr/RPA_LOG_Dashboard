@@ -295,3 +295,15 @@ não confiável durante todo esse fluxo. Ao encontrar uma vulnerabilidade:
   neles, aceito como está). Path traversal no CRUD de `rpa_metadata.json`,
   CSRF (token + Origin), credenciais do AA em memória (nunca em disco/log) e
   mass-assignment do CRUD foram revisados e confirmados corretos.
+- **2026-09-28** — Revisão da nova função "Escanear RPAs"
+  (`scan_unregistered_processes`, `GET /api/registry/rpas/scan`) contra o
+  checklist da seção 23. Nenhum achado. Pontos verificados: a rota é
+  leitura pura (sem CSRF necessário, mesmo padrão das demais rotas GET);
+  reaproveita a descoberta de arquivo já auditada (`_collect_exec_files`/
+  `_read_cached`), nenhum caminho novo derivado de entrada externa; todo
+  campo vindo do log (dado não confiável, ver `THREAT_MODEL.md` cenário 1)
+  passa por `Fmt.escapeHtml`/`Fmt.fmtDateTime` (que nunca ecoa a string
+  crua) antes de renderizar — inclusive no formulário pré-preenchido
+  (`_fieldMarkup`, mesmo escape de sempre); a escrita real ainda passa
+  inteira por `create_rpa`/`validate_payload`/`_extract_editable_fields` —
+  o scan só sugere valores num formulário, nunca grava nada sozinho.
