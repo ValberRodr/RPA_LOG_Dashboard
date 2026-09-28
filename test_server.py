@@ -46,6 +46,8 @@ import sys
 import tempfile
 import threading
 import time
+import contextlib
+import io
 import ssl
 import unittest
 import unittest.mock
@@ -564,6 +566,45 @@ class TestAutomationAnywhereGatewayMock(unittest.TestCase):
         first = self.gateway.authenticate('', '', 'mesma-chave-123')['token']
         second = self.gateway.authenticate('', '', 'mesma-chave-123')['token']
         self.assertEqual(first, second)
+
+
+class TestAutomationAnywhereUpstreamErrorLogging(unittest.TestCase):
+    """Regressão: uma resposta HTTP não-2xx vinda da Control Room real
+    (401/403/500 etc.) virava um código de erro genérico na tela
+    (SESSION_EXPIRED/TEMPORARY_ERROR/UNSUPPORTED) sem nenhum rastro em
+    lugar nenhum — só falha de REDE (timeout/DNS/SSRF) já era logada por
+    `_forward`. `_forward` é sempre mockado aqui para simular a resposta da
+    Control Room sem depender de rede de verdade."""
+
+    def setUp(self):
+        self.gateway = server.AutomationAnywhereGateway(
+            config_file=Path('/nonexistent-on-purpose.json'), get_data_fn=lambda: (None, None),
+        )
+
+    def test_activity_list_logs_status_and_body_on_non_2xx(self):
+        with unittest.mock.patch.object(self.gateway, '_forward', return_value=(403, b'{"message":"Forbidden"}', None)):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                resp = self.gateway.activity_list('https://empresa.my.automationanywhere.digital', 'tok', {})
+        self.assertEqual(resp['error'], 'SESSION_EXPIRED')
+        self.assertIn('[AA]', out.getvalue())
+        self.assertIn('403', out.getvalue())
+        self.assertIn('Forbidden', out.getvalue())
+
+    def test_activity_list_does_not_log_on_success(self):
+        with unittest.mock.patch.object(self.gateway, '_forward', return_value=(200, b'{"list":[]}', None)):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.gateway.activity_list('https://empresa.my.automationanywhere.digital', 'tok', {})
+        self.assertNotIn('[AA]', out.getvalue())
+
+    def test_authenticate_logs_status_on_non_2xx(self):
+        with unittest.mock.patch.object(self.gateway, '_forward', return_value=(500, b'Internal error', None)):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.gateway.authenticate('https://empresa.my.automationanywhere.digital', 'user', 'key')
+        self.assertIn('[AA]', out.getvalue())
+        self.assertIn('500', out.getvalue())
 
 
 class TestAutomationAnywhereSsrfGuard(unittest.TestCase):

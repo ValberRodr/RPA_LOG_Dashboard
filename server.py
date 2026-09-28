@@ -2280,6 +2280,8 @@ class AutomationAnywhereGateway:
         status, raw, net_err = self._forward('POST', url, {'Content-Type': 'application/json'}, body)
         if net_err:
             return {'ok': False, 'error': 'NETWORK_ERROR', 'message': 'Não foi possível alcançar a Control Room.'}
+        if status < 200 or status >= 300:
+            self._log_upstream_error('POST', url, status, raw)
         if status == 403 or status == 401:
             return {'ok': False, 'error': 'AUTH_ERROR', 'message': 'API Key ou usuário inválidos.'}
         if status < 200 or status >= 300:
@@ -2292,6 +2294,20 @@ class AutomationAnywhereGateway:
         if not token:
             return {'ok': False, 'error': 'AUTH_ERROR', 'message': 'Control Room não retornou token.'}
         return {'ok': True, 'token': token, 'mock': False, 'controlRoom': base_url, 'username': username}
+
+    @staticmethod
+    def _log_upstream_error(method, url, status, raw):
+        """Loga status HTTP + corpo (truncado) de uma resposta NÃO-2xx da
+        Control Room real — nunca inclui headers (o token vai em
+        X-Authorization, nunca aparece aqui). Sem isso, um 401/403/500
+        vindo da API virava só um código de erro genérico
+        (SESSION_EXPIRED/TEMPORARY_ERROR/UNSUPPORTED) na tela, sem nenhum
+        rastro em lugar nenhum para diagnosticar a distância — mesmo
+        problema que `_forward` já resolveu para falha de rede/conexão,
+        mas para quando a chamada chega até a Control Room e ela responde
+        com um erro."""
+        body_preview = (raw or b'')[:500].decode('utf-8', errors='replace')
+        print(f'[AA] {method} {url} -> HTTP {status}: {body_preview}')
 
     def discover(self, base_url, token):
         if self.is_mock(base_url):
@@ -2317,6 +2333,8 @@ class AutomationAnywhereGateway:
         status, raw, net_err = self._forward('POST', url, {'Content-Type': 'application/json', 'X-Authorization': token}, body)
         if net_err:
             return {'ok': False, 'error': 'NETWORK_ERROR'}
+        if status < 200 or status >= 300:
+            self._log_upstream_error('POST', url, status, raw)
         if status in (401, 403):
             return {'ok': False, 'error': 'SESSION_EXPIRED'}
         if status < 200 or status >= 300:
@@ -2338,6 +2356,8 @@ class AutomationAnywhereGateway:
         status, raw, net_err = self._forward('GET', url, {'X-Authorization': token}, None)
         if net_err:
             return {'ok': False, 'error': 'NETWORK_ERROR'}
+        if status < 200 or status >= 300:
+            self._log_upstream_error('GET', url, status, raw)
         if status in (401, 403):
             return {'ok': False, 'error': 'SESSION_EXPIRED'}
         if status == 404:
@@ -2365,6 +2385,8 @@ class AutomationAnywhereGateway:
         status, raw, net_err = self._forward(method, base_url + path, headers, body_bytes)
         classification = self._classify_status(status, net_err)
         if classification != 'AVAILABLE':
+            if not net_err:
+                self._log_upstream_error(method, base_url + path, status, raw)
             return {'ok': False, 'error': classification}
         try:
             return {'ok': True, 'data': json.loads(raw.decode('utf-8'))}
