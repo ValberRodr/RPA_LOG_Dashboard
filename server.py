@@ -4,12 +4,13 @@
 - Serve os HTMLs e assets apenas em 127.0.0.1.
 - Lê os arquivos .log e telemetria em ./logs (padrão) ou, no Windows, no
   compartilhamento UNC oficial da empresa por padrão — ver RPA_MONITOR_DATA_ROOT.
-- Por padrão, considera somente os últimos 90 dias (Seção 20 do briefing de
-  evolução enterprise); o modo "histórico completo" pode ser solicitado via
-  /api/reload?mode=full e nunca persiste entre reinicializações do processo.
-- Filtra por ano/mês/data no caminho ANTES de abrir e parsear cada arquivo
-  (Seção 24) e mantém um cache por arquivo (mtime+tamanho) para que o
-  refresh periódico não releia arquivos inalterados (Seção 22).
+- Persiste o parsing dos logs em SQLite na própria raiz compartilhada de
+  Monitoramento. Na primeira execução importa o histórico; depois só lê
+  arquivos novos/alterados, usando o dado mais recente por RPA/VM e um
+  manifesto de mtime+tamanho para evitar reprocessamento.
+- Por padrão exibe 30 dias; o usuário pode alternar para 90, 120 dias ou
+  histórico completo sem reler os arquivos-fonte — a janela é consultada
+  diretamente no SQLite.
 - Gera dinamicamente assets/observability-data.js e assets/index-data.js.
 - Expõe /api/reload e /api/load-status para permitir um refresh incremental
   (sem reload de página) com barra de progresso real no front-end.
@@ -44,6 +45,8 @@ import traceback
 import urllib.error
 import urllib.request
 import webbrowser
+
+from sqlite_log_store import SQLiteLogStore
 
 # Rodando como script (`python3 server.py`), tudo fica na mesma pasta —
 # comportamento inalterado. Empacotado como executável (PyInstaller, ver
@@ -111,6 +114,7 @@ DEFAULT_CONFIG_ROOT = (LOG_BASE / 'Cadastro_RPA') if sys.platform.startswith('wi
 CONFIG_ROOT = Path(os.environ.get('RPA_MONITOR_CONFIG_ROOT', str(DEFAULT_CONFIG_ROOT)))
 META_FILE = CONFIG_ROOT / 'rpa_metadata.json'
 AA_CONFIG_FILE = CONFIG_ROOT / 'aa_config.json'
+DB_FILE = Path(os.environ.get('RPA_MONITOR_DB_PATH', str(LOG_BASE / 'rpa_ops_monitor.sqlite3')))
 # Padrão de fábrica inalterado: só muda se alguém definir RPA_MONITOR_HOST
 # explicitamente (ver docs/servidor-em-rede.html — expor além de loopback
 # exige entender que esta aplicação não tem autenticação embutida).
@@ -140,7 +144,8 @@ _extra_origins = os.environ.get('RPA_MONITOR_EXTRA_ORIGINS', '')
 if _extra_origins:
     ALLOWED_ORIGINS |= {o.strip().rstrip('/').lower() for o in _extra_origins.split(',') if o.strip()}
 
-DEFAULT_WINDOW_DAYS = 90
+DEFAULT_WINDOW_DAYS = 30
+WINDOW_DAYS_BY_MODE = {'30d': 30, '90d': 90, '120d': 120}
 EXEC_FNAME_RE = re.compile(r'^RPA_(\d{4}-\d{2}-\d{2})(?:_(.+))?\.log$')
 VM_FNAME_RE = re.compile(r'^VM_(\d{4}-\d{2}-\d{2})\.jsonl$')
 
@@ -175,10 +180,24 @@ _build_lock = threading.Lock()
 _cache = {'fingerprint': None, 'mode': None, 'obs': None, 'index': None}
 _file_cache: dict[str, dict] = {}
 _build_status = {
-    'phase': 'idle', 'percent': 0, 'mode': '90d', 'windowStart': None, 'windowEnd': None,
+    'phase': 'idle', 'percent': 0, 'mode': '30d', 'windowStart': None, 'windowEnd': None,
     'filesFound': 0, 'filesProcessed': 0, 'filesSkippedWindow': 0, 'filesInvalid': 0,
     'executions': 0, 'events': 0, 'vmSnapshots': 0, 'startedAt': None, 'finishedAt': None, 'error': None,
 }
+
+def _update_build_status(**kwargs):
+    _build_status.update(kwargs)
+
+
+log_store = SQLiteLogStore(
+    DB_FILE,
+    RPA_LOG_ROOT,
+    VM_ROOT,
+    EXEC_FNAME_RE,
+    VM_FNAME_RE,
+    status_callback=_update_build_status,
+)
+
 
 
 class TimeMath:
@@ -361,7 +380,8 @@ class LogFileDiscovery:
         today = datetime.now().date()
         if mode == 'full':
             return None, today
-        return today - timedelta(days=DEFAULT_WINDOW_DAYS - 1), today
+        days = WINDOW_DAYS_BY_MODE.get(mode, DEFAULT_WINDOW_DAYS)
+        return today - timedelta(days=days - 1), today
 
     @staticmethod
     def _month_span(year, month):
