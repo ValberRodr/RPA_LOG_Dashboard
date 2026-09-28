@@ -328,7 +328,7 @@ python3 server.py
                 <p><code>main()</code> tenta abrir o painel em "modo app" do Chrome ou Edge (<code>_open_as_app_window</code>/<code>_chrome_like_candidates</code> em <code>server.py</code>) — janela sem barra de endereço/abas/menus, usando <code>subprocess.Popen([caminho_absoluto_do_navegador, '--app=' + url])</code>. Os caminhos são absolutos e fixos por SO (nunca resolvidos via <code>PATH</code>, o que evitaria o clássico ataque de PATH hijacking). Sem Chrome/Edge instalado, cai para <code>webbrowser.open(url)</code> — o navegador padrão, numa aba normal.</p>
 
                 <h3>Rodar os testes automatizados</h3>
-                <pre class="code-block"><span class="lang-tag">shell</span><code># Backend — 81 testes, unittest da stdlib, sem dependências
+                <pre class="code-block"><span class="lang-tag">shell</span><code># Backend — 86 testes, unittest da stdlib, sem dependências
 python3 test_server.py
 python3 -m unittest test_server.TestAutomationAnywhereGatewayMock -v   # rodar uma classe específica
 
@@ -354,7 +354,7 @@ node --test test_dashboard.js</code></pre>
                 <h2>Mapa de arquivos<a class="anchor-link" href="#mapa-arquivos">#</a></h2>
                 <div class="file-tree"><span class="d">RPA_Observability_Package_v3/</span>
 ├── server.py                      <span class="c"># backend: pipeline de dados + servidor HTTP + integração AA</span>
-├── test_server.py                 <span class="c"># 81 testes do backend (unittest, stdlib)</span>
+├── test_server.py                 <span class="c"># 86 testes do backend (unittest, stdlib)</span>
 ├── test_dashboard.js              <span class="c"># 25 testes das partes puras do frontend (node --test)</span>
 ├── index.html                     <span class="c"># cockpit operacional (SPA de página única)</span>
 ├── investigacao.html              <span class="c"># investigação forense por execution_id</span>
@@ -878,7 +878,12 @@ if (typeof module !== 'undefined' && module.exports) {
                     <tr><td><code>build_schedules_for(rpa)</code></td><td><code>@classmethod</code>. Deriva as regras de <code>schedules</code> (uma por horário) a partir dos próprios campos da RPA: <code>latestStartTime = scheduledTime + startToleranceMin</code>, <code>warningFinishTime = scheduledTime + warningDurationMin</code>, <code>deadlineTime = scheduledTime + maxDurationMin</code> — mesma convenção já usada no cadastro original.</td></tr>
                     <tr><td><code>_next_rpa_id(rpas)</code></td><td>Próximo <code>RPA{n:03d}</code> sequencial a partir do maior ID numérico existente.</td></tr>
                     <tr><td><code>create_rpa(payload)</code> / <code>update_rpa(rpa_id, payload)</code> / <code>delete_rpa(rpa_id)</code></td><td>CRUD completo. Toda escrita passa por <code>_save</code> (arquivo temporário + <code>Path.replace</code> — atômico) e regenera <code>schedules</code> daquela RPA por inteiro.</td></tr>
+                    <tr><td><code>scan_unregistered_processes()</code></td><td>(2026-09-28) "Escanear RPAs": varre <strong>todo</strong> o histórico de <code>RPA_LOG_ROOT</code> (reaproveita <code>_collect_exec_files</code>/<code>_read_cached</code> do pipeline principal, mesmo cache de arquivo) por <code>process_name</code> sem <code>rpas[].process</code> correspondente — automações que já rodam de verdade mas ninguém cadastrou. Devolve, por processo, só o que dá pra inferir com segurança do log da execução mais recente (<code>primaryVm</code>, <code>orchestrator</code>, <code>robotName</code>, <code>lastSeen</code>) — nunca cria nada sozinho, só sugere; exposto em <code>GET /api/registry/rpas/scan</code>.</td></tr>
                 </table></div>
+                <div class="callout callout-info">
+                    <div class="icon-dot">i</div>
+                    <p><strong>Por que isso é necessário:</strong> <code>DatasetBuilder.build_dataset</code> descarta silenciosamente qualquer execução cujo <code>process_name</code> não bata com um <code>rpas[].process</code> cadastrado (<code>rpa = by_process.get(e['process_name']); if not rpa: continue</code>) — sem o scan, uma automação nova rodando em produção nunca aparece em lugar nenhum do dashboard até alguém lembrar de cadastrar manualmente.</p>
+                </div>
 
                 <h3>RegistryPage (frontend)</h3>
                 <p><code>FIELD_GROUPS</code> descreve o formulário inteiro como dados — 5 grupos (Identificação, Operação, Infraestrutura, Agenda e limites, Documentação), cada campo com <code>key</code>/<code>label</code>/<code>type</code>/<code>required</code>/<code>list</code>. O mesmo array monta os <code>&lt;input&gt;</code>/<code>&lt;select&gt;</code>/<code>&lt;textarea&gt;</code> (<code>_fieldMarkup</code>) e serializa/parseia os valores ao abrir e salvar.</p>
@@ -1099,13 +1104,14 @@ if (typeof module !== 'undefined' && module.exports) {
             <!-- ================================================================ -->
             <section class="section" id="testes">
                 <h2>Testes automatizados<a class="anchor-link" href="#testes">#</a></h2>
-                <h3>test_server.py — 81 testes (unittest, stdlib)</h3>
+                <h3>test_server.py — 86 testes (unittest, stdlib)</h3>
                 <div class="table-wrap"><table>
                     <tr><th>Classe de teste</th><th>Cobre</th></tr>
                     <tr><td><code>TestLogFilenamePatterns</code></td><td><code>EXEC_FNAME_RE</code>/<code>VM_FNAME_RE</code> — aceita nome válido (com e sem sufixo de execução), rejeita prefixo/extensão errados.</td></tr>
                     <tr><td><code>TestAutomationAnywhereGatewayMock</code></td><td>Todo o modo mock do gateway: <code>is_mock</code>, autenticação (rejeita chave curta, aceita válida, token determinístico via <code>hashlib</code>), discovery fixo, Activity List (derivação + paginação), detalhe (encontrado/não encontrado), proxy genérico (devices a partir das VMs fake, allowlist de path, policy FORBIDDEN, toggle de schedule sem tocar na agenda real) — usa <code>get_data_fn</code> fake, nunca lê <code>./logs</code>.</td></tr>
                     <tr><td><code>TestAutomationAnywhereSsrfGuard</code></td><td>Guard de SSRF de <code>_forward</code>/<code>_is_blocked_target</code>/<code>_resolve_pinned_ip</code> — loopback (IPv4 e IPv6) e link-local/metadata (<code>169.254.169.254</code>) bloqueados, rede privada (<code>10/8</code>) e IP público liberados, <code>_forward</code> retorna erro sem tentar nenhuma conexão de rede quando bloqueado. Mais 3 testes (2026-09-27, regressão da correção de SSRF via redirect): um <code>Location</code> de redirecionamento apontando para destino bloqueado NÃO é seguido (mocka só o transporte via <code>_do_one_request</code>, nunca a validação real, para exercitar de verdade a revalidação por salto); um redirecionamento para destino permitido continua funcionando (2 saltos); excesso de redirecionamentos (loop) para de tentar após <code>MAX_REDIRECTS</code>. Sempre com IPs literais — nunca depende de DNS/rede real no ambiente de teste.</td></tr>
                     <tr><td><code>TestRpaRegistryStore</code></td><td>CRUD completo (criar/editar/remover), geração de <code>schedules</code> (inclusive virada de meia-noite), validações (campo obrigatório, horário inválido/duplicado, ordenação de duração, criticidade/calendário fora do enum, processo duplicado), path traversal em <code>dependencyFiles</code> (absoluto e <code>../</code>, ambos rejeitados) e mass assignment (chave desconhecida no payload nunca chega ao disco) — sempre contra um arquivo JSON temporário, nunca <code>config/rpa_metadata.json</code> real. Mais 4 testes (2026-09-28, cadastro numa pasta de rede — ver <a href="#config-cadastro">Cadastro</a>): espera uma trava já existente e completa quando ela é liberada; desiste com mensagem clara se a trava nunca é liberada; reclama uma trava "abandonada" (mtime antigo) quase imediatamente em vez de esperar o timeout inteiro; e duas <em>threads de verdade</em> criando RPAs ao mesmo tempo confirmam que nenhuma gravação se perde.</td></tr>
+                    <tr><td><code>TestScanUnregisteredProcesses</code></td><td>(2026-09-28) <code>scan_unregistered_processes</code> com uma pasta de log falsa (<code>server.RPA_LOG_ROOT</code> trocado via <code>unittest.mock.patch.object</code>, cache de arquivo limpo em <code>setUp</code>): acha processo presente no log mas ausente do cadastro; ignora processo já cadastrado; usa a execução mais recente (por <code>start_time</code>) pros campos inferidos quando o mesmo processo aparece em mais de um dia; resultado ordenado e sem duplicar o mesmo processo entre arquivos diferentes; pasta de log vazia devolve lista vazia.</td></tr>
                     <tr><td><code>TestDatasetBuilds</code></td><td>Smoke test de <code>build_dataset('90d')</code> contra os logs reais do projeto — chaves de topo esperadas presentes, pelo menos 1 RPA no resultado.</td></tr>
                     <tr><td><code>TestHttpServerRoutes</code></td><td>Servidor real numa porta livre: fluxo mock de autenticação AA de ponta a ponta, rotas de leitura (<code>/api/aa/config</code>, <code>/api/status</code>, <code>/api/registry/rpas</code>, <code>/api/csrf-token</code>), <code>index.html</code> serve, <code>observability-data.js</code> é JSON prefixado válido, proxy rejeita path fora da allowlist — e a camada de segurança inteira: POST sem/com token CSRF errado é rejeitado (403), <code>Origin</code> cross-site é rejeitado mesmo com token válido, <code>/api/reload</code> só aceita POST (GET dá 404), corpo acima de 2&nbsp;MB é rejeitado (413), <code>.git/HEAD</code> e listagem de diretório (<code>/config/</code>) dão 404, toda resposta <code>.html</code> carrega um nonce de CSP que bate exatamente com o <code>&lt;script nonce="..."&gt;</code> injetado no corpo, e (2026-09-28) <code>/assets/observability-data.js</code>/<code>/api/status</code> devolvem 500 com a mensagem real (não derrubam a conexão) quando <code>get_data()</code> falha — mockando a exceção, não o backend real.</td></tr>
                 </table></div>
@@ -1214,7 +1220,7 @@ packaging\build_windows.bat</code></pre>
                 </table></div>
                 <div class="callout callout-ok">
                     <div class="icon-dot">✓</div>
-                    <p>Rodando como <code>python3 server.py</code> (sem empacotar), <code>BUNDLE_DIR</code> e <code>ROOT</code> são a mesma pasta — nenhum comportamento muda para quem usa dessa forma; validado com a suíte de 81 testes de <code>test_server.py</code> passando sem alteração.</p>
+                    <p>Rodando como <code>python3 server.py</code> (sem empacotar), <code>BUNDLE_DIR</code> e <code>ROOT</code> são a mesma pasta — nenhum comportamento muda para quem usa dessa forma; validado com a suíte de 86 testes de <code>test_server.py</code> passando sem alteração.</p>
                 </div>
                 <div class="callout callout-warn">
                     <div class="icon-dot">!</div>

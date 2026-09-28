@@ -1405,6 +1405,48 @@ class RpaRegistryStore:
     def get_rpa(self, rpa_id):
         return next((r for r in self._load()['rpas'] if r['rpaId'] == rpa_id), None)
 
+    def scan_unregistered_processes(self):
+        """Varre TODO o histórico de logs de execução (não só a janela de
+        90 dias — o objetivo é achar qualquer RPA que já rodou alguma vez,
+        não só recentemente) por `process_name` que aparece nos logs mas não
+        tem entrada correspondente em `rpas[].process` — automações que já
+        existem operacionalmente, mas ninguém cadastrou ainda.
+
+        Reaproveita a mesma descoberta/cache de arquivo do pipeline
+        principal (`LogFileDiscovery`/`LogFileReader`, já usados por
+        `DatasetBuilder.build_dataset`) — nenhum parsing novo além do que já
+        seria lido de qualquer jeito; `_build_lock` evita rodar ao mesmo
+        tempo que um reload normal (os dois mexem no mesmo `_build_status`/
+        cache de arquivo).
+
+        Só sugere o que dá pra inferir com segurança do próprio log (nome do
+        processo, VM/robô/orquestrador/ambiente da execução mais recente) —
+        os campos que exigem julgamento humano (criticidade, área de
+        negócio, agenda, dependências) ficam para o usuário preencher no
+        formulário de cadastro, pré-populado com esses dados."""
+        known_processes = {r['process'] for r in self._load()['rpas']}
+        with _build_lock:
+            exec_files, _event_files = _collect_exec_files(None, date.today())
+            issues = []
+            discovered = {}
+            for f in exec_files:
+                for rec in _read_cached(f, issues):
+                    process = rec.get('process_name')
+                    if not process or process in known_processes:
+                        continue
+                    start = rec.get('start_time') or ''
+                    previous = discovered.get(process)
+                    if previous is None or start > previous['lastSeen']:
+                        discovered[process] = {
+                            'process': process,
+                            'lastSeen': start,
+                            'robotName': rec.get('robot_name') or '',
+                            'orchestrator': rec.get('orchestrator') or '',
+                            'environment': rec.get('environment') or '',
+                            'primaryVm': rec.get('machine_name') or '',
+                        }
+        return sorted(discovered.values(), key=lambda d: d['process'])
+
     # ---- validação ---------------------------------------------------------
     @classmethod
     def validate_payload(cls, payload, existing_rpas, editing_rpa_id=None):
@@ -2218,6 +2260,12 @@ class Handler(SimpleHTTPRequestHandler):
         # ---- Cadastro de RPAs (CRUD sobre config/rpa_metadata.json) ----
         if path == '/api/registry/rpas':
             return self._send_json({'ok': True, 'rpas': rpa_registry.list_rpas()})
+        if path == '/api/registry/rpas/scan':
+            try:
+                found = rpa_registry.scan_unregistered_processes()
+            except Exception as exc:
+                return self._send_json({'ok': False, 'error': 'SCAN_ERROR', 'message': str(exc)}, status=500)
+            return self._send_json({'ok': True, 'found': found})
         # ---- Automation Anywhere (opcional) — só responde a rotas /api/aa/*,
         # nunca é consultado pelo pipeline de dados existente acima. ----
         if path == '/api/aa/config':

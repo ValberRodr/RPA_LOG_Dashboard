@@ -1914,6 +1914,53 @@ class RegistryPage {
         RegistryPage.renderTable();
     }
 
+    /** "Escanear RPAs": varre todo o histórico de logs (não só a janela
+     * carregada no momento) por process_name sem entrada correspondente no
+     * cadastro — RPAs que já rodam de verdade mas ninguém cadastrou ainda.
+     * Nunca cria nada sozinho: só lista, e cada item abre o formulário de
+     * criação normal (openForm) pré-preenchido, pra um humano revisar e
+     * completar antes de salvar. */
+    static async scanForNewRpas() {
+        const btn = DomUtils.$('#registryScanBtn');
+        const panel = DomUtils.$('#registryScanResults');
+        const list = DomUtils.$('#registryScanList');
+        btn.disabled = true;
+        panel.style.display = '';
+        list.innerHTML = `<div class="empty-state">Procurando nos logs…</div>`;
+        try {
+            const resp = await fetch('/api/registry/rpas/scan', { cache: 'no-store' }).then(r => r.json());
+            if (!resp.ok) {
+                list.innerHTML = `<div class="registry-error">${Fmt.escapeHtml(resp.message || 'Não foi possível escanear os logs.')}</div>`;
+                return;
+            }
+            if (!resp.found.length) {
+                list.innerHTML = `<div class="empty-state">Nenhuma RPA nova encontrada — todo process_name presente nos logs já está cadastrado.</div>`;
+                return;
+            }
+            RegistryPage._scanFound = resp.found;
+            list.innerHTML = resp.found.map((item, i) => `
+                <div class="registry-scan-item" data-scan-index="${i}">
+                    <div>
+                        <span class="cell-title mono">${Fmt.escapeHtml(item.process)}</span>
+                        <span class="cell-subtitle">Última execução: ${Fmt.fmtDateTime(item.lastSeen)} · VM ${Fmt.escapeHtml(item.primaryVm || '—')} · ${Fmt.escapeHtml(item.orchestrator || '—')}</span>
+                    </div>
+                    <button class="action-button primary js-scan-register" type="button">Cadastrar</button>
+                </div>
+            `).join('');
+            DomUtils.$$('#registryScanList .js-scan-register').forEach(button => {
+                button.addEventListener('click', () => {
+                    const index = Number(button.closest('[data-scan-index]').dataset.scanIndex);
+                    const found = RegistryPage._scanFound[index];
+                    RegistryPage.openForm(null, { process: found.process, primaryVm: found.primaryVm, orchestrator: found.orchestrator, robotName: found.robotName });
+                });
+            });
+        } catch (exc) {
+            list.innerHTML = `<div class="registry-error">Falha de comunicação com o servidor local. O escaneamento exige o servidor local (server.py).</div>`;
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
     static renderTable() {
         const rows = [...RegistryPage._rows].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
         DomUtils.$('#registryTable').innerHTML = rows.map(r => `
@@ -1974,11 +2021,17 @@ class RegistryPage {
     }
 
     /** Abre o formulário — sem `rpa`, cria; com `rpa`, edita (o rpaId nunca é
-     * editável). Modal construído em JS, não em index.html, porque este
-     * arquivo não pode depender de aa-integration.css (módulo opcional,
-     * removível) para nenhum estilo essencial. */
-    static openForm(rpa) {
+     * editável). `prefill` (só usado quando `rpa` é null) pré-popula os
+     * campos sem virar edição — usado pelo fluxo "Escanear RPAs": o processo
+     * já existe nos logs, mas ainda não tem rpaId nenhum, então continua
+     * sendo uma criação (POST /api/registry/rpas), só que com alguns campos
+     * já preenchidos a partir do que foi inferido do log. Modal construído
+     * em JS, não em index.html, porque este arquivo não pode depender de
+     * aa-integration.css (módulo opcional, removível) para nenhum estilo
+     * essencial. */
+    static openForm(rpa, prefill) {
         RegistryPage._editing = rpa || null;
+        const values = rpa || prefill || null;
         const overlay = document.createElement('div');
         overlay.className = 'registry-modal-overlay';
         overlay.id = 'registryModalOverlay';
@@ -1987,14 +2040,14 @@ class RegistryPage {
             ${group.fields.map(f => `
                 <div class="${f.full ? 'full' : ''}">
                     <label for="reg_${f.key}">${Fmt.escapeHtml(f.label)}${f.required ? ' *' : ''}</label>
-                    ${RegistryPage._fieldMarkup(f, rpa)}
+                    ${RegistryPage._fieldMarkup(f, values)}
                 </div>
             `).join('')}
         `).join('');
         overlay.innerHTML = `
             <div class="registry-modal">
                 <h3>${rpa ? 'Editar RPA' : 'Nova RPA'}</h3>
-                <div class="sub">${rpa ? `<span class="mono">${Fmt.escapeHtml(rpa.rpaId)}</span> — o ID não pode ser alterado.` : 'O ID é gerado automaticamente ao salvar.'}</div>
+                <div class="sub">${rpa ? `<span class="mono">${Fmt.escapeHtml(rpa.rpaId)}</span> — o ID não pode ser alterado.` : (prefill ? 'Processo encontrado nos logs, ainda não cadastrado — os campos abaixo vieram da execução mais recente; complete o restante. O ID é gerado automaticamente ao salvar.' : 'O ID é gerado automaticamente ao salvar.')}</div>
                 <div id="registryFormError"></div>
                 <div class="registry-form-grid">${groupsHtml}</div>
                 <div class="registry-modal-actions">
@@ -2154,6 +2207,7 @@ class RpaOpsApp {
         });
 
         DomUtils.$('#registryNewBtn').addEventListener('click', () => RegistryPage.openForm(null));
+        DomUtils.$('#registryScanBtn').addEventListener('click', () => RegistryPage.scanForNewRpas());
 
         let resizeTimer;
         window.addEventListener('resize', () => {

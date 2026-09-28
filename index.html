@@ -612,6 +612,18 @@
             margin-bottom: 14px;
         }
 
+        .registry-scan-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+        .registry-scan-item:last-child { margin-bottom: 0; }
+
         /* ---------------------------------------------------------------------
            Grids e cards
            ------------------------------------------------------------------ */
@@ -2746,10 +2758,25 @@
                             <h1>Cadastro de RPAs</h1>
                             <p>Cria, edita e remove RPAs do arquivo <span class="mono">config/rpa_metadata.json</span>. As regras de agenda de cada RPA são recalculadas automaticamente a partir dos horários e limites informados.</p>
                         </div>
-                        <button class="action-button primary" id="registryNewBtn" type="button">
-                            <svg class="icon"><use href="#i-edit"></use></svg> Nova RPA
-                        </button>
+                        <div style="display:flex; gap:8px">
+                            <button class="action-button" id="registryScanBtn" type="button" title="Procurar nos logs por RPAs que já rodam mas ainda não foram cadastradas">
+                                <svg class="icon"><use href="#i-search"></use></svg> Escanear RPAs
+                            </button>
+                            <button class="action-button primary" id="registryNewBtn" type="button">
+                                <svg class="icon"><use href="#i-edit"></use></svg> Nova RPA
+                            </button>
+                        </div>
                     </div>
+
+                    <article class="card" id="registryScanResults" style="display:none; margin-bottom:14px">
+                        <div class="card-header">
+                            <div>
+                                <h2>RPAs encontradas nos logs, ainda não cadastradas</h2>
+                                <p>Dados inferidos da execução mais recente de cada processo — complete o restante ao cadastrar.</p>
+                            </div>
+                        </div>
+                        <div id="registryScanList"></div>
+                    </article>
 
                     <article class="card">
                         <div class="table-wrap">

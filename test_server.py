@@ -361,6 +361,70 @@ class TestRpaRegistryStore(unittest.TestCase):
         self.assertEqual({r['rpaId'] for r in data['rpas']}, {'RPA001', 'RPA002', 'RPA003'})
 
 
+class TestScanUnregisteredProcesses(unittest.TestCase):
+    """`RpaRegistryStore.scan_unregistered_processes` — a função de "Escanear
+    RPAs" pedida pelo usuário: acha process_name presente nos logs mas
+    ausente do cadastro. Usa uma pasta de log falsa (nunca ./logs real) e
+    limpa o cache de arquivo do módulo pra não vazar estado entre testes."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.meta_file = Path(self.tmp_dir.name) / 'rpa_metadata.json'
+        _seed_registry_file(self.meta_file)  # cadastra 'VND_Teste' (RPA001)
+        self.store = server.RpaRegistryStore(self.meta_file)
+
+        self.fake_log_root = Path(self.tmp_dir.name) / 'FakeLogs'
+        self.fake_log_root.mkdir()
+        self._patcher = unittest.mock.patch.object(server, 'RPA_LOG_ROOT', self.fake_log_root)
+        self._patcher.start()
+        server._file_cache.clear()
+
+    def tearDown(self):
+        self._patcher.stop()
+        self.tmp_dir.cleanup()
+
+    def _write_exec_log(self, process, date_str, machine='VM-X', robot='BOT-X', orchestrator='ORQ-X', start_time=None):
+        day_dir = self.fake_log_root / date_str[:4] / date_str[5:7] / process
+        day_dir.mkdir(parents=True, exist_ok=True)
+        record = {
+            'execution_id': f'{date_str.replace("-", "")}_001', 'process_name': process,
+            'robot_name': robot, 'orchestrator': orchestrator, 'environment': 'PRD',
+            'start_time': start_time or f'{date_str}T08:00:00', 'end_time': f'{date_str}T08:10:00',
+            'duration_seconds': 600, 'status': 'SUCCESS', 'total_items': 1, 'processed_items': 1,
+            'success_items': 1, 'warning_items': 0, 'error_items': 0, 'retry_count': 0,
+            'machine_name': machine, 'version': '1.0',
+        }
+        (day_dir / f'RPA_{date_str}.log').write_text(json.dumps(record) + '\n', encoding='utf-8')
+
+    def test_finds_process_present_in_logs_but_absent_from_cadastro(self):
+        self._write_exec_log('NEW_Processo_Desconhecido', '2026-01-15')
+        found = self.store.scan_unregistered_processes()
+        self.assertEqual([f['process'] for f in found], ['NEW_Processo_Desconhecido'])
+
+    def test_ignores_process_already_registered(self):
+        self._write_exec_log('VND_Teste', '2026-01-15')  # já cadastrado como RPA001
+        found = self.store.scan_unregistered_processes()
+        self.assertEqual(found, [])
+
+    def test_uses_most_recent_execution_for_inferred_fields(self):
+        self._write_exec_log('NEW_Processo', '2026-01-10', machine='VM-ANTIGA', start_time='2026-01-10T08:00:00')
+        self._write_exec_log('NEW_Processo', '2026-01-20', machine='VM-NOVA', start_time='2026-01-20T08:00:00')
+        found = self.store.scan_unregistered_processes()
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]['primaryVm'], 'VM-NOVA')
+        self.assertEqual(found[0]['lastSeen'], '2026-01-20T08:00:00')
+
+    def test_result_sorted_alphabetically_and_deduplicated_across_files(self):
+        self._write_exec_log('ZZZ_Processo', '2026-01-05')
+        self._write_exec_log('AAA_Processo', '2026-01-06')
+        self._write_exec_log('AAA_Processo', '2026-01-07')  # mesmo processo, outro dia — não deve duplicar
+        found = self.store.scan_unregistered_processes()
+        self.assertEqual([f['process'] for f in found], ['AAA_Processo', 'ZZZ_Processo'])
+
+    def test_empty_log_root_returns_empty_list(self):
+        self.assertEqual(self.store.scan_unregistered_processes(), [])
+
+
 class TestLogFilenamePatterns(unittest.TestCase):
     """server.py só abre arquivos cujo nome bate com esses padrões — testar
     isso evita que uma mudança futura no regex passe a ignorar (ou incluir
