@@ -42,11 +42,22 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Reconstrói localmente o .ico versionado em Base64. Isso mantém o repositório
+REM textual e garante o mesmo ícone em qualquer build do Windows.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$b64 = Get-Content -Raw '%PKG_DIR%\RPA_Ops_Monitor.ico.b64'; [IO.File]::WriteAllBytes('%PKG_DIR%\RPA_Ops_Monitor.ico', [Convert]::FromBase64String($b64.Trim()))"
+if errorlevel 1 (
+    echo Falha ao preparar o icone do aplicativo.
+    exit /b 1
+)
+
 pyinstaller --noconfirm --clean "%PKG_DIR%\RPA_Ops_Monitor.spec"
 if errorlevel 1 (
+    del /q "%PKG_DIR%\RPA_Ops_Monitor.ico" >nul 2>nul
     echo Falha ao gerar o executavel.
     exit /b 1
 )
+
+del /q "%PKG_DIR%\RPA_Ops_Monitor.ico" >nul 2>nul
 
 REM config\ e logs\ sao dados do usuario (graváveis), nao parte do app -
 REM nunca sobrescreve o que ja existe la (preserva Cadastro de RPAs e logs
