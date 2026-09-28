@@ -62,13 +62,13 @@ if errorlevel 1 (
 pyinstaller --noconfirm --clean "%PKG_DIR%\RPA_Ops_Monitor.spec"
 if errorlevel 1 (
     del /q "%PKG_DIR%\RPA_Ops_Monitor.ico" >nul 2>nul
-del /q "%PKG_DIR%\RPA_Ops_Monitor.source.ico" >nul 2>nul
     del /q "%PKG_DIR%\RPA_Ops_Monitor.source.ico" >nul 2>nul
     echo Falha ao gerar o executavel.
     exit /b 1
 )
 
 del /q "%PKG_DIR%\RPA_Ops_Monitor.ico" >nul 2>nul
+del /q "%PKG_DIR%\RPA_Ops_Monitor.source.ico" >nul 2>nul
 
 REM config\ e logs\ sao dados do usuario (graváveis), nao parte do app -
 REM nunca sobrescreve o que ja existe la (preserva Cadastro de RPAs e logs
