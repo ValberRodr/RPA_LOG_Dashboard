@@ -2330,7 +2330,13 @@ const init = RpaOpsApp.init;
 let DATA;
 const chartRegistry = ChartService.registry;
 
-if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+if (typeof window !== 'undefined' && typeof document !== 'undefined' && window.INDEX_DATA && window.OBS_DATA) {
+    // Sem os dois (ex.: Handler._send_data_error devolveu
+    // window.OBS_DATA/INDEX_DATA = null porque o Cadastro/logs estavam
+    // inacessíveis), não tem o que renderizar — a tela de carregamento
+    // inicial (index.html) já mostra o erro real e fica visível; deixar o
+    // boot seguir só geraria uma exceção não tratada tentando ler campos de
+    // null, sem nenhum ganho.
     DATA = window.INDEX_DATA;
     DATA.auditExecutions = buildAuditExecutions(window.OBS_DATA);
     window.ACTIVE_EXECUTION_ID = DATA.executionDetail?.executionId || DATA.timeline?.[0]?.executionId || null;
@@ -2348,6 +2354,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     window.RPA_INCREMENTAL_REFRESH = () => reloadData(DATA.loadStats?.mode || '90d');
 
     init();
+
+    // Some junto com o primeiro paint pronto — nunca antes: revelar o
+    // dashboard só depois de init() renderizar tudo evita um flash de UI
+    // vazia entre "carregando" e "carregado" (ver tela de carregamento
+    // inicial em index.html, logo no início do body).
+    window.__hideInitialLoadOverlay?.();
 }
 
 /* Exporta as classes puras (sem DOM) para o test_dashboard.js via Node —

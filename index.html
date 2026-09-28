@@ -412,6 +412,25 @@
 
         .load-progress-label.active { display: flex; }
 
+        .initial-load-overlay {
+            position: fixed; inset: 0; z-index: 9999;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--bg);
+        }
+        .initial-load-box {
+            display: flex; flex-direction: column; align-items: center; gap: 14px;
+            padding: 28px 34px; max-width: 420px; text-align: center;
+        }
+        .initial-load-title { font: 800 15px/1.3 inherit; color: var(--text); }
+        .initial-load-track {
+            width: 260px; height: 6px; border-radius: 999px; overflow: hidden;
+            background: var(--panel-2); border: 1px solid var(--border);
+        }
+        .initial-load-fill {
+            height: 100%; width: 0%; background: var(--primary); transition: width .25s ease;
+        }
+        .initial-load-label { font-size: 12px; color: var(--text-2); }
+
         .quality-row {
             display: grid;
             grid-template-columns: 1.4fr 1fr 1fr 1fr;
@@ -2051,6 +2070,72 @@
     <link rel="stylesheet" href="assets/aa-integration.css">
 </head>
 <body>
+    <!-- =====================================================================
+         TELA DE CARREGAMENTO INICIAL
+         Fica ANTES de tudo de propósito: os dois <script src> de dados logo
+         no fim do body (observability-data.js/index-data.js) são
+         bloqueantes — o servidor só responde quando terminar de montar o
+         dataset inteiro (Seção Segurança/Robustez do SECURITY.md), e em
+         produção (muitos mais arquivos, log numa pasta de rede) isso pode
+         levar bem mais que no dataset sintético local. Sem feedback nenhum
+         nesse meio-tempo, a aba parece travada. Este script roda ANTES dos
+         bloqueantes, então começa a sondar /api/load-status (o mesmo
+         endpoint que já alimenta a barra de "Recarregar dados") numa
+         requisição paralela e independente, enquanto o carregamento
+         principal ainda está em andamento — funciona porque o servidor
+         atende cada requisição numa thread própria (ThreadingHTTPServer).
+         dashboard-app.js chama window.__hideInitialLoadOverlay() assim que
+         os dados chegam e o boot normal começa. -->
+    <div id="initialLoadOverlay" class="initial-load-overlay">
+        <div class="initial-load-box">
+            <div class="initial-load-title">Carregando RPA Ops Monitor…</div>
+            <div class="initial-load-track"><div class="initial-load-fill" id="initialLoadFill"></div></div>
+            <div class="initial-load-label" id="initialLoadLabel">Conectando ao servidor local…</div>
+        </div>
+    </div>
+    <script>
+    (function () {
+        'use strict';
+        var overlay = document.getElementById('initialLoadOverlay');
+        var fill = document.getElementById('initialLoadFill');
+        var label = document.getElementById('initialLoadLabel');
+        var timer = null;
+        var phaseLabels = {
+            'localizando arquivos': 'Localizando arquivos',
+            'filtrando período': 'Filtrando período',
+            'lendo logs de execução': 'Lendo logs de execução',
+            'lendo logs de etapas': 'Lendo logs de etapas',
+            'lendo telemetria das VMs': 'Lendo telemetria das VMs',
+            'vinculando execuções e agenda': 'Vinculando execuções e agenda',
+            'calculando indicadores': 'Calculando indicadores',
+            'atualizando visualizações': 'Atualizando visualizações',
+            'concluido': 'Concluído',
+        };
+        function poll() {
+            fetch('/api/load-status', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (status) {
+                if (!overlay || !status) return;
+                var percent = status.percent || 0;
+                fill.style.width = percent + '%';
+                if (status.phase === 'erro') {
+                    label.textContent = 'Falha ao carregar dados: ' + (status.error || 'erro desconhecido') + ' — veja RPA_Ops_Monitor.log.';
+                    return; // não agenda mais sondagem; o boot normal decide o que fazer a seguir
+                }
+                var phaseText = phaseLabels[status.phase] || status.phase || 'Carregando';
+                label.textContent = phaseText + '… ' + percent + '% · ' + (status.filesProcessed || 0) + '/' + (status.filesFound || 0) + ' arquivos';
+                timer = setTimeout(poll, 300);
+            }).catch(function () {
+                // Aberto via file:// ou servidor ainda subindo — sem sondagem
+                // útil possível; o próprio carregamento bloqueante decide.
+            });
+        }
+        window.__hideInitialLoadOverlay = function () {
+            clearTimeout(timer);
+            if (overlay) overlay.remove();
+        };
+        poll();
+    })();
+    </script>
+
     <!-- =====================================================================
          SVG SPRITE
          Ícones inline para manter o HTML independente de bibliotecas/CDNs.

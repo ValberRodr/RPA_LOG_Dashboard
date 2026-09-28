@@ -27,6 +27,12 @@ INÍCIO RÁPIDO
   (`console=False`, 2026-09-28) — stdout/stderr vão para
   `RPA_Ops_Monitor.log`, criado ao lado do executável; é o primeiro lugar a
   olhar se o painel abrir vazio ou algo parecer errado.
+- Tela de carregamento inicial (2026-09-28): index.html mostra um overlay
+  com % e fase enquanto o dataset é montado (sonda /api/load-status, mesmo
+  endpoint da barra de "Recarregar dados") — evita a aba parecer travada
+  quando há muito mais arquivos que no dataset sintético local (ex.: log
+  numa pasta de rede corporativa). Se a montagem falhar, o overlay mostra a
+  mensagem real e não desaparece sozinho.
 
 POR QUE EXISTE UM SERVIDOR LOCAL?
 Navegadores bloqueiam a leitura automática de arquivos .log locais quando um

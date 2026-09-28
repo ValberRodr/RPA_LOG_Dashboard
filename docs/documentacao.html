@@ -830,17 +830,21 @@ const renderAll  = RpaOpsApp.renderAll;
 const init       = RpaOpsApp.init;
 // … (~65 no total — ver arquivo para a lista completa)
 
-// BOOT — só roda no navegador (guarda de ambiente evita quebrar em Node/testes)
+// BOOT — só roda no navegador, e só se os dados carregaram de verdade
+// (window.INDEX_DATA/OBS_DATA nulos = Handler._send_data_error reportou uma
+// falha — ver Empacotamento/Robustez — nesse caso não há o que renderizar,
+// e a tela de carregamento inicial de index.html já mostra o erro real)
 let DATA;                                   // variável solta, nunca propriedade de classe
 const chartRegistry = ChartService.registry;
 
-if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+if (typeof window !== 'undefined' && typeof document !== 'undefined' && window.INDEX_DATA && window.OBS_DATA) {
     DATA = window.INDEX_DATA;
     DATA.auditExecutions = buildAuditExecutions(window.OBS_DATA);
     window.ACTIVE_EXECUTION_ID = DATA.executionDetail?.executionId ?? DATA.timeline?.[0]?.executionId ?? null;
     NavigationController.bindGlobalControls();
     window.RPA_INCREMENTAL_REFRESH = () => reloadData(DATA.loadStats?.mode || '90d');
     init();
+    window.__hideInitialLoadOverlay?.();    // só esconde depois do 1º render completo — nunca antes
 }
 
 // export para test_dashboard.js via Node — no-op no navegador
@@ -852,6 +856,19 @@ if (typeof module !== 'undefined' && module.exports) {
                     <p><code>DATA</code> é uma <code>let</code> de topo genuína — <strong>não</strong> uma propriedade de classe — de propósito: é reatribuída por nome (<code>DATA = window.INDEX_DATA</code>) em <code>RpaDataStore.reloadData</code> e lida por nome em dezenas de métodos das classes <code>*Page</code>. Movê-la para dentro de uma classe (mesmo como <code>static</code>) quebraria essa reatribuição silenciosamente, porque os métodos continuariam lendo o identificador de topo <code>DATA</code>, não a propriedade da classe.</p>
                 </div>
                 <p><strong>Regra prática:</strong> ao adicionar uma função de topo nova em <code>dashboard-app.js</code>, decida se ela pertence a uma classe existente (o caso comum) e adicione o alias correspondente logo no bloco de aliases — nunca crie uma função solta fora desse padrão, ou <code>aa-integration.js</code> pode perder acesso a ela silenciosamente caso venha a depender dela no futuro.</p>
+
+                <h3>Tela de carregamento inicial (2026-09-28)</h3>
+                <p>Os dois <code>&lt;script src&gt;</code> de dados (<code>observability-data.js</code>/<code>index-data.js</code>) são <strong>bloqueantes</strong> — o navegador só continua depois que o servidor termina de montar o dataset inteiro. Em produção (muito mais arquivos, log numa pasta de rede) isso pode levar bem mais tempo que no dataset sintético local, e sem feedback nenhum a aba parece travada — sintoma real relatado durante o deploy corporativo. Um <code>&lt;script&gt;</code> inline no topo do <code>&lt;body&gt;</code> de <code>index.html</code> (antes de qualquer tag bloqueante) resolve isso sem tocar na arquitetura de boot: mostra um overlay de tela cheia (<code>#initialLoadOverlay</code>) e sonda <code>/api/load-status</code> — o <strong>mesmo</strong> endpoint que já alimenta a barra de "Recarregar dados" — numa requisição paralela e independente, enquanto o carregamento bloqueante ainda está em andamento. Funciona porque o servidor atende cada requisição numa thread própria (<code>ThreadingHTTPServer</code>): a thread que monta o dataset atualiza <code>_build_status</code> a cada fase, e a thread da sondagem lê esse mesmo dicionário compartilhado.</p>
+                <div class="table-wrap"><table>
+                    <tr><th>Peça</th><th>Papel</th></tr>
+                    <tr><td>Overlay inline em <code>index.html</code></td><td>Sonda <code>/api/load-status</code> a cada 300ms, atualiza barra/label; se <code>phase === 'erro'</code>, mostra a mensagem real e <strong>para de sondar</strong> (fica visível, não trava numa barra parada).</td></tr>
+                    <tr><td><code>window.__hideInitialLoadOverlay()</code></td><td>Exposta pelo script inline; chamada só depois de <code>init()</code> terminar de renderizar tudo — nunca antes, pra não expor um flash de UI vazia.</td></tr>
+                    <tr><td>Guarda em <code>window.INDEX_DATA && window.OBS_DATA</code></td><td>Se os dados vieram <code>null</code> (erro — ver <code>Handler._send_data_error</code>), o boot inteiro é pulado: nada para renderizar, e tentar mesmo assim geraria uma exceção não tratada lendo campo de <code>null</code>. O overlay já mostra o erro e continua visível.</td></tr>
+                </table></div>
+                <div class="callout callout-warn">
+                    <div class="icon-dot">!</div>
+                    <p>Este overlay existe só em <code>index.html</code> — as 3 páginas avulsas não o têm (o mesmo padrão pode ser copiado se algum dia isso incomodar lá também, mas hoje o cache já costuma estar quente quando elas abrem).</p>
+                </div>
             </section>
 
             <!-- ================================================================ -->
