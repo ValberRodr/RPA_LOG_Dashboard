@@ -367,6 +367,17 @@
             height: 14px;
         }
 
+        .load-period-select {
+            border: 0;
+            outline: 0;
+            background: transparent;
+            color: var(--text);
+            font: 600 12px/1 inherit;
+            padding: 7px 26px 7px 2px;
+            cursor: pointer;
+            min-width: 112px;
+        }
+
         .btn-reload {
             border: 1px solid var(--border-strong);
             background: var(--panel-2);
@@ -2103,9 +2114,13 @@
         var phaseLabels = {
             'localizando arquivos': 'Localizando arquivos',
             'filtrando período': 'Filtrando período',
-            'lendo logs de execução': 'Lendo logs de execução',
-            'lendo logs de etapas': 'Lendo logs de etapas',
-            'lendo telemetria das VMs': 'Lendo telemetria das VMs',
+            'indexando histórico no SQLite': 'Criando banco SQLite com o histórico',
+            'sincronizando novos logs': 'Sincronizando arquivos novos/alterados',
+            'consultando banco SQLite': 'Consultando banco SQLite',
+            'consultando execuções no SQLite': 'Carregando execuções do banco',
+            'consultando etapas no SQLite': 'Carregando etapas do banco',
+            'consultando telemetria no SQLite': 'Carregando telemetria do banco',
+            'aguardando atualização': 'Preparando atualização',
             'vinculando execuções e agenda': 'Vinculando execuções e agenda',
             'calculando indicadores': 'Calculando indicadores',
             'atualizando visualizações': 'Atualizando visualizações',
@@ -2242,12 +2257,14 @@
 
                 <div class="topbar-spacer"></div>
 
-                <div class="load-control">
-                    <label class="load-toggle" title="Só entra em vigor ao clicar em Recarregar dados">
-                        <input type="checkbox" id="fullHistoryToggle">
-                        <span>Histórico completo</span>
-                    </label>
-                    <button class="btn-reload" id="reloadButton" type="button">Recarregar dados</button>
+                <div class="load-control" title="Período consultado no banco SQLite">
+                    <select class="load-period-select" id="dataWindowSelect" aria-label="Período de dados">
+                        <option value="30d" selected>Últimos 30 dias</option>
+                        <option value="90d">Últimos 90 dias</option>
+                        <option value="120d">Últimos 120 dias</option>
+                        <option value="full">Todos os logs</option>
+                    </select>
+                    <button class="btn-reload" id="reloadButton" type="button" title="Buscar arquivos novos/alterados e atualizar o banco">Atualizar</button>
                 </div>
 
                 <div class="snapshot-pill" id="periodPill" title="Período de logs efetivamente carregado">
@@ -2884,8 +2901,8 @@
     <div class="toast" id="toast"></div>
 
     <script src="assets/chart.umd.min.js"></script>
-    <script src="assets/observability-data.js?mode=90d"></script>
-    <script src="assets/index-data.js?mode=90d"></script>
+    <script src="assets/observability-data.js?mode=30d"></script>
+    <script src="assets/index-data.js?mode=30d"></script>
     <script src="assets/auto-refresh.js"></script>
     <script src="assets/dashboard-app.js"></script>
     <!-- Integração opcional Automation Anywhere — carregada depois do script
