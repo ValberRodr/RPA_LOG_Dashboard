@@ -34,12 +34,9 @@ O que é coberto:
                             sempre contra um arquivo JSON temporário — nunca
                             toca config/rpa_metadata.json real do projeto.
 
-Este é um script de teste local (unittest da biblioteca padrão), não uma
-pipeline de CI hospedada — decisão tomada explicitamente para não introduzir
-dependência de infraestrutura externa num projeto que roda 100% localmente.
-Se um pipeline hospedado (GitHub Actions, etc.) for necessário depois, este
-mesmo arquivo é o ponto de partida: qualquer runner Python 3.9+ consegue
-executar `python3 test_server.py` sem instalar nada.
+A mesma suíte roda localmente e também no workflow "Validar aplicação" do
+GitHub Actions. Continua sem dependências externas: qualquer Python 3.9+
+consegue executar `python3 test_server.py` sem instalar pacotes adicionais.
 """
 from __future__ import annotations
 
@@ -53,7 +50,7 @@ import unittest
 import unittest.mock
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
