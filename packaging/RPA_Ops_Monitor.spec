@@ -20,8 +20,10 @@
 # empacotado ela aponta pra pasta do executável real, nunca para dentro
 # deste bundle.
 from pathlib import Path
+import sys
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parent
+WINDOWS_ICON = PROJECT_ROOT / 'packaging' / 'RPA_Ops_Monitor.ico'
 
 # assets/observability-data.js e assets/index-data.js são só o fallback
 # estático usado quando alguém abre os HTMLs direto via file:// (sem
@@ -69,6 +71,9 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
+    # Ícone do app no Windows. O .ico é reconstruído pelo build_windows.bat
+    # a partir do arquivo versionado RPA_Ops_Monitor.ico.b64.
+    icon=str(WINDOWS_ICON) if sys.platform.startswith('win') and WINDOWS_ICON.is_file() else None,
     # Sem janela de terminal atrás do painel (server.py redireciona
     # stdout/stderr para RPA_Ops_Monitor.log ao lado do executável quando
     # roda nesse modo — ver o comentário logo no topo de server.py — então
