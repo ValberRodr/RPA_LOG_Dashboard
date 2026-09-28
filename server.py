@@ -688,48 +688,79 @@ class DatasetBuilder:
     index.html."""
 
     @staticmethod
-    def build_dataset(mode='90d'):
-        _build_status.update(phase='localizando arquivos', percent=3, mode=mode,
-                              filesFound=0, filesProcessed=0, filesSkippedWindow=0, filesInvalid=0,
-                              executions=0, events=0, vmSnapshots=0, error=None,
-                              startedAt=datetime.now().isoformat(timespec='seconds'), finishedAt=None)
+    def build_dataset(mode='30d'):
+        # A primeira chamada cria/sincroniza o SQLite. Depois desta etapa,
+        # trocar 30/90/120/full consulta somente o banco e não reabre os logs.
+        log_store.ensure_ready()
         issues = []
         now = datetime.now()
         window_start, window_end = _window_bounds(mode)
-        _build_status.update(windowStart=window_start.isoformat() if window_start else None,
-                              windowEnd=window_end.isoformat())
+        _build_status.update(
+            phase='consultando banco SQLite', percent=max(56, int(_build_status.get('percent') or 0)),
+            mode=mode, windowStart=window_start.isoformat() if window_start else None,
+            windowEnd=window_end.isoformat(), executions=0, events=0, vmSnapshots=0,
+            error=None, finishedAt=None,
+        )
 
-        meta = json.loads(META_FILE.read_text(encoding='utf-8'))
-        rpas = meta['rpas']; schedules = meta['schedules']
-        by_process = {r['process']: r for r in rpas}
+        meta = rpa_registry._load()
+        rpas = meta.get('rpas', [])
+        schedules = meta.get('schedules', [])
+        by_process = {r.get('process'): r for r in rpas if r.get('process')}
 
-        _build_status.update(phase='filtrando período', percent=8)
-        exec_files, event_files = _collect_exec_files(window_start, window_end)
-        vm_files = _collect_vm_files(window_start, window_end)
+        db_stats = log_store.stats()
+        if db_stats.get('syncWarning'):
+            issues.append({
+                'file': DB_FILE.name, 'path': str(DB_FILE), 'type': 'DB_SYNC_WARNING',
+                'error': db_stats['syncWarning'], 'phase': 'sincronização SQLite',
+                'timestamp': datetime.now().isoformat(timespec='seconds'),
+                'action': 'O dashboard usou o último snapshot válido do banco.',
+            })
 
         # ------------------------------------------------------------------
-        # Execuções: arquivos consolidados do dia (RPA_YYYY-MM-DD.log)
+        # Execuções: lidas do SQLite já normalizado/importado.
         # ------------------------------------------------------------------
-        _build_status.update(phase='lendo logs de execução', percent=18)
-        raw_execs = []
-        for p in exec_files:
-            raw_execs.extend(_read_cached(p, issues))
-        raw_execs.sort(key=lambda x: x['start_time'])
+        _build_status.update(phase='consultando execuções no SQLite', percent=62)
+        raw_execs = log_store.read_rows('execution', window_start, window_end)
+        raw_execs.sort(key=lambda x: x.get('start_time') or '')
 
         executions = []
         for e in raw_execs:
             rpa = by_process.get(e['process_name'])
             if not rpa: continue
             start = dt(e['start_time']); end = dt(e['end_time'])
-            sch, scheduled = _nearest_schedule(schedules, e['process_name'], start)
-            latest_start = scheduled.replace(second=0) + timedelta(minutes=(dt(scheduled.isoformat().split('T')[0]+'T'+sch['latestStartTime']) - dt(scheduled.isoformat().split('T')[0]+'T'+sch['scheduledTime'])).total_seconds()/60)
-            warning_finish = scheduled + timedelta(minutes=float(sch['warningDurationMin']))
-            deadline = scheduled + timedelta(minutes=float(sch['maxDurationMin']))
-            dur_min = round(float(e['duration_seconds'])/60,2)
-            if dur_min <= float(sch['warningDurationMin']): dur_comp='NORMAL'
-            elif dur_min <= float(sch['maxDurationMin']): dur_comp='DEGRADADA'
+            dur_min = round(float(e.get('duration_seconds') or 0)/60, 2)
+            schedule_candidates = [s for s in schedules if s.get('process') == e.get('process_name')]
+            if schedule_candidates:
+                sch, scheduled = _nearest_schedule(schedules, e['process_name'], start)
+                latest_start = scheduled.replace(second=0) + timedelta(minutes=(dt(scheduled.isoformat().split('T')[0]+'T'+sch['latestStartTime']) - dt(scheduled.isoformat().split('T')[0]+'T'+sch['scheduledTime'])).total_seconds()/60)
+                warning_finish = scheduled + timedelta(minutes=float(sch['warningDurationMin']))
+                deadline = scheduled + timedelta(minutes=float(sch['maxDurationMin']))
+                warn_limit = float(sch['warningDurationMin'])
+                max_limit = float(sch['maxDurationMin'])
+                expected_key = f"ER-{rpa['rpaId']}-{scheduled:%Y%m%d}-{scheduled:%H%M}"
+                start_compliance = 'NO_PRAZO' if start <= latest_start else 'ATRASADA'
+                deadline_compliance = 'NO_PRAZO' if end <= deadline else 'SLA_ESTOURADO'
+                start_delay = round((start-scheduled).total_seconds())
+                completion_delay = round((end-deadline).total_seconds())
+            else:
+                # Cadastro incompleto não pode derrubar todo o dashboard.
+                # A execução real continua visível; apenas métricas de agenda
+                # ficam marcadas como SEM_AGENDA até o cadastro ser corrigido.
+                scheduled = start.replace(second=0, microsecond=0)
+                warn_limit = float(rpa.get('warningDurationMin') or rpa.get('expectedDurationMin') or max(dur_min, 1))
+                max_limit = float(rpa.get('maxDurationMin') or max(warn_limit, dur_min, 1))
+                sch = {'scheduleId': None, 'scheduledTime': scheduled.strftime('%H:%M')}
+                latest_start = scheduled
+                warning_finish = scheduled + timedelta(minutes=warn_limit)
+                deadline = scheduled + timedelta(minutes=max_limit)
+                expected_key = f"ACTUAL-{rpa['rpaId']}-{e.get('execution_id')}"
+                start_compliance = 'SEM_AGENDA'
+                deadline_compliance = 'SEM_AGENDA'
+                start_delay = 0
+                completion_delay = 0
+            if dur_min <= warn_limit: dur_comp='NORMAL'
+            elif dur_min <= max_limit: dur_comp='DEGRADADA'
             else: dur_comp='CRITICA'
-            expected_key = f"ER-{rpa['rpaId']}-{scheduled:%Y%m%d}-{scheduled:%H%M}"
             executions.append({
                 'executionId': e['execution_id'], 'rpaId': rpa['rpaId'], 'process': e['process_name'],
                 'status': e['status'], 'start': e['start_time'], 'end': e['end_time'], 'durationMin': dur_min,
@@ -737,15 +768,15 @@ class DatasetBuilder:
                 'warningItems': e['warning_items'], 'errorItems': e['error_items'], 'retryCount': e['retry_count'],
                 'machine': e['machine_name'], 'version': e['version'], 'robotName': e['robot_name'],
                 'orchestrator': e['orchestrator'], 'environment': e['environment'],
-                'scheduleId': sch['scheduleId'], 'expectedRunKey': expected_key,
-                'scheduledTime': sch['scheduledTime'], 'scheduledDatetime': scheduled.isoformat(timespec='seconds'),
+                'scheduleId': sch.get('scheduleId'), 'expectedRunKey': expected_key,
+                'scheduledTime': sch.get('scheduledTime'), 'scheduledDatetime': scheduled.isoformat(timespec='seconds'),
                 'latestStartDatetime': latest_start.isoformat(timespec='seconds'),
                 'warningFinishDatetime': warning_finish.isoformat(timespec='seconds'),
                 'deadlineDatetime': deadline.isoformat(timespec='seconds'),
-                'startDelaySec': round((start-scheduled).total_seconds()),
-                'completionDelaySec': round((end-deadline).total_seconds()),
-                'startCompliance': 'NO_PRAZO' if start <= latest_start else 'ATRASADA',
-                'deadlineCompliance': 'NO_PRAZO' if end <= deadline else 'SLA_ESTOURADO',
+                'startDelaySec': start_delay,
+                'completionDelaySec': completion_delay,
+                'startCompliance': start_compliance,
+                'deadlineCompliance': deadline_compliance,
                 'durationCompliance': dur_comp,
             })
         _build_status['executions'] = len(executions)
@@ -755,21 +786,20 @@ class DatasetBuilder:
         # ------------------------------------------------------------------
         # Eventos: arquivos RPA_YYYY-MM-DD_EXECUTION_ID.log
         # ------------------------------------------------------------------
-        _build_status.update(phase='lendo logs de etapas', percent=38)
+        _build_status.update(phase='consultando etapas no SQLite', percent=70)
         events_by_exec = defaultdict(list)
-        for p in event_files:
-            for x in _read_cached(p, issues):
-                eid = x.get('execution_id')
-                if not eid: continue
-                start = dt(x['timestamp']); dur=float(x.get('duration_seconds') or 0)
-                events_by_exec[eid].append({
-                    'timestamp': x['timestamp'], 'endTimestamp': (start+timedelta(seconds=dur)).isoformat(timespec='seconds'),
-                    'transactionId': x.get('transaction_id'), 'loopNumber': x.get('loop_number',1),
-                    'step': x.get('step_name'), 'order': x.get('step_order'), 'severity': x.get('severity'),
-                    'status': x.get('status'), 'durationSec': round(dur,2), 'message': x.get('message'),
-                    'application': x.get('application'), 'errorCode': x.get('error_code'),
-                    'errorType': x.get('error_type'), 'errorMessage': x.get('error_message')
-                })
+        for x in log_store.read_rows('event', window_start, window_end):
+            eid = x.get('execution_id')
+            if not eid: continue
+            start = dt(x['timestamp']); dur=float(x.get('duration_seconds') or 0)
+            events_by_exec[eid].append({
+                'timestamp': x['timestamp'], 'endTimestamp': (start+timedelta(seconds=dur)).isoformat(timespec='seconds'),
+                'transactionId': x.get('transaction_id'), 'loopNumber': x.get('loop_number',1),
+                'step': x.get('step_name'), 'order': x.get('step_order'), 'severity': x.get('severity'),
+                'status': x.get('status'), 'durationSec': round(dur,2), 'message': x.get('message'),
+                'application': x.get('application'), 'errorCode': x.get('error_code'),
+                'errorType': x.get('error_type'), 'errorMessage': x.get('error_message')
+            })
         for eid in list(events_by_exec):
             events_by_exec[eid].sort(key=lambda x:(x['timestamp'],x.get('order') or 0,x.get('loopNumber') or 1))
         _build_status['events'] = sum(len(v) for v in events_by_exec.values())
@@ -777,19 +807,18 @@ class DatasetBuilder:
         # ------------------------------------------------------------------
         # Telemetria das VMs
         # ------------------------------------------------------------------
-        _build_status.update(phase='lendo telemetria das VMs', percent=58)
+        _build_status.update(phase='consultando telemetria no SQLite', percent=78)
         vm_history = defaultdict(list)
-        for p in vm_files:
-            for x in _read_cached(p, issues):
-                if 'machine_name' in x:
-                    vm_history[x['machine_name']].append(x)
+        for x in log_store.read_rows('vm', window_start, window_end):
+            if 'machine_name' in x:
+                vm_history[x['machine_name']].append(x)
         vm_times = {}
         for machine in list(vm_history):
             vm_history[machine].sort(key=lambda x:x['data'])
             vm_times[machine]=[dt(x['data']) for x in vm_history[machine]]
         _build_status['vmSnapshots'] = sum(len(v) for v in vm_history.values())
 
-        _build_status.update(phase='vinculando execuções e agenda', percent=70)
+        _build_status.update(phase='vinculando execuções e agenda', percent=84)
         vm_context = {}
         for e in executions:
             rows=vm_history.get(e['machine'],[]); times=vm_times.get(e['machine'],[])
@@ -807,7 +836,7 @@ class DatasetBuilder:
         # ------------------------------------------------------------------
         # Agregados históricos por RPA
         # ------------------------------------------------------------------
-        _build_status.update(phase='calculando indicadores', percent=82)
+        _build_status.update(phase='calculando indicadores', percent=90)
         aggregates={}
         dependency_status={}
         period_start_dt = dt(min(e['start'] for e in executions)) if executions else None
@@ -883,7 +912,7 @@ class DatasetBuilder:
 
         vm_latest={m:rows[-1] for m,rows in vm_history.items() if rows}
 
-        _build_status.update(phase='atualizando visualizações', percent=94)
+        _build_status.update(phase='atualizando visualizações', percent=96)
         obs={
             'snapshot':snapshot.replace(' ','T'),'periodStart':period_start,'periodEnd':period_end,
             'rpas':rpas,'schedules':schedules,'executions':executions,
