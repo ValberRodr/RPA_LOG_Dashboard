@@ -32,6 +32,8 @@ class SQLiteLogStore:
     LOCK_STALE_SECONDS = 15 * 60
     INCREMENTAL_LOOKBACK_DAYS = 62
     FILE_GUARD_BYTES = 512
+    READ_RETRY_TIMEOUTS = (8, 30, 90)
+    READ_RETRY_BACKOFF = (1.0, 2.0)
 
     def __init__(self, db_path: Path, log_root: Path, vm_root: Path,
                  exec_pattern, vm_pattern, status_callback=None):
@@ -88,14 +90,14 @@ class SQLiteLogStore:
                 except OSError:
                     pass
 
-    def _connect(self):
+    def _connect(self, timeout_seconds=30):
         try:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(str(self.db_path), timeout=30)
+            conn = sqlite3.connect(str(self.db_path), timeout=float(timeout_seconds))
         except Exception as exc:
             raise RuntimeError(f'Não foi possível abrir/criar o banco SQLite em {self.db_path}: {exc}') from exc
         conn.row_factory = sqlite3.Row
-        conn.execute('PRAGMA busy_timeout=15000')
+        conn.execute(f'PRAGMA busy_timeout={max(1, int(float(timeout_seconds) * 1000))}')
         conn.execute('PRAGMA foreign_keys=ON')
         # WAL depende de shared-memory local e não é seguro/portável em SMB.
         try:
@@ -104,6 +106,84 @@ class SQLiteLogStore:
             pass
         conn.execute('PRAGMA synchronous=FULL')
         return conn
+
+    @staticmethod
+    def _is_busy_error(exc):
+        message = str(exc).lower()
+        return ('locked' in message or 'busy' in message or
+                'database is locked' in message or 'database table is locked' in message)
+
+    def _read_with_retry(self, label, reader):
+        """Executa uma leitura com espera progressiva quando outro processo
+        está escrevendo no SQLite compartilhado.
+
+        Tentativas: 8s -> 30s -> 90s. O status é enviado ao front para que o
+        usuário veja claramente que o aplicativo está aguardando o banco,
+        em vez de parecer travado.
+        """
+        last_exc = None
+        total_attempts = len(self.READ_RETRY_TIMEOUTS)
+        for idx, timeout_seconds in enumerate(self.READ_RETRY_TIMEOUTS, start=1):
+            self._status(
+                phase='aguardando leitura do SQLite',
+                dbRetryActive=True,
+                dbRetryAttempt=idx,
+                dbRetryTotal=total_attempts,
+                dbRetryTimeout=timeout_seconds,
+                dbRetryLabel=label,
+                dbRetryMessage=(
+                    f'Aguardando acesso ao banco SQLite — tentativa {idx}/{total_attempts}, '
+                    f'até {timeout_seconds}s'
+                ),
+            )
+            try:
+                conn = self._connect(timeout_seconds=timeout_seconds)
+                try:
+                    result = reader(conn)
+                    self._status(
+                        dbRetryActive=False,
+                        dbRetryAttempt=0,
+                        dbRetryTotal=total_attempts,
+                        dbRetryTimeout=0,
+                        dbRetryLabel=None,
+                        dbRetryMessage=None,
+                    )
+                    return result
+                finally:
+                    conn.close()
+            except sqlite3.OperationalError as exc:
+                if not self._is_busy_error(exc):
+                    self._status(dbRetryActive=False, dbRetryMessage=None)
+                    raise
+                last_exc = exc
+                if idx >= total_attempts:
+                    break
+                wait_seconds = self.READ_RETRY_BACKOFF[min(idx - 1, len(self.READ_RETRY_BACKOFF) - 1)]
+                next_timeout = self.READ_RETRY_TIMEOUTS[idx]
+                self._status(
+                    phase='SQLite ocupado — aguardando nova tentativa',
+                    dbRetryActive=True,
+                    dbRetryAttempt=idx,
+                    dbRetryTotal=total_attempts,
+                    dbRetryTimeout=next_timeout,
+                    dbRetryLabel=label,
+                    dbRetryMessage=(
+                        f'Banco SQLite ocupado por outra sessão. Nova tentativa em '
+                        f'{wait_seconds:g}s, com espera de até {next_timeout}s.'
+                    ),
+                )
+                time.sleep(wait_seconds)
+
+        self._status(
+            phase='erro',
+            dbRetryActive=False,
+            dbRetryMessage=None,
+            error='Banco SQLite permaneceu ocupado após 3 tentativas.',
+        )
+        raise RuntimeError(
+            'O banco SQLite permaneceu ocupado após tentativas de 8s, 30s e 90s. '
+            'Outra sessão pode estar atualizando os dados; aguarde e tente novamente.'
+        ) from last_exc
 
     def _ensure_schema(self, conn):
         conn.executescript("""
@@ -575,13 +655,10 @@ class SQLiteLogStore:
     def has_data(self):
         if not self.db_path.exists():
             return False
-        try:
-            with self._connect() as conn:
-                self._ensure_schema(conn)
-                row = conn.execute('SELECT 1 FROM raw_records LIMIT 1').fetchone()
-                return row is not None
-        except Exception:
-            return False
+        return self._read_with_retry(
+            'verificando banco existente',
+            lambda conn: conn.execute('SELECT 1 FROM raw_records LIMIT 1').fetchone() is not None,
+        )
 
     def ensure_ready(self):
         """Na primeira consulta do processo: cria/importa tudo ou faz sync incremental."""
@@ -653,39 +730,46 @@ class SQLiteLogStore:
                     }
 
     def revision(self, conn=None):
-        owns = conn is None
-        if owns:
-            conn = self._connect()
-            self._ensure_schema(conn)
-        try:
+        if conn is not None:
             row = conn.execute("SELECT value FROM store_meta WHERE key='revision'").fetchone()
             return int(row['value']) if row else 0
-        finally:
-            if owns:
-                conn.close()
+        return self._read_with_retry(
+            'lendo revisão do banco',
+            lambda read_conn: (
+                int(row['value']) if (row := read_conn.execute(
+                    "SELECT value FROM store_meta WHERE key='revision'"
+                ).fetchone()) else 0
+            ),
+        )
 
     def last_sync_at(self):
         if not self.db_path.exists():
             return None
-        with self._connect() as conn:
-            self._ensure_schema(conn)
-            row = conn.execute("SELECT value FROM store_meta WHERE key='last_sync_at'").fetchone()
-            return row['value'] if row else None
+        return self._read_with_retry(
+            'lendo última sincronização',
+            lambda conn: (
+                row['value'] if (row := conn.execute(
+                    "SELECT value FROM store_meta WHERE key='last_sync_at'"
+                ).fetchone()) else None
+            ),
+        )
 
     def read_rows(self, kind, window_start, window_end):
         self.ensure_ready()
-        with self._connect() as conn:
-            self._ensure_schema(conn)
-            params = [kind]
-            where = ['kind=?']
-            if window_start is not None:
-                where.append('record_ts>=?')
-                params.append(f'{window_start.isoformat()}T00:00:00')
-            if window_end is not None:
-                where.append('record_ts<?')
-                params.append(f'{(window_end + timedelta(days=1)).isoformat()}T00:00:00')
-            sql = 'SELECT payload_json FROM raw_records WHERE ' + ' AND '.join(where) + ' ORDER BY record_ts'
-            rows = conn.execute(sql, params).fetchall()
+        params = [kind]
+        where = ['kind=?']
+        if window_start is not None:
+            where.append('record_ts>=?')
+            params.append(f'{window_start.isoformat()}T00:00:00')
+        if window_end is not None:
+            where.append('record_ts<?')
+            params.append(f'{(window_end + timedelta(days=1)).isoformat()}T00:00:00')
+        sql = 'SELECT payload_json FROM raw_records WHERE ' + ' AND '.join(where) + ' ORDER BY record_ts'
+
+        rows = self._read_with_retry(
+            f'lendo registros de {kind}',
+            lambda conn: conn.execute(sql, params).fetchall(),
+        )
         result = []
         for row in rows:
             try:
@@ -696,23 +780,24 @@ class SQLiteLogStore:
 
     def latest_per_rpa(self):
         self.ensure_ready()
-        with self._connect() as conn:
-            self._ensure_schema(conn)
-            rows = conn.execute(
+        rows = self._read_with_retry(
+            'lendo última execução por RPA',
+            lambda conn: conn.execute(
                 """SELECT process_name, MAX(record_ts) AS latest
                    FROM raw_records
                    WHERE kind='execution' AND process_name IS NOT NULL
                    GROUP BY process_name
                    ORDER BY process_name"""
-            ).fetchall()
-            return {row['process_name']: row['latest'] for row in rows}
+            ).fetchall(),
+        )
+        return {row['process_name']: row['latest'] for row in rows}
 
     def latest_execution_rows(self):
         """Retorna só a execução mais recente de cada processo, direto do SQL."""
         self.ensure_ready()
-        with self._connect() as conn:
-            self._ensure_schema(conn)
-            rows = conn.execute(
+        rows = self._read_with_retry(
+            'lendo execução mais recente de cada RPA',
+            lambda conn: conn.execute(
                 """SELECT r.payload_json
                    FROM raw_records r
                    JOIN (
@@ -724,7 +809,8 @@ class SQLiteLogStore:
                      ON x.process_name = r.process_name AND x.latest = r.record_ts
                    WHERE r.kind='execution'
                    ORDER BY r.process_name"""
-            ).fetchall()
+            ).fetchall(),
+        )
         result = []
         seen = set()
         for row in rows:
@@ -745,8 +831,8 @@ class SQLiteLogStore:
                 'sourceFiles': 0, 'records': 0, 'latestPerRpa': {},
                 'syncWarning': self._last_sync_warning,
             }
-        with self._connect() as conn:
-            self._ensure_schema(conn)
+
+        def reader(conn):
             source_files = conn.execute('SELECT COUNT(*) AS n FROM source_files').fetchone()['n']
             records = conn.execute('SELECT COUNT(*) AS n FROM raw_records').fetchone()['n']
             last = conn.execute("SELECT value FROM store_meta WHERE key='last_sync_at'").fetchone()
@@ -756,6 +842,12 @@ class SQLiteLogStore:
                    WHERE kind='execution' AND process_name IS NOT NULL
                    GROUP BY process_name"""
             ).fetchall()
+            return source_files, records, last, latest
+
+        source_files, records, last, latest = self._read_with_retry(
+            'lendo estatísticas do banco',
+            reader,
+        )
         return {
             'dbFile': self.db_path.name,
             'exists': True,
