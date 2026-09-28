@@ -406,7 +406,7 @@ class CsrfTokenStore {
 
 /* =========================================================================
    RpaDataStore — acesso a DATA/OBS_DATA, montagem do detalhe de auditoria e
-   todo o ciclo de carregamento incremental (90 dias / histórico completo).
+   todo o ciclo de carregamento incremental (30/90/120 dias / histórico completo).
    ========================================================================= */
 class RpaDataStore {
     static PHASE_LABELS = {
@@ -818,7 +818,8 @@ class OverviewPage {
         } else {
             const start = stats.windowStart ? new Date(stats.windowStart + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
             const end = stats.windowEnd ? new Date(stats.windowEnd + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
-            label.textContent = `Período carregado: últimos 90 dias (${start} → ${end})`;
+            const modeLabel = { '30d': '30 dias', '90d': '90 dias', '120d': '120 dias' }[stats.mode] || 'período selecionado';
+            label.textContent = `Período carregado: últimos ${modeLabel} (${start} → ${end})`;
         }
     }
 
@@ -2205,16 +2206,24 @@ class RpaOpsApp {
         const savedPage = sessionStorage.getItem('rpaOpsActivePage');
         if (savedPage && document.getElementById(`page-${savedPage}`)) NavigationController.goToPage(savedPage);
 
-        DomUtils.$('#executionPeriod').addEventListener('change', () => {
-            UiFeedback.showToast('O período global do dashboard é controlado no seletor do topo.');
-        });
-
         const dataWindowSelect = DomUtils.$('#dataWindowSelect');
+        const executionPeriod = DomUtils.$('#executionPeriod');
+        const currentMode = DATA.loadStats?.mode || '30d';
+
         if (dataWindowSelect) {
-            dataWindowSelect.value = DATA.loadStats?.mode || '30d';
+            dataWindowSelect.value = currentMode;
             dataWindowSelect.addEventListener('change', () => {
+                if (executionPeriod) executionPeriod.value = dataWindowSelect.value;
                 // Troca de período consulta apenas o SQLite: não relê arquivos.
                 RpaDataStore.reloadData(dataWindowSelect.value, false);
+            });
+        }
+
+        if (executionPeriod) {
+            executionPeriod.value = currentMode;
+            executionPeriod.addEventListener('change', () => {
+                if (dataWindowSelect) dataWindowSelect.value = executionPeriod.value;
+                RpaDataStore.reloadData(executionPeriod.value, false);
             });
         }
 
