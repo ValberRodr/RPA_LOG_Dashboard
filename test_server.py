@@ -642,6 +642,69 @@ class TestAutomationAnywhereSsrfGuard(unittest.TestCase):
         self.assertIn('NETWORK_ERROR', net_err)
 
 
+class TestAutomationAnywhereProxyMode(unittest.TestCase):
+    """Regressão: rede corporativa cujo firewall só libera saída para a
+    internet através de um proxy HTTP (descoberto pelo navegador via PAC) —
+    conectar direto no IP pinado trava em timeout. `AA_PROXY` liga esse modo;
+    `_do_one_request_via_proxy` é sempre mockado aqui (nunca abre socket de
+    verdade), igual ao padrão de `TestAutomationAnywhereSsrfGuard` acima."""
+
+    def setUp(self):
+        self.gateway = server.AutomationAnywhereGateway(
+            config_file=Path('/nonexistent-on-purpose.json'), get_data_fn=lambda: (None, None),
+        )
+
+    def test_resolve_proxy_returns_none_when_not_configured(self):
+        with unittest.mock.patch.object(server, 'AA_PROXY', None):
+            self.assertIsNone(self.gateway._resolve_proxy())
+
+    def test_resolve_proxy_parses_host_and_port(self):
+        with unittest.mock.patch.object(server, 'AA_PROXY', 'proxy.bradseg.com.br:80'):
+            self.assertEqual(self.gateway._resolve_proxy(), ('proxy.bradseg.com.br', 80))
+
+    def test_blocked_host_literal_blocks_loopback_without_dns(self):
+        self.assertTrue(self.gateway._blocked_host_literal('http://127.0.0.1:9999/v2/x'))
+        self.assertTrue(self.gateway._blocked_host_literal('http://localhost/v2/x'))
+        self.assertTrue(self.gateway._blocked_host_literal('http://169.254.169.254/latest/meta-data'))
+
+    def test_blocked_host_literal_allows_real_domain_without_resolving_dns(self):
+        # Domínio real de SaaS (nunca resolvido de verdade aqui — a checagem
+        # em modo proxy é só textual, propositalmente, ver docstring).
+        self.assertFalse(self.gateway._blocked_host_literal('https://empresa.my.automationanywhere.digital/v2/x'))
+
+    def test_forward_uses_proxy_transport_when_configured(self):
+        with unittest.mock.patch.object(server, 'AA_PROXY', 'proxy.bradseg.com.br:80'), \
+             unittest.mock.patch.object(self.gateway, '_do_one_request_via_proxy', return_value=(200, b'{"ok":true}', None)) as mocked, \
+             unittest.mock.patch.object(self.gateway, '_do_one_request') as direct_mocked:
+            status, raw, net_err = self.gateway._forward('GET', 'https://empresa.my.automationanywhere.digital/v2/x', {}, None)
+        mocked.assert_called_once_with('GET', 'https://empresa.my.automationanywhere.digital/v2/x', {}, None, 'proxy.bradseg.com.br', 80)
+        direct_mocked.assert_not_called()  # nunca tenta pinar IP/conectar direto quando há proxy
+        self.assertEqual(status, 200)
+        self.assertEqual(raw, b'{"ok":true}')
+        self.assertIsNone(net_err)
+
+    def test_forward_short_circuits_on_blocked_target_in_proxy_mode_without_network_call(self):
+        with unittest.mock.patch.object(server, 'AA_PROXY', 'proxy.bradseg.com.br:80'), \
+             unittest.mock.patch.object(self.gateway, '_do_one_request_via_proxy') as mocked:
+            status, raw, net_err = self.gateway._forward('GET', 'http://127.0.0.1:9999/v2/x', {}, None)
+        mocked.assert_not_called()
+        self.assertEqual(status, 0)
+        self.assertIsNone(raw)
+        self.assertIn('SSRF_BLOCKED', net_err)
+
+    def test_redirect_to_blocked_target_is_not_followed_in_proxy_mode(self):
+        with unittest.mock.patch.object(server, 'AA_PROXY', 'proxy.bradseg.com.br:80'), \
+             unittest.mock.patch.object(
+                 self.gateway, '_do_one_request_via_proxy',
+                 return_value=(302, b'', 'http://127.0.0.1:9999/v2/roubo'),
+             ) as mocked:
+            status, raw, net_err = self.gateway._forward('GET', 'https://empresa.my.automationanywhere.digital/v2/x', {}, None)
+        mocked.assert_called_once()
+        self.assertEqual(status, 0)
+        self.assertIsNone(raw)
+        self.assertIn('SSRF_BLOCKED', net_err)
+
+
 class TestDatasetWithEmptyRegistry(unittest.TestCase):
     """Regressão do erro visto em produção: rpa_metadata.json = {} não pode
     terminar em KeyError: 'rpas' nem impedir o dashboard de subir."""

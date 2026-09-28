@@ -97,6 +97,21 @@ DEFAULT_DATA_ROOT = (
 LOG_BASE = Path(os.environ.get('RPA_MONITOR_DATA_ROOT', str(DEFAULT_DATA_ROOT)))
 RPA_LOG_ROOT = LOG_BASE / 'Logs'
 
+# Proxy HTTP corporativo para a integração com o Automation Anywhere: nesta
+# rede, o firewall de perímetro só libera saída para a internet através de
+# um proxy — o navegador descobre isso sozinho via o script PAC configurado
+# no Windows (Configurações de Internet); conectar direto no IP da Control
+# Room (mesmo já validado contra SSRF — ver AutomationAnywhereGateway)
+# trava em timeout, porque o firewall derruba a conexão direta. Sem
+# interpretador de PAC embutido (o projeto não usa dependências externas —
+# ver README.txt), então usamos aqui o mesmo proxy que o PAC devolve por
+# padrão (`else`) para qualquer destino fora da lista de domínios internos
+# — ver THREAT_MODEL.md, cenário 11. Só no Windows de propósito, mesmo
+# raciocínio do DEFAULT_DATA_ROOT: no macOS/CI não existe esse proxy nem
+# faria sentido usá-lo.
+DEFAULT_AA_PROXY = 'proxy.bradseg.com.br:80' if sys.platform.startswith('win') else None
+AA_PROXY = os.environ.get('RPA_MONITOR_AA_PROXY', DEFAULT_AA_PROXY or '') or None
+
 # A estrutura histórica já usada pelo projeto é VMS/Historico. Se o ambiente
 # oficial armazenar ano/mês diretamente em VMS, detectamos isso automaticamente.
 # RPA_MONITOR_VM_ROOT continua disponível como override explícito.
@@ -1949,7 +1964,63 @@ class AutomationAnywhereGateway:
         ip, _error = cls._resolve_pinned_ip(url)
         return ip is None
 
+    @classmethod
+    def _blocked_host_literal(cls, url):
+        """Checagem sem DNS do host de `url` — usada só no modo com proxy
+        corporativo (`AA_PROXY`), onde é o PRÓPRIO PROXY quem resolve o
+        destino final (o túnel CONNECT não permite pinar o IP nós mesmos, ao
+        contrário de `_resolve_pinned_ip`). Sem essa resolução, perde-se a
+        defesa contra DNS rebinding/TOCTOU do modo direto — mitigado por o
+        proxy corporativo ser uma infraestrutura já sob controle/observação
+        de TI, não do usuário que digita o `baseUrl` (ver THREAT_MODEL.md,
+        cenário 11). Ainda assim barra de graça qualquer host já obviamente
+        perigoso só pelo texto: loopback/link-local por IP literal, ou os
+        nomes 'localhost'/'*.localhost'/'*.local' (não resolvidos aqui, mas
+        classicamente usados para alcançar serviços internos do PRÓPRIO
+        proxy, não desta máquina)."""
+        host = (urlparse(url).hostname or '').strip().lower()
+        if not host:
+            return True
+        if host in ('localhost', '0.0.0.0') or host.endswith('.localhost') or host.endswith('.local'):
+            return True
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        return any(ip in net for net in cls._BLOCKED_HOST_NETWORKS)
+
+    @staticmethod
+    def _resolve_proxy():
+        """(host, port) do proxy HTTP corporativo configurado via `AA_PROXY`,
+        ou None se não configurado — nesse caso `_forward` cai no modo direto
+        de sempre (pinned-IP), sem nenhuma mudança de comportamento."""
+        if not AA_PROXY:
+            return None
+        host, _, port = AA_PROXY.partition(':')
+        return (host, int(port)) if port else (host, 80)
+
     # ---- transporte HTTP com a Control Room real -----------------------
+    def _do_one_request_via_proxy(self, method, url, headers, body_bytes, proxy_host, proxy_port):
+        """Como `_do_one_request`, mas encaminhando através do proxy HTTP
+        corporativo (túnel CONNECT para HTTPS) — usa o `ProxyHandler` nativo
+        do urllib, que já resolve o handshake CONNECT e o SNI corretos; não
+        reimplementa transporte HTTP na mão."""
+        proxy_url = f'http://{proxy_host}:{proxy_port}'
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url}), _NoFollowRedirectHandler(),
+        )
+        req = urllib.request.Request(url, data=body_bytes, method=method)
+        for k, v in headers.items():
+            req.add_header(k, v)
+        try:
+            with opener.open(req, timeout=self.UPSTREAM_TIMEOUT) as resp:
+                return resp.status, resp.read(), None
+        except urllib.error.HTTPError as exc:
+            location = exc.headers.get('Location') if 300 <= exc.code < 400 else None
+            if location:
+                return exc.code, b'', location
+            raise
+
     def _do_one_request(self, method, url, headers, body_bytes, pinned_ip):
         """Executa exatamente UMA requisição HTTP, conectando no `pinned_ip`
         já validado (nunca deixa a lib resolver o host de novo). Nunca segue
@@ -1983,27 +2054,40 @@ class AutomationAnywhereGateway:
         headers/corpo (podem conter o token) — só o código de status e, em
         erro, uma mensagem genérica sem o payload original.
 
-        Cada salto — incluindo cada redirecionamento 3xx — passa de novo por
-        `_resolve_pinned_ip` antes de conectar (ver docstring de
-        `_is_blocked_target`)."""
+        Com `AA_PROXY` configurado (rede que exige saída via proxy
+        corporativo — ver THREAT_MODEL.md, cenário 11), cada salto passa por
+        `_blocked_host_literal`; sem proxy, cada salto passa por
+        `_resolve_pinned_ip` (modo direto de sempre, DNS pinado)."""
         current_method, current_url, current_body = method, url, body_bytes
+        proxy = self._resolve_proxy()
         for _ in range(self.MAX_REDIRECTS + 1):
-            pinned_ip, error = self._resolve_pinned_ip(current_url)
-            if error:
-                print(f'[AA] {current_method} {current_url} -> {error}')
-                return 0, None, error
+            pinned_ip = None
+            if proxy:
+                if self._blocked_host_literal(current_url):
+                    error = 'SSRF_BLOCKED: destino não permitido (loopback/link-local).'
+                    print(f'[AA] {current_method} {current_url} -> {error}')
+                    return 0, None, error
+            else:
+                pinned_ip, error = self._resolve_pinned_ip(current_url)
+                if error:
+                    print(f'[AA] {current_method} {current_url} -> {error}')
+                    return 0, None, error
             try:
-                status, raw, location = self._do_one_request(current_method, current_url, headers, current_body, pinned_ip)
+                if proxy:
+                    status, raw, location = self._do_one_request_via_proxy(current_method, current_url, headers, current_body, proxy[0], proxy[1])
+                else:
+                    status, raw, location = self._do_one_request(current_method, current_url, headers, current_body, pinned_ip)
             except urllib.error.HTTPError as exc:
                 return exc.code, exc.read(), None
             except urllib.error.URLError as exc:
-                # Motivo mais comum em rede corporativa: proxy HTTP obrigatório
-                # para sair na internet (esta conexão vai direto no IP pinado,
-                # sem passar por HTTP_PROXY/HTTPS_PROXY nem pelo proxy do
-                # sistema — ver docstring de `_resolve_pinned_ip`). Log aqui
-                # porque o motivo real nunca chega à resposta da API (mensagem
-                # ao usuário é sempre genérica, de propósito, para não vazar
-                # detalhe de rede interna).
+                # Sem proxy configurado, motivo mais comum em rede corporativa
+                # é precisar de um (esta conexão vai direto no IP pinado, sem
+                # passar por proxy nenhum — ver docstring de
+                # `_resolve_pinned_ip`); com proxy, pode ser o proxy em si
+                # fora do ar/inalcançável. Log aqui porque o motivo real nunca
+                # chega à resposta da API (mensagem ao usuário é sempre
+                # genérica, de propósito, para não vazar detalhe de rede
+                # interna).
                 print(f'[AA] {current_method} {current_url} -> NETWORK_ERROR: {exc.reason}')
                 return 0, None, f'NETWORK_ERROR: {exc.reason}'
             except TimeoutError:

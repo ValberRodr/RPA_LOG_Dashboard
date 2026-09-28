@@ -115,6 +115,25 @@ dado pessoal não mascarado no arquivo exportado.
 **Status:** a confirmar se essa funcionalidade existe hoje; se existir,
 aplicar neutralização antes da release.
 
+### 11. Proxy corporativo da integração Automation Anywhere
+A rede corporativa da empresa exige saída para a internet através de um
+proxy HTTP (descoberto pelo navegador via um script PAC das Configurações de
+Internet do Windows) — o firewall de perímetro derruba qualquer conexão
+direta, mesmo para um IP público legítimo já validado contra SSRF.
+`_forward`/`AutomationAnywhereGateway`, ao ganhar suporte a esse proxy
+(`AA_PROXY`), passou a encaminhar via túnel CONNECT (`_do_one_request_via_proxy`)
+em vez de conectar direto no IP pinado (`_resolve_pinned_ip`).
+**Risco:** o modo com proxy não pina o IP nós mesmos (é o proxy quem resolve
+o destino final), então perde a defesa específica contra DNS rebinding/TOCTOU
+que o modo direto tem — mitigado por: (1) o host continua validado por texto
+antes de abrir o túnel (`_blocked_host_literal` — barra loopback/link-local/
+metadata por IP literal e os nomes `localhost`/`*.local`); (2) o próprio
+proxy corporativo é infraestrutura de TI, não controlada pelo usuário que
+digita o `baseUrl`; (3) cada salto de redirecionamento 3xx continua sendo
+revalidado antes de seguir, igual ao modo direto.
+**Status: corrigido** — ver SECURITY.md, Histórico de correções (2026-09-28,
+"Proxy corporativo obrigatório bloqueava a integração AA").
+
 ## Fora de escopo (por design)
 
 - Múltiplos usuários / múltiplas máquinas: a aplicação é explicitamente
