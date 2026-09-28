@@ -11,10 +11,6 @@ name: Build executáveis (Windows/macOS)
 # anterior (mesma tag), então ela sempre reflete o código mais recente.
 on:
   workflow_dispatch: {}
-  push:
-    branches: [main]
-    paths:
-      - 'server.py'
 
 jobs:
   windows:
