@@ -598,6 +598,20 @@ class TestAutomationAnywhereUpstreamErrorLogging(unittest.TestCase):
                 self.gateway.activity_list('https://empresa.my.automationanywhere.digital', 'tok', {})
         self.assertNotIn('[AA]', out.getvalue())
 
+    def test_activity_list_sends_page_as_object_not_flat_int(self):
+        # Regressão de produção (2026-09-28): a Activity List real da
+        # Automation Anywhere segue a convenção de "List API" do Control
+        # Room, onde `page` é um objeto `{offset, length}` — mandar
+        # `{"page": 0, "size": ...}` (formato só pensado para o mock local)
+        # causava HTTP 400 json.deserialization.exception no Control Room de
+        # verdade, nunca pego antes porque o modo mock nunca exercita o
+        # formato de requisição real.
+        with unittest.mock.patch.object(self.gateway, '_forward', return_value=(200, b'{"list":[]}', None)) as mocked:
+            self.gateway.activity_list('https://empresa.my.automationanywhere.digital', 'tok', {'page': 2, 'size': 50})
+        sent_body = json.loads(mocked.call_args[0][3].decode('utf-8'))
+        self.assertEqual(sent_body['page'], {'offset': 100, 'length': 50})
+        self.assertNotIsInstance(sent_body['page'], int)
+
     def test_authenticate_logs_status_on_non_2xx(self):
         with unittest.mock.patch.object(self.gateway, '_forward', return_value=(500, b'Internal error', None)):
             out = io.StringIO()

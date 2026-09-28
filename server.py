@@ -2329,7 +2329,25 @@ class AutomationAnywhereGateway:
             start = page * size
             return {'ok': True, 'total': len(rows), 'page': page, 'size': size, 'list': rows[start:start + size]}
         url = f'{base_url}/v3/activity/list'
-        body = json.dumps(filters or {}).encode('utf-8')
+        # A Activity List de verdade da Automation Anywhere segue a convenção
+        # de "List API" usada em várias APIs v2/v3 do Control Room: `page` é
+        # um OBJETO `{offset, length}`, nunca um número solto — confirmado em
+        # produção (2026-09-28): mandar `{"page": 0, "size": ...}` (o que
+        # `filters` traz do front-end, pensado só para o mock local) causava
+        # `HTTP 400 {"code":"json.deserialization.exception", ...}` no
+        # Control Room real, nunca detectado antes porque o modo mock nunca
+        # exercita o formato de requisição de verdade (ver docstring da
+        # classe). `filter`/`operands` fica de fora de propósito quando não
+        # há critério real (nenhum ponto do front-end filtra por status hoje)
+        # — mais seguro omitir um campo opcional do que arriscar um formato
+        # de filtro vazio que a API não aceite.
+        page = int((filters or {}).get('page') or 0)
+        size = int((filters or {}).get('size') or 50)
+        request_body = {
+            'sort': [{'field': 'startDateTime', 'direction': 'desc'}],
+            'page': {'offset': page * size, 'length': size},
+        }
+        body = json.dumps(request_body).encode('utf-8')
         status, raw, net_err = self._forward('POST', url, {'Content-Type': 'application/json', 'X-Authorization': token}, body)
         if net_err:
             return {'ok': False, 'error': 'NETWORK_ERROR'}
