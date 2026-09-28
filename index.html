@@ -16,6 +16,16 @@
            ===================================================================== */
 
         :root {
+            /* Sem isso, o navegador decide sozinho (a partir do tema do SO)
+               se widgets nativos — principalmente o popup de <select> — usam
+               UI clara ou escura, independente do tema ativo desta página
+               (data-theme). Numa máquina com o SO em modo claro, isso fazia
+               o popup do <select> abrir com fundo branco enquanto o texto
+               continuava na cor clara do tema escuro (--text) — texto branco
+               em fundo branco, ilegível. Amarrado ao data-theme (não a um
+               valor fixo) para acompanhar o toggle claro/escuro da própria
+               página, não o do SO. */
+            color-scheme: dark;
             --bg: #111217;
             --bg-soft: #17191f;
             --panel: #1c1e25;
@@ -44,6 +54,7 @@
         }
 
         html[data-theme="light"] {
+            color-scheme: light;
             --bg: #f4f6fb;
             --bg-soft: #eef1f6;
             --panel: #ffffff;

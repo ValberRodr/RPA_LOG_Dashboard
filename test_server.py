@@ -591,12 +591,19 @@ class TestAutomationAnywhereUpstreamErrorLogging(unittest.TestCase):
         self.assertIn('403', out.getvalue())
         self.assertIn('Forbidden', out.getvalue())
 
-    def test_activity_list_does_not_log_when_list_is_non_empty(self):
-        with unittest.mock.patch.object(self.gateway, '_forward', return_value=(200, b'{"list":[{"id":"AA-1"}]}', None)):
+    def test_activity_list_logs_first_item_keys_when_list_is_non_empty(self):
+        # Diagnóstico (2026-09-28): revela os NOMES dos campos reais de um
+        # item de Activity (nunca os valores) — assets/aa-integration.js foi
+        # escrito contra o formato do mock (automationName/started/ended/
+        # durationMs/device), nunca validado contra uma Activity List real;
+        # um nome de campo diferente deixa a tela em branco sem erro nenhum.
+        with unittest.mock.patch.object(self.gateway, '_forward', return_value=(200, b'{"list":[{"id":"AA-1","startDateTime":"x"}]}', None)):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 self.gateway.activity_list('https://empresa.my.automationanywhere.digital', 'tok', {})
-        self.assertNotIn('[AA]', out.getvalue())
+        self.assertIn('[AA]', out.getvalue())
+        self.assertIn('startDateTime', out.getvalue())
+        self.assertNotIn('AA-1', out.getvalue())  # nunca loga valores, só nomes de campo
 
     def test_activity_list_logs_response_keys_when_list_is_empty(self):
         # Diagnóstico (2026-09-28): resposta HTTP 200 mas sem nenhum item —

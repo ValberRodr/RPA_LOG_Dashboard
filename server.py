@@ -2370,13 +2370,19 @@ class AutomationAnywhereGateway:
         except (ValueError, AttributeError):
             return {'ok': False, 'error': 'UNSUPPORTED'}
         result_list = data.get('list', [])
-        # Diagnóstico (2026-09-28): loga o formato real da resposta (chaves
-        # de nível 1 + tamanho da lista) na primeira vez que a lista vem
-        # vazia — se a chave de verdade não for `list` (ex.: `content`,
-        # `data`), isso aparece aqui sem precisar de mais uma captura de
-        # tela. Nunca loga activities inteiras (podem ter dado de negócio).
+        # Diagnóstico (2026-09-28): loga o formato real da resposta — se a
+        # lista vier vazia, as chaves de nível 1 (pode ser que a chave real
+        # não seja `list`); se vier com item, as CHAVES do primeiro item
+        # (nunca os valores — podem ter dado de negócio) comparadas com o
+        # que assets/aa-integration.js espera (automationName/started/ended/
+        # durationMs/device — nomes copiados do modo mock, nunca validados
+        # contra uma Activity List real antes de hoje). Um nome de campo
+        # diferente (ex.: `startDateTime` em vez de `started`) faz a tela
+        # ficar em branco sem erro nenhum, já que os campos só não existem.
         if not result_list:
             print(f'[AA] {url} -> HTTP 200 mas lista vazia; chaves da resposta: {sorted(data.keys())}')
+        else:
+            print(f'[AA] {url} -> HTTP 200, {len(result_list)} item(ns); chaves do primeiro: {sorted(result_list[0].keys())}')
         return {'ok': True, 'total': data.get('page', {}).get('totalElements', len(result_list)), 'list': result_list}
 
     def activity_detail(self, base_url, token, activity_id):
