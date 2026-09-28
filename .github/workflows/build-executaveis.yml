@@ -13,7 +13,24 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Testes backend + SQLite
+        run: python -m unittest -v test_server.py test_sqlite_log_store.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Testes frontend
+        run: node test_dashboard.js
+
   windows:
+    needs: quality
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +49,7 @@ jobs:
           path: RPA_Ops_Monitor-Windows.zip
 
   macos:
+    needs: quality
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
