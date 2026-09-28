@@ -2309,6 +2309,39 @@ class AutomationAnywhereGateway:
         body_preview = (raw or b'')[:500].decode('utf-8', errors='replace')
         print(f'[AA] {method} {url} -> HTTP {status}: {body_preview}')
 
+    @staticmethod
+    def _iso_to_epoch_ms(value):
+        """`None` para vazio/formato inválido (nunca lança) — usado só para
+        calcular `durationMs` a partir de `startDateTime`/`endDateTime`."""
+        if not value or not isinstance(value, str):
+            return None
+        try:
+            return int(datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp() * 1000)
+        except ValueError:
+            return None
+
+    @classmethod
+    def _normalize_activity(cls, item):
+        """A Activity List/detail REAL da Automation Anywhere usa nomes de
+        campo (`startDateTime`, `endDateTime`, `deviceName`, sem nenhum campo
+        de duração pronto) diferentes dos que assets/aa-integration.js espera
+        (`started`, `ended`, `device`, `durationMs`) — nomes esses copiados do
+        modo mock (`_mock_activities`) sem nunca terem sido validados contra
+        uma Control Room real (confirmado em produção 2026-09-28 via o log
+        `[AA] ... chaves do primeiro: [...]`). Sem isso, a tela de Activity
+        ficava sem nenhuma automação/data/duração/device, mesmo a chamada
+        real tendo sucesso. Aumenta o item com os campos que faltam SEM
+        remover nenhum campo original (activityType, tenantUuid, etc. — só
+        não usados pela UI hoje, mas não custa preservar)."""
+        item = dict(item)
+        item.setdefault('started', item.get('startDateTime'))
+        item.setdefault('ended', item.get('endDateTime'))
+        item.setdefault('device', item.get('deviceName'))
+        start_ms = cls._iso_to_epoch_ms(item.get('startDateTime'))
+        end_ms = cls._iso_to_epoch_ms(item.get('endDateTime'))
+        item.setdefault('durationMs', (end_ms - start_ms) if (start_ms is not None and end_ms is not None) else None)
+        return item
+
     def discover(self, base_url, token):
         if self.is_mock(base_url):
             return {'ok': True, 'capabilities': dict(self.MOCK_CAPABILITIES)}
@@ -2383,6 +2416,7 @@ class AutomationAnywhereGateway:
             print(f'[AA] {url} -> HTTP 200 mas lista vazia; chaves da resposta: {sorted(data.keys())}')
         else:
             print(f'[AA] {url} -> HTTP 200, {len(result_list)} item(ns); chaves do primeiro: {sorted(result_list[0].keys())}')
+        result_list = [self._normalize_activity(item) for item in result_list]
         return {'ok': True, 'total': data.get('page', {}).get('totalElements', len(result_list)), 'list': result_list}
 
     def activity_detail(self, base_url, token, activity_id):
@@ -2405,7 +2439,7 @@ class AutomationAnywhereGateway:
         if status < 200 or status >= 300:
             return {'ok': False, 'error': 'TEMPORARY_ERROR'}
         try:
-            return {'ok': True, 'activity': json.loads(raw.decode('utf-8'))}
+            return {'ok': True, 'activity': self._normalize_activity(json.loads(raw.decode('utf-8')))}
         except (ValueError, AttributeError):
             return {'ok': False, 'error': 'UNSUPPORTED'}
 

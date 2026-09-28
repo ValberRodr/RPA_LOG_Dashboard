@@ -617,6 +617,29 @@ class TestAutomationAnywhereUpstreamErrorLogging(unittest.TestCase):
         self.assertIn('[AA]', out.getvalue())
         self.assertIn('lista vazia', out.getvalue())
 
+    def test_normalize_activity_maps_real_field_names_to_frontend_shape(self):
+        # Regressão de produção (2026-09-28): assets/aa-integration.js
+        # espera started/ended/device/durationMs (nomes do modo mock); a
+        # Activity List real usa startDateTime/endDateTime/deviceName e não
+        # tem nenhum campo de duração pronto — sem essa normalização, a
+        # tela de Activity fica sem nenhuma data/duração/device mesmo com a
+        # chamada real tendo sucesso.
+        raw = {
+            'id': 'AA-1', 'automationName': 'Bot X', 'status': 'COMPLETED',
+            'startDateTime': '2026-09-28T10:00:00Z', 'endDateTime': '2026-09-28T10:02:30Z',
+            'deviceName': 'VM-01',
+        }
+        normalized = self.gateway._normalize_activity(raw)
+        self.assertEqual(normalized['started'], '2026-09-28T10:00:00Z')
+        self.assertEqual(normalized['ended'], '2026-09-28T10:02:30Z')
+        self.assertEqual(normalized['device'], 'VM-01')
+        self.assertEqual(normalized['durationMs'], 150000)
+        self.assertEqual(normalized['id'], 'AA-1')  # campos originais preservados
+
+    def test_normalize_activity_duration_none_when_missing_dates(self):
+        normalized = self.gateway._normalize_activity({'id': 'AA-2', 'startDateTime': None, 'endDateTime': None})
+        self.assertIsNone(normalized['durationMs'])
+
     def test_activity_list_sends_page_as_object_not_flat_int(self):
         # Regressão de produção (2026-09-28): a Activity List real da
         # Automation Anywhere segue a convenção de "List API" do Control

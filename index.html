@@ -548,6 +548,16 @@
             outline: none;
         }
 
+        /* `color-scheme` (:root, acima) nem sempre é suficiente sozinho para
+           o popup nativo do <select> em todo navegador/versão — declarar
+           fundo/texto direto nas <option> é mais garantido e não depende de
+           heurística do navegador. */
+        .select-control option,
+        .load-period-select option {
+            background: var(--panel);
+            color: var(--text);
+        }
+
         .action-button {
             display: inline-flex;
             align-items: center;
