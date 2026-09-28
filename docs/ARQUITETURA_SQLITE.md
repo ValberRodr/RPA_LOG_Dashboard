@@ -20,16 +20,25 @@ O caminho pode ser sobrescrito por `RPA_MONITOR_DB_PATH`.
 3. O usuário pode mudar para 90 dias, 120 dias ou todos os logs. Essa troca
    consulta somente o SQLite; não reabre os arquivos-fonte.
 4. O botão **Atualizar** sincroniza arquivos novos ou alterados.
-5. A sincronização usa duas proteções para não reler arquivos sem necessidade:
-   - data mais recente registrada por processo/RPA e por VM;
-   - manifesto por arquivo com caminho, mtime e tamanho.
-6. Com **Todos os logs** selecionado, **Atualizar** percorre o manifesto do
-   histórico completo, mas só reparseia arquivos novos ou cujo mtime/tamanho
-   mudou.
+5. Cada arquivo mantém no manifesto: tamanho observado, último byte confirmado,
+   quantidade de linhas físicas e uma assinatura leve do início+fim do trecho
+   já processado.
+6. Se o mesmo arquivo apenas cresceu, a leitura começa exatamente no último
+   byte confirmado. As linhas antigas não são abertas, apagadas ou reinseridas.
+7. Se o arquivo não mudou, nenhum conteúdo é lido.
+8. Se diminuiu, foi sobrescrito, mudou mantendo o mesmo tamanho ou a assinatura
+   do prefixo não confere, o arquivo é reindexado inteiro para impedir
+   duplicidade/corrupção silenciosa.
+9. Uma linha JSON ainda incompleta no fim do arquivo fica aguardando o próximo
+   newline e só então entra no banco.
+10. A descoberta incremental também revalida os arquivos mais recentes já
+    conhecidos de cada RPA/VM, inclusive se estiverem fora da janela de busca
+    recente, para suportar logs antigos que continuam recebendo append.
 
 ## Estrutura
 
-- `source_files`: manifesto dos arquivos já processados.
+- `source_files`: manifesto dos arquivos já processados, incluindo
+  `processed_bytes`, `line_count` e `guard_hash`.
 - `raw_records`: JSON de execução, etapa e telemetria normalizado para
   consulta por data/processo/execução/máquina.
 - `store_meta`: versão do schema, revisão e data da última sincronização.
@@ -65,3 +74,16 @@ node test_dashboard.js
 O workflow **Validar aplicação** executa a suíte automaticamente em mudanças
 relevantes. O workflow de build também executa os testes antes de gerar os
 executáveis.
+
+
+## Estratégia para arquivos append-only
+
+Exemplo: um log possui 4.873.221 bytes já indexados e cresce para 5.120.000.
+A próxima sincronização valida a continuidade do prefixo e lê somente a partir
+do byte 4.873.221. Se 246.779 bytes forem novos, somente esse trecho trafega
+pela rede e é parseado.
+
+Bancos criados pela versão anterior são migrados automaticamente para o schema
+v2. Na primeira alteração de cada arquivo migrado sem assinatura de continuidade,
+esse arquivo é reindexado uma única vez; a partir daí passa a usar leitura
+incremental por offset.
