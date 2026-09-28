@@ -85,7 +85,7 @@ if getattr(sys, 'frozen', False):
 # homologação/desenvolvimento no próprio Windows, RPA_MONITOR_DATA_ROOT
 # permite sobrescrever a raiz sem alterar o código.
 DEFAULT_DATA_ROOT = (
-    Path(r'\\d7156ws1011\DirGeralAdmFin\Organização&Processos\Melhoria_Continua\Monitoramento')
+    Path(r'\\d7156ws1011\DirGeralAdmFin\Organizaçao&Processos\Melhoria_Continua\Monitoramento')
     if sys.platform.startswith('win')
     else ROOT / 'logs' / 'Organizacao&Processos' / 'Melhoria_Continua' / 'Monitoramento'
 )
