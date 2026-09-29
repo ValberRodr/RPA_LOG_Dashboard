@@ -35,7 +35,6 @@ EXCLUDED_ASSET_FILES = {'observability-data.js', 'index-data.js'}
 datas = [
     (str(PROJECT_ROOT / 'index.html'), '.'),
     (str(PROJECT_ROOT / 'investigacao.html'), '.'),
-    (str(PROJECT_ROOT / 'diagnostico.html'), '.'),
     (str(PROJECT_ROOT / 'rpa-dashboard.html'), '.'),
 ]
 for f in sorted((PROJECT_ROOT / 'assets').iterdir()):
