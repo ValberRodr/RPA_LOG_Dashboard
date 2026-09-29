@@ -116,9 +116,37 @@ AA_PROXY = os.environ.get('RPA_MONITOR_AA_PROXY', DEFAULT_AA_PROXY or '') or Non
 # A estrutura histórica já usada pelo projeto é VMS/Historico. Se o ambiente
 # oficial armazenar ano/mês diretamente em VMS, detectamos isso automaticamente.
 # RPA_MONITOR_VM_ROOT continua disponível como override explícito.
+#
+# Incidente em produção (2026-09-29): VMs paravam de aparecer no ambiente
+# corporativo. Causa — `_VM_BASE / 'Historico').is_dir()` é uma checagem de
+# rede (SMB stat num caminho UNC) e antes só rodava UMA VEZ, na importação
+# deste módulo (ou seja, no boot do processo). Se a rede ainda não estivesse
+# totalmente pronta naquele instante exato (comum logo após o login do
+# Windows, ou se o processo é iniciado por tarefa agendada antes da rede
+# terminar de montar o compartilhamento), `.is_dir()` respondia False mesmo
+# a pasta existindo segundos depois — e essa resposta errada ficava
+# CONGELADA pelo resto da vida do processo (`VM_ROOT` é uma constante de
+# módulo), sem nenhum log explicando por quê. Corrigido tornando a decisão
+# dinâmica: `_resolve_vm_root()` é chamada de novo a cada `build_dataset()`
+# (não só uma vez), então uma resposta errada no boot se autocorrige no
+# próximo refresh (manual ou automático a cada 20 min) assim que a rede
+# estiver de fato pronta — nunca precisa reiniciar o processo para corrigir.
 _VM_BASE = LOG_BASE / 'VMS'
-_VM_DEFAULT = (_VM_BASE / 'Historico') if (_VM_BASE / 'Historico').is_dir() else _VM_BASE
-VM_ROOT = Path(os.environ.get('RPA_MONITOR_VM_ROOT', str(_VM_DEFAULT)))
+
+
+def _resolve_vm_root():
+    """Recalculada a cada build (nunca cacheada além disso) — ver comentário
+    acima. Override explícito (`RPA_MONITOR_VM_ROOT`) sempre vence: quem
+    define isso já sabe o caminho certo, não precisamos adivinhar nem
+    revalidar a cada vez."""
+    override = os.environ.get('RPA_MONITOR_VM_ROOT')
+    if override:
+        return Path(override)
+    historico = _VM_BASE / 'Historico'
+    return historico if historico.is_dir() else _VM_BASE
+
+
+VM_ROOT = _resolve_vm_root()
 
 # Cadastro de RPAs: no Windows, mesma pasta oficial de Logs/VMS (irmã delas
 # em Monitoramento\Cadastro_RPA\) — várias máquinas passam a ler/escrever o
@@ -707,6 +735,15 @@ class DatasetBuilder:
 
     @staticmethod
     def build_dataset(mode='30d'):
+        # Recalcula VMS/Historico × VMS a cada build (nunca só uma vez no
+        # boot) — ver comentário de `_resolve_vm_root` no topo do arquivo.
+        # Sem isso, uma resposta errada no instante exato em que o processo
+        # subiu (rede ainda montando o compartilhamento) ficava congelada
+        # pelo resto da vida do processo.
+        resolved_vm_root = _resolve_vm_root()
+        if resolved_vm_root != log_store.vm_root:
+            print(f'[BOOT] VM_ROOT recalculado: {log_store.vm_root} -> {resolved_vm_root}')
+            log_store.vm_root = resolved_vm_root
         # A primeira chamada cria/sincroniza o SQLite. Depois desta etapa,
         # trocar 30/90/120/full consulta somente o banco e não reabre os logs.
         log_store.ensure_ready()
@@ -889,6 +926,15 @@ class DatasetBuilder:
             vm_history[machine].sort(key=lambda x:x['data'])
             vm_times[machine]=[dt(x['data']) for x in vm_history[machine]]
         _build_status['vmSnapshots'] = sum(len(v) for v in vm_history.values())
+        if not vm_history:
+            # Diagnóstico (2026-09-29): "0 snapshots de VM" é ambíguo demais
+            # sozinho — pode ser telemetria de verdade ausente, ou o
+            # VM_ROOT/janela de tempo apontando pro lugar errado. Loga o
+            # caminho efetivamente usado nesta consulta para ficar
+            # verificável a distância (ex.: colando este trecho do
+            # RPA_Ops_Monitor.log), sem precisar reproduzir localmente.
+            print(f'[BOOT] 0 snapshots de VM em log_store.vm_root={log_store.vm_root} '
+                  f'(existe: {log_store.vm_root.exists()}) para a janela {window_start}..{window_end}.')
 
         _build_status.update(phase='vinculando execuções e agenda', percent=84)
         vm_context = {}
@@ -1849,7 +1895,14 @@ class AutomationAnywhereGateway:
     métodos passam a fazer proxy real (ver `is_mock`).
     """
 
-    PROXY_ALLOWED_PREFIXES = ('/v2/', '/v3/', '/v4/')
+    # /v1/ liberado só para User Management (Search Users é /v1/usermanagement/
+    # users/list na API real — a Automation Anywhere nunca migrou esse módulo
+    # para v2+, ao contrário de Activity/Devices/Packages) — mesma allowlist
+    # de prefixo, nenhuma checagem por caminho exato: um X-AA-Base-Url malicioso
+    # continua contido pelo bloqueio de SSRF de `_forward`, não por este
+    # allowlist (que só limita QUAIS capacidades da Control Room o proxy pode
+    # alcançar, nunca QUAL host).
+    PROXY_ALLOWED_PREFIXES = ('/v1/', '/v2/', '/v3/', '/v4/')
     UPSTREAM_TIMEOUT = 8
 
     # SSRF: baseUrl vem do navegador (X-AA-Base-Url, digitado pelo usuário na
@@ -1876,6 +1929,7 @@ class AutomationAnywhereGateway:
         'acc':         'UNAVAILABLE',
         'botInsight':  'UNSUPPORTED',
         'deploy':      'FORBIDDEN',
+        'users':       'AVAILABLE',
     }
 
     # Rotas reais (best-effort) usadas apenas para *discovery* de capacidade
@@ -1885,6 +1939,9 @@ class AutomationAnywhereGateway:
     # classificada sem derrubar a conexão. Ajuste aqui se a versão do
     # Control Room do cliente usar caminhos diferentes — o restante da
     # integração não depende dos valores exatos, só da classificação.
+    # Entradas de 2 posições são GET simples; entradas de 3 posições têm um
+    # corpo JSON (só POST usa) — necessário para 'users', cuja API real
+    # (Search Users) não aceita GET puro como as demais "List API".
     CAPABILITY_PROBE = {
         'audit':      ('GET', '/v2/audit/logs?page=0&size=1'),
         'repository': ('GET', '/v2/repository/workspaces'),
@@ -1895,6 +1952,7 @@ class AutomationAnywhereGateway:
         'wlm':        ('GET', '/v2/wlm/queues?page=0&size=1'),
         'acc':        ('GET', '/v2/acc/summary'),
         'botInsight': ('GET', '/v2/insight/summary'),
+        'users':      ('POST', '/v1/usermanagement/users/list', {'page': {'offset': 0, 'length': 1}}),
     }
 
     def __init__(self, config_file, get_data_fn):
@@ -2155,7 +2213,12 @@ class AutomationAnywhereGateway:
         obs, _ = self.get_data_fn()
         rpas_by_id = {r['rpaId']: r for r in obs['rpas']}
         status_map = {'SUCCESS': 'COMPLETED', 'WARNING': 'COMPLETED', 'ERROR': 'RUN_FAILED'}
-        sample = sorted(obs['executions'], key=lambda e: e['start'], reverse=True)[:180]
+        # 600 (era 180): os gráficos de histórico do Control Room (execuções/
+        # dia, duração média/dia) precisam de vários dias distintos para
+        # mostrar uma tendência de verdade — 180 cobria só ~4 dias no volume
+        # típico do dataset de exemplo, pouco para exercitar a opção "carregar
+        # mais histórico" (até 2.000 atividades) da tela em modo mock.
+        sample = sorted(obs['executions'], key=lambda e: e['start'], reverse=True)[:600]
         activities = []
         for i, e in enumerate(sample):
             rpa = rpas_by_id.get(e['rpaId'])
@@ -2255,6 +2318,30 @@ class AutomationAnywhereGateway:
             return {'ok': True, 'data': {'list': rows}}
         if 'polic' in path:
             return {'ok': False, 'error': 'FORBIDDEN'}
+        if 'usermanagement' in path:
+            # Deriva usuários plausíveis dos responsáveis já cadastrados em
+            # cada RPA (`owners[].name`/`role`) em vez de inventar nomes do
+            # zero — mesmo espírito dos outros mocks desta classe (Seção
+            # "deriva dados plausíveis do dataset local" na docstring).
+            seen = {}
+            for r in obs['rpas']:
+                for owner in r.get('owners') or []:
+                    name = (owner.get('name') or '').strip()
+                    if not name or name in seen:
+                        continue
+                    local = name.lower().replace(' ', '.')
+                    seen[name] = {
+                        'id': len(seen) + 1, 'username': local,
+                        'email': f'{local}@empresa.local',
+                        'firstName': name.split(' ')[0], 'lastName': ' '.join(name.split(' ')[1:]),
+                        'roles': [owner.get('role') or 'Business Owner'], 'disabled': False,
+                    }
+            seen['svc_rpa_observability'] = {
+                'id': 0, 'username': 'svc_rpa_observability', 'email': 'svc_rpa_observability@empresa.local',
+                'firstName': 'Service', 'lastName': 'Account', 'roles': ['AAE_Bot Runner', 'AAE_Basic'], 'disabled': False,
+            }
+            rows = sorted(seen.values(), key=lambda u: u['username'])
+            return {'ok': True, 'data': {'list': rows, 'page': {'totalElements': len(rows)}}}
         return {'ok': False, 'error': 'UNAVAILABLE'}
 
     # ---- API pública consumida pelo Handler ----------------------------
@@ -2346,8 +2433,14 @@ class AutomationAnywhereGateway:
         if self.is_mock(base_url):
             return {'ok': True, 'capabilities': dict(self.MOCK_CAPABILITIES)}
         capabilities = {'activity': 'AVAILABLE'}  # já validado pela autenticação + Activity List
-        for name, (method, path) in self.CAPABILITY_PROBE.items():
-            status, raw, net_err = self._forward(method, base_url + path, {'X-Authorization': token}, None)
+        for name, spec in self.CAPABILITY_PROBE.items():
+            method, path, *rest = spec
+            headers = {'X-Authorization': token}
+            body_bytes = None
+            if rest:
+                headers['Content-Type'] = 'application/json'
+                body_bytes = json.dumps(rest[0]).encode('utf-8')
+            status, raw, net_err = self._forward(method, base_url + path, headers, body_bytes)
             capabilities[name] = self._classify_status(status, net_err)
             if not net_err and (status < 200 or status >= 300):
                 self._log_upstream_error(method, base_url + path, status, raw)
@@ -2472,6 +2565,127 @@ class AutomationAnywhereGateway:
 # instância por requisição do http.server) delega a ela em vez de duplicar
 # lógica. test_server.py instancia sua própria cópia com get_data_fn fake.
 aa_gateway = AutomationAnywhereGateway(AA_CONFIG_FILE, get_data)
+
+
+class DesktopNotifier:
+    """Notificação nativa do sistema operacional (toast/banner), disparada
+    pelo BACKEND — não pela página (ver POST /api/notify no Handler).
+
+    Por que o backend e não a Web Notification API do navegador: a API do
+    navegador exige permissão por origem concedida por um clique real do
+    usuário, e esse prompt é UI do próprio Chrome (fora da página) — não dá
+    pra conceder programaticamente, e o app roda em modo "app" (--app=url,
+    ver _launch_managed_browser) onde o usuário não tem como revisitar essa
+    permissão facilmente depois. O processo Python do servidor local já
+    está rodando o tempo todo e É a definição de "a máquina" — então ele
+    mesmo aciona o mecanismo nativo de notificação de cada SO via
+    subprocess, sem exigir nenhum consentimento por aba/origem.
+
+    Sem biblioteca nova (projeto não usa dependências externas — ver
+    SECURITY.md seção 7): usa só uma ferramenta já embutida em cada SO
+    (osascript no macOS, PowerShell/WinRT no Windows, notify-send no Linux
+    via subprocess — nenhum pacote pip).
+
+    SEGURANÇA — injeção de comando: título/corpo vêm em última instância de
+    dado de log ou de nome de automação da Control Room, ambos NÃO
+    CONFIÁVEIS (ver SECURITY.md seção 2/21). Por isso NUNCA são interpolados
+    dentro de uma string de script (AppleScript/PowerShell) — isso seria
+    igual a montar SQL por concatenação. Em vez disso, sempre trafegam por
+    variável de ambiente do subprocesso, lida de DENTRO do script
+    (`system attribute`/`$env:`) — o valor nunca é reanalisado como sintaxe
+    de script, só lido como dado. No Linux, vão como argv separado (sem
+    shell=True), pelo mesmo motivo."""
+
+    MAX_TITLE_LEN = 120
+    MAX_BODY_LEN = 300
+    SUBPROCESS_TIMEOUT_SECONDS = 5
+    MIN_INTERVAL_SECONDS = 2  # defesa contra chamada repetida/em loop, nunca esperado no uso normal
+
+    _lock = threading.Lock()
+    _last_sent_at = 0.0
+
+    @classmethod
+    def _clip(cls, text, max_len):
+        text = (text or '').replace('\r', ' ').replace('\n', ' ').strip()
+        return text[:max_len]
+
+    @classmethod
+    def _rate_limited(cls):
+        with cls._lock:
+            now = time.monotonic()
+            if now - cls._last_sent_at < cls.MIN_INTERVAL_SECONDS:
+                return True
+            cls._last_sent_at = now
+            return False
+
+    @classmethod
+    def notify(cls, title, body):
+        """Devolve True se o comando nativo foi disparado (não garante que o
+        usuário viu — SO pode ter "não perturbe" ativo, por exemplo). Nunca
+        lança: falha de notificação não pode derrubar a requisição HTTP."""
+        if cls._rate_limited():
+            return False
+        title = cls._clip(title, cls.MAX_TITLE_LEN) or 'RPA Ops Monitor'
+        body = cls._clip(body, cls.MAX_BODY_LEN)
+        env = dict(os.environ, RPA_NOTIF_TITLE=title, RPA_NOTIF_BODY=body)
+        try:
+            if sys.platform == 'darwin':
+                return cls._notify_macos(env)
+            if sys.platform.startswith('win'):
+                return cls._notify_windows(env)
+            return cls._notify_linux(title, body, env)
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    @classmethod
+    def _notify_macos(cls, env):
+        # `system attribute` lê a env var de DENTRO do AppleScript — o valor
+        # nunca passa pelo parser de string do script, só é lido como dado.
+        script = (
+            'display notification (system attribute "RPA_NOTIF_BODY") '
+            'with title (system attribute "RPA_NOTIF_TITLE")'
+        )
+        result = subprocess.run(
+            ['osascript', '-e', script], env=env,
+            timeout=cls.SUBPROCESS_TIMEOUT_SECONDS, capture_output=True,
+        )
+        return result.returncode == 0
+
+    @classmethod
+    def _notify_windows(cls, env):
+        # $env:RPA_NOTIF_* lido de dentro do PowerShell pelo mesmo motivo —
+        # nunca concatenado no texto do script. ToastText02 é um template
+        # padrão do Windows (título + corpo), disponível desde o Windows 10
+        # sem instalar nada além do próprio SO.
+        ps_script = (
+            "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null;"
+            "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType=WindowsRuntime] | Out-Null;"
+            "$title = $env:RPA_NOTIF_TITLE; $body = $env:RPA_NOTIF_BODY;"
+            "$template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+            "$texts = $template.GetElementsByTagName('text');"
+            "$texts.Item(0).AppendChild($template.CreateTextNode($title)) | Out-Null;"
+            "$texts.Item(1).AppendChild($template.CreateTextNode($body)) | Out-Null;"
+            "$toast = [Windows.UI.Notifications.ToastNotification]::new($template);"
+            "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('RPA Ops Monitor').Show($toast);"
+        )
+        kwargs = {}
+        if hasattr(subprocess, 'CREATE_NO_WINDOW'):
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        result = subprocess.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_script],
+            env=env, timeout=cls.SUBPROCESS_TIMEOUT_SECONDS, capture_output=True, **kwargs,
+        )
+        return result.returncode == 0
+
+    @classmethod
+    def _notify_linux(cls, title, body, env):
+        # argv em lista, sem shell=True: título/corpo vão como argumentos
+        # separados, nunca interpretados como sintaxe de shell.
+        result = subprocess.run(
+            ['notify-send', title, body], env=env,
+            timeout=cls.SUBPROCESS_TIMEOUT_SECONDS, capture_output=True,
+        )
+        return result.returncode == 0
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -2655,7 +2869,7 @@ class Handler(SimpleHTTPRequestHandler):
         # uma simples <img src="…/api/reload?mode=full"> em QUALQUER página
         # aberta noutra aba já disparava um reprocessamento completo do
         # histórico sem nenhuma interação do usuário.
-        protected = path.startswith('/api/aa/') or path.startswith('/api/registry/') or path == '/api/reload'
+        protected = path.startswith('/api/aa/') or path.startswith('/api/registry/') or path == '/api/reload' or path == '/api/notify'
         if not protected:
             self.send_response(404); self.end_headers(); return
         if not self._origin_is_allowed():
@@ -2701,6 +2915,9 @@ class Handler(SimpleHTTPRequestHandler):
             return self._send_json({'ok': True, 'mode': mode, 'sync': force_sync})
         if path.startswith('/api/registry/rpas'):
             return self._handle_registry_post(path, payload)
+        if path == '/api/notify':
+            ok = DesktopNotifier.notify(payload.get('title') or '', payload.get('body') or '')
+            return self._send_json({'ok': ok})
         if path == '/api/aa/authenticate':
             base_url = (payload.get('baseUrl') or '').rstrip('/')
             return self._send_json(aa_gateway.authenticate(base_url, payload.get('username') or '', payload.get('apiKey') or ''))
@@ -2881,6 +3098,18 @@ def main():
     print('Dados: SQLite persistente (janela padrão de 30 dias; sincronização incremental)')
     print('Atualização do navegador: incremental, a cada 20 minutos')
     print('Para encerrar: feche a janela do aplicativo ou use Ctrl+C\n')
+    # Diagnóstico (2026-09-29, incidente real: VMs sumiram no ambiente
+    # corporativo) — sem isso, não havia nenhum registro de qual caminho de
+    # rede o processo efetivamente resolveu para cada fonte de dado.
+    # `.exists()` aqui é só informativo (pode responder errado se a rede
+    # ainda estiver montando o compartilhamento neste instante exato do
+    # boot — por isso VM_ROOT é RECALCULADO a cada build, não só aqui; ver
+    # `_resolve_vm_root`) — mas já é o suficiente para confirmar a distância
+    # (colando este trecho do RPA_Ops_Monitor.log) se o caminho resolvido é
+    # o esperado.
+    print(f'[BOOT] LOG_BASE={LOG_BASE} (existe: {LOG_BASE.exists()})')
+    print(f'[BOOT] RPA_LOG_ROOT={RPA_LOG_ROOT} (existe: {RPA_LOG_ROOT.exists()})')
+    print(f'[BOOT] VM_ROOT={VM_ROOT} (existe: {VM_ROOT.exists()})')
     if HOST not in ('127.0.0.1', 'localhost', '::1'):
         # RPA_MONITOR_HOST foi definido explicitamente para algo além de
         # loopback — não é o padrão de fábrica. Aviso alto de propósito: esta

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="dark">
     <link rel="stylesheet" href="assets/observability.css">
-    <title>Investigação · RPA Ops Monitor</title>
+    <title>Investigação & Diagnóstico · RPA Ops Monitor</title>
 </head>
 <body>
 <div class="toolbar no-print">
@@ -13,7 +13,6 @@
         <button class="btn" id="btnBack">Fechar janela</button>
         <div class="title" id="toolbarTitle">RPA Ops Monitor</div>
         <span class="muted" id="snapshot"></span>
-        <button class="btn" id="btnCounterpart">Abrir diagnóstico ↗</button>
         <button class="btn primary" id="btnPdf">Exportar PDF</button>
     </div>
 </div>
@@ -22,6 +21,18 @@
     <div id="hero"></div>
 
     <div class="grid g4" id="kpis"></div>
+    <div class="grid g4" id="kpisDiagnostico"></div>
+
+    <div class="grid g2">
+        <section class="panel">
+            <div class="panel-head"><h2>Resumo diagnóstico</h2><span class="section-note">Sinais objetivos da execução</span></div>
+            <div class="panel-body" id="summary"></div>
+        </section>
+        <section class="panel">
+            <div class="panel-head"><h2>Baseline da RPA</h2><span class="section-note">Atual × comportamento histórico</span></div>
+            <div class="panel-body" id="baseline"></div>
+        </section>
+    </div>
 
     <div class="grid g2">
         <section class="panel">
@@ -40,8 +51,19 @@
             <div class="panel-body" id="reconciliation"></div>
         </section>
         <section class="panel">
+            <div class="panel-head"><h2>Etapas que consumiram tempo</h2><span class="section-note">Tempo por etapa desta execução</span></div>
+            <div class="panel-body" id="stepDuration"></div>
+        </section>
+    </div>
+
+    <div class="grid g2">
+        <section class="panel">
             <div class="panel-head"><h2>Contexto da VM</h2><span class="section-note">Janela de ±90 min</span></div>
             <div class="panel-body" id="vmSummary"></div>
+        </section>
+        <section class="panel">
+            <div class="panel-head"><h2>Recorrência de falhas</h2><span class="section-note">Mesmo erro ou etapa no histórico do processo</span></div>
+            <div class="panel-body" id="related"></div>
         </section>
     </div>
 
@@ -56,14 +78,24 @@
             <div class="panel-body" id="evidence"></div>
         </section>
         <section class="panel">
-            <div class="panel-head"><h2>Ocorrências relacionadas</h2><span class="section-note">Mesmo erro no processo nos últimos 30 dias</span></div>
-            <div class="panel-body" id="related"></div>
+            <div class="panel-head"><h2>Sinais e hipóteses</h2><span class="section-note">Sem inferir além do que os dados sustentam</span></div>
+            <div class="panel-body" id="signals"></div>
         </section>
     </div>
 
     <section class="panel">
+        <div class="panel-head"><h2>Checklist operacional</h2><span class="section-note">Pontos para validação pela sustentação</span></div>
+        <div class="panel-body" id="checklist"></div>
+    </section>
+
+    <section class="panel">
         <div class="panel-head"><h2>Arquivos e dependências</h2><span class="section-note">Última alteração × início dos erros — correlação, nunca causa confirmada</span></div>
         <div class="panel-body" id="dependencies"></div>
+    </section>
+
+    <section class="panel">
+        <div class="panel-head"><h2>Execuções vizinhas da mesma RPA</h2><span class="section-note">Contexto antes e depois desta execução</span></div>
+        <div class="table-wrap"><table><thead><tr><th>Execução</th><th>Início</th><th>Status</th><th>Duração</th><th>Retries</th><th>VM</th><th>Ações</th></tr></thead><tbody id="neighbors"></tbody></table></div>
     </section>
 </main>
     <script src="assets/observability-data.js?mode=30d"></script>
@@ -72,15 +104,19 @@
     <script src="assets/auto-refresh.js"></script>
 <script>
 /* ============================================================================
-   InvestigacaoPage
-   Objetivo: reproduzir exatamente o que ocorreu em uma execução e manter
-   evidências suficientes para auditoria operacional, reprocessamento e
-   análise. Cada seção do relatório (hero, KPIs, etapas, agenda, etc.) é um
-   método que só lê o estado já resolvido em `render()` — não há reuso entre
-   páginas aqui, então a classe existe para nomear e isolar cada seção, não
-   para compartilhar código com outro lugar.
+   ExecutionDetailPage
+   ----------------------------------------------------------------------------
+   Fusão de InvestigacaoPage + DiagnosticoPage (2026-09-29, a pedido do
+   responsável do projeto: "não vejo necessidade em duas telas separadas") —
+   eram duas páginas quase sempre abertas em sequência para a mesma
+   execução, com duas seções genuinamente duplicadas (telemetria de VM e a
+   lista de ocorrências relacionadas) e o resto complementar. Objetivo:
+   reproduzir o que ocorreu na execução (auditoria/reconciliação/evidência)
+   E ajudar a isolar a causa (baseline/sinais/checklist) numa única tela,
+   sem abrir uma segunda janela pra "trocar de ponto de vista". Cada seção
+   do relatório é um método que só lê o estado já resolvido em `render()`.
    ============================================================================ */
-class InvestigacaoPage {
+class ExecutionDetailPage {
     constructor(rpaUi) {
         this.U = rpaUi;
     }
@@ -91,10 +127,9 @@ class InvestigacaoPage {
     render() {
         const U = this.U;
         const executionId = U.q.get('execution_id');
-        document.querySelector('#btnCounterpart')?.addEventListener('click', () => U.openDiagnostic(executionId));
         const ex = executionId ? U.getExecution(executionId) : null;
         if (!ex) {
-            document.body.innerHTML = '<main class="page"><div class="empty">Nenhuma execução válida foi informada. Abra a investigação a partir de uma execução no monitor.</div></main>';
+            document.body.innerHTML = '<main class="page"><div class="empty">Nenhuma execução válida foi informada. Abra esta análise a partir de uma execução no monitor.</div></main>';
             return;
         }
 
@@ -103,18 +138,36 @@ class InvestigacaoPage {
         this.rpa = U.getRpa(ex.rpaId);
         this.events = U.getEvents(executionId);
         this.vm = U.getVmContext(executionId);
+        this.agg = U.D.rpaAggregates[ex.rpaId];
+        this.errors = this.events.filter(e => e.status === 'ERROR');
+        this.warnings = this.events.filter(e => e.status === 'WARNING');
+        this.vmRel = U.vmReliabilityFor(ex.machine);
+        this.vmUtil = U.vmUtilizationFor(ex.machine);
 
-        U.initToolbar(`Investigação ${executionId}`);
+        U.initToolbar(`Investigação & Diagnóstico ${executionId}`);
         U.bindExecutionLinks();
         this.renderHero();
         this.renderKpis();
+        this.renderKpisDiagnostico();
+        this.renderSummary();
+        this.renderBaseline();
         this.renderSteps();
         this.renderSchedule();
         this.renderReconciliation();
+        this.renderStepDuration();
         this.renderVmSummary();
-        this.renderEvidence();
         this.renderRelated();
+        this.renderVmChart();
+        this.renderEvidence();
+        this.renderSignals();
+        this.renderChecklist();
         this.renderDependencies();
+        this.renderNeighbors();
+    }
+
+    _vmMax(key) {
+        const { vm } = this;
+        return vm.length ? Math.max(...vm.map(r => Number(r[key] || 0))) : 0;
     }
 
     renderHero() {
@@ -138,6 +191,43 @@ class InvestigacaoPage {
             ['Warnings de etapa', warningSteps, `retries: ${ex.retryCount}`],
             ['Itens processados', `${ex.processedItems}/${ex.totalItems}`, `${ex.errorItems} erro(s) de item`],
         ].map(x => `<div class="kpi"><span>${x[0]}</span><strong>${x[1]}</strong><small>${x[2]}</small></div>`).join('');
+    }
+
+    renderKpisDiagnostico() {
+        const { ex, agg } = this;
+        const ratio = ex.durationMin / Math.max(.1, agg.medianDuration);
+        document.querySelector('#kpisDiagnostico').innerHTML = [
+            ['Duração vs. mediana', `${ratio.toFixed(2)}×`, `mediana ${agg.medianDuration.toFixed(1)} min`],
+            ['Retries', ex.retryCount, `${this.warnings.length} warning(s) de etapa`],
+            ['Deadline', ex.deadlineCompliance, `${Math.max(0, ex.completionDelaySec)}s após limite`],
+            ['Pico de infraestrutura', `${this._vmMax('memory_percent').toFixed(1)}% RAM`, `CPU pico ${this._vmMax('cpu_percent').toFixed(1)}%`],
+        ].map(x => `<div class="kpi"><span>${x[0]}</span><strong>${x[1]}</strong><small>${x[2]}</small></div>`).join('');
+    }
+
+    renderSummary() {
+        const { ex, agg, errors } = this;
+        const summary = [];
+        if (ex.status === 'ERROR') summary.push(['danger', 'Execução terminou em ERROR.', errors.length ? `Primeiro erro observado em ${errors[0].step} (${errors[0].errorCode || 'sem código'}).` : 'O log não contém etapa marcada como ERROR.']);
+        else if (ex.status === 'WARNING') summary.push(['warning', 'Execução terminou com WARNING.', 'A automação concluiu, porém com ressalvas registradas.']);
+        else summary.push(['', 'Execução concluída com SUCCESS.', 'O diagnóstico ainda verifica degradação de duração, retry e infraestrutura.']);
+        if (ex.durationMin > agg.p95Duration) summary.push(['warning', 'Duração acima do P95 histórico.', `${ex.durationMin.toFixed(1)} min contra P95 de ${agg.p95Duration.toFixed(1)} min.`]);
+        if (ex.retryCount > 0) summary.push(['warning', 'Houve retry durante a execução.', `${ex.retryCount} nova(s) tentativa(s) registradas.`]);
+        if (this._vmMax('memory_percent') >= 88 || this._vmMax('cpu_percent') >= 85 || this._vmMax('disk_percent') >= 88) summary.push(['warning', 'Infraestrutura apresentou sinal de pressão.', `Picos observados: CPU ${this._vmMax('cpu_percent').toFixed(1)}%, RAM ${this._vmMax('memory_percent').toFixed(1)}%, disco ${this._vmMax('disk_percent').toFixed(1)}%.`]);
+        document.querySelector('#summary').innerHTML = summary.map(s => `<div class="callout ${s[0]}"><strong>${s[1]}</strong><br>${s[2]}</div>`).join('<div style="height:8px"></div>');
+    }
+
+    renderBaseline() {
+        const { U, ex, agg, vmRel, vmUtil } = this;
+        const ratio = ex.durationMin / Math.max(.1, agg.medianDuration);
+        document.querySelector('#baseline').innerHTML = `
+            <div class="evidence"><span>Duração atual</span><strong>${ex.durationMin.toFixed(2)} min</strong></div>
+            <div class="evidence"><span>Mediana 92 dias</span><strong>${agg.medianDuration.toFixed(2)} min</strong></div>
+            <div class="evidence"><span>P95 92 dias</span><strong>${agg.p95Duration.toFixed(2)} min</strong></div>
+            <div class="evidence"><span>Relação atual / mediana</span><strong>${ratio.toFixed(2)}×</strong></div>
+            <div class="evidence"><span>Success rate histórico</span><strong>${agg.successRate.toFixed(1)}%</strong></div>
+            <div class="evidence"><span>SLA estourado no histórico</span><strong>${agg.slaBreaches}</strong></div>
+            ${vmRel ? `<div class="evidence"><span>Confiabilidade da VM ${U.esc(ex.machine)}</span>${U.reliabilityBadge(vmRel.classification)}</div>` : ''}
+            ${vmUtil ? `<div class="evidence"><span>RPAs que dividem esta VM</span><strong>${vmUtil.byRpa.length}</strong></div>` : ''}`;
     }
 
     renderSteps() {
@@ -180,10 +270,14 @@ class InvestigacaoPage {
             </div>`;
     }
 
+    renderStepDuration() {
+        const { U, events } = this;
+        const stepRows = events.map(e => ({ label: e.step, value: e.durationSec, status: e.status })).sort((a, b) => b.value - a.value);
+        document.querySelector('#stepDuration').innerHTML = U.barSvg(stepRows, 'value', 'label', { format: v => U.duration(v) });
+    }
+
     renderVmSummary() {
-        const { U, ex, vm } = this;
-        const vmRel = U.vmReliabilityFor(ex.machine);
-        const vmUtil = U.vmUtilizationFor(ex.machine);
+        const { U, ex, vm, vmRel, vmUtil } = this;
         const sharingNote = vmUtil && vmUtil.byRpa.length > 1
             ? `Esta VM não é dedicada: também executa ${vmUtil.byRpa.length - 1} outra(s) RPA (${vmUtil.byRpa.filter(r => r.rpaId !== ex.rpaId).slice(0, 3).map(r => U.esc(r.rpaName)).join(', ')}).`
             : 'Esta VM está dedicada apenas a esta RPA no período analisado.';
@@ -200,10 +294,17 @@ class InvestigacaoPage {
             </div><div style="margin-top:10px" class="callout">RDP observado: ${[...new Set(vm.map(r => r.rdp_status))].join(', ')}.</div>
             ${reliabilityNote}
             <div style="margin-top:10px" class="callout">${U.esc(sharingNote)}</div>`;
+        } else {
+            document.querySelector('#vmSummary').innerHTML = `<div class="empty">Sem telemetria para a VM.</div>${reliabilityNote ? `<div style="margin-top:10px">${reliabilityNote}</div>` : ''}`;
+        }
+    }
+
+    renderVmChart() {
+        const { U, vm } = this;
+        if (vm.length) {
             const vmSeries = vm.map(r => ({ date: r.data.slice(11, 16), cpu: r.cpu_percent, memory: r.memory_percent, disk: r.disk_percent }));
             document.querySelector('#vmChart').innerHTML = U.lineSvg(vmSeries, [{ key: 'cpu', label: 'CPU %' }, { key: 'memory', label: 'RAM %' }, { key: 'disk', label: 'Disco %' }], { min: 0, max: 100, labelX: r => r.date, formatY: v => `${Math.round(v)}%` });
         } else {
-            document.querySelector('#vmSummary').innerHTML = `<div class="empty">Sem telemetria para a VM.</div>${reliabilityNote ? `<div style="margin-top:10px">${reliabilityNote}</div>` : ''}`;
             document.querySelector('#vmChart').innerHTML = '<div class="empty">Sem telemetria para a VM.</div>';
         }
     }
@@ -217,6 +318,34 @@ class InvestigacaoPage {
             ['machine_name', ex.machine], ['application', rpa.application], ['support_team', rpa.supportTeam], ['runbook', rpa.runbook],
         ];
         document.querySelector('#evidence').innerHTML = evidence.map(x => `<div class="evidence"><span>${U.esc(x[0])}</span><span class="mono">${U.esc(x[1])}</span></div>`).join('');
+    }
+
+    renderSignals() {
+        const { U, ex, vm, errors, executionId, vmRel, agg } = this;
+        const signals = [];
+        if (errors.length) signals.push(`Erro técnico ${errors[0].errorCode || 'sem código'} em ${errors[0].step}: ${errors[0].errorMessage || errors[0].message}`);
+        if (ex.durationMin > agg.p95Duration) signals.push('A duração excede o P95 histórico da própria RPA.');
+        if (this._vmMax('memory_percent') >= 88) signals.push(`RAM chegou a ${this._vmMax('memory_percent').toFixed(1)}%, acima do limiar de atenção do cenário.`);
+        if (this._vmMax('cpu_percent') >= 85) signals.push(`CPU chegou a ${this._vmMax('cpu_percent').toFixed(1)}%, indicando pressão de processamento na janela.`);
+        if (vm.some(r => r.rdp_status !== 'CONNECTED')) signals.push(`Foi observado estado RDP diferente de CONNECTED: ${[...new Set(vm.map(r => r.rdp_status))].join(', ')}.`);
+        if ((U.D.recurrenceByExecution[executionId] || []).length >= 2) signals.push('O mesmo código de erro aparece em outras execuções recentes do processo.');
+        if (vmRel && (vmRel.classification === 'PROBLEMA_GERAL' || vmRel.classification === 'PROBLEMA_ESPECIFICO')) signals.push(`A VM ${U.esc(ex.machine)} está classificada como "${U.reliabilityBadge(vmRel.classification).replace(/<[^>]+>/g, '')}" na análise cruzada de confiabilidade de todas as RPAs.`);
+        if (errors[0]?.errorCode) { const r = U.paretoRank('errorCode', errors[0].errorCode); if (r) signals.push(`O código ${U.esc(errors[0].errorCode)} é o #${r.rank} mais recorrente no período carregado (${r.count} ocorrência(s)).`); }
+        if (!signals.length) signals.push('Não há sinal forte de infraestrutura ou recorrência; a evidência disponível aponta para evento pontual ou regra de negócio/aplicação.');
+        document.querySelector('#signals').innerHTML = `<div class="mini-list">${signals.map(s => `<div class="mini-item">${U.esc(s)}</div>`).join('')}</div>`;
+    }
+
+    renderChecklist() {
+        const { U, rpa, ex, errors } = this;
+        const checklist = [
+            `Confirmar disponibilidade e sessão da aplicação ${rpa.application}.`,
+            `Validar a etapa ${errors[0]?.step || 'mais lenta'} no log detalhado e no runbook.`,
+            `Conferir se a VM ${ex.machine} permaneceu acessível e sem saturação durante toda a janela.`,
+            `Verificar retries e possibilidade de reprocessamento sem duplicidade de itens.`,
+            `Comparar com a última execução SUCCESS da mesma RPA antes de qualquer intervenção.`,
+            `Registrar código, evidência e ação aplicada para permitir análise de recorrência.`,
+        ];
+        document.querySelector('#checklist').innerHTML = `<div class="mini-list">${checklist.map((s, i) => `<div class="mini-item"><strong>${i + 1}. ${U.esc(s)}</strong></div>`).join('')}</div>`;
     }
 
     /* execution_id vem direto do log (não confiável — ver SECURITY.md/
@@ -275,9 +404,17 @@ class InvestigacaoPage {
             return `<div class="mini-item">${head}<div class="step-meta" style="margin-top:6px">${signalNote[d.signal] || ''}</div></div>`;
         }).join('')}</div>` : '<div class="empty">Nenhum arquivo de dependência cadastrado para esta RPA.</div>';
     }
+
+    renderNeighbors() {
+        const { U, ex, executionId } = this;
+        const same = U.D.executions.filter(x => x.rpaId === ex.rpaId).sort((a, b) => a.start.localeCompare(b.start));
+        const idx = same.findIndex(x => x.executionId === executionId);
+        const neighbors = same.slice(Math.max(0, idx - 4), Math.min(same.length, idx + 5));
+        document.querySelector('#neighbors').innerHTML = neighbors.map(x => `<tr class="${x.executionId === executionId ? 'WARNING' : ''}"><td class="mono">${U.esc(x.executionId)}</td><td>${U.fmtDateTime(x.start)}</td><td>${U.statusBadge(x.status)}</td><td>${x.durationMin.toFixed(1)} min</td><td>${x.retryCount}</td><td class="mono">${U.esc(x.machine)}</td><td>${x.executionId === executionId ? '—' : `<button class="btn" data-open-investigation="${U.esc(x.executionId)}">Abrir</button>`}</td></tr>`).join('');
+    }
 }
 
-new InvestigacaoPage(window.RPAUI).render();
+new ExecutionDetailPage(window.RPAUI).render();
 </script>
 </body>
 </html>

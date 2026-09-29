@@ -356,6 +356,19 @@
     color: var(--text);
 }
 
+/* Linha de fila (Workload) clicável para abrir os itens de trabalho —
+   nenhuma mudança de estado, só expande um painel abaixo. */
+.aa-clickable-row {
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 4px 6px;
+    margin-left: -6px;
+    margin-right: -6px;
+}
+.aa-clickable-row:hover { background: var(--panel-2); }
+
+.aa-fleet-card .card-header { align-items: flex-start; }
+
 .aa-section-divider {
     border: none;
     border-top: 1px solid var(--border);

@@ -168,8 +168,8 @@ class RpaDashboardPage {
      * THREAT_MODEL.md): nunca em onclick="...('${...}')" inline (o
      * navegador decodifica entidades HTML antes de compilar um handler
      * inline, então U.esc() sozinho não bloquearia a injeção de JS ali).
-     * Fica só em data-open-investigation/data-open-diagnostic (escapado) e
-     * é lido como string pura por RPAUI.bindExecutionLinks(). */
+     * Fica só em data-open-investigation (escapado) e é lido como string
+     * pura por RPAUI.bindExecutionLinks(). */
     renderTable() {
         const { U, rpaId, status, search } = this;
         const n = Number(this.period.value);
@@ -181,7 +181,7 @@ class RpaDashboardPage {
         if (q) rows = rows.filter(x => (x.executionId + ' ' + x.machine).toLowerCase().includes(q));
         rows.sort((a, b) => b.start.localeCompare(a.start));
         document.querySelector('#tableCount').textContent = `${rows.length} execução(ões)`;
-        document.querySelector('#executions').innerHTML = rows.map(x => `<tr><td class="mono">${U.esc(x.executionId)}</td><td class="nowrap">${U.fmtDateTime(x.start)}</td><td>${U.statusBadge(x.status)}</td><td>${x.durationMin.toFixed(1)} min</td><td>${x.processedItems}/${x.totalItems}</td><td>${x.retryCount}</td><td>${x.deadlineCompliance}</td><td class="mono">${U.esc(x.machine)}</td><td class="nowrap"><button class="btn" data-open-investigation="${U.esc(x.executionId)}">Investigar</button> <button class="btn" data-open-diagnostic="${U.esc(x.executionId)}">Diagnóstico</button></td></tr>`).join('') || '<tr><td colspan="9" class="empty">Sem execuções para o filtro.</td></tr>';
+        document.querySelector('#executions').innerHTML = rows.map(x => `<tr><td class="mono">${U.esc(x.executionId)}</td><td class="nowrap">${U.fmtDateTime(x.start)}</td><td>${U.statusBadge(x.status)}</td><td>${x.durationMin.toFixed(1)} min</td><td>${x.processedItems}/${x.totalItems}</td><td>${x.retryCount}</td><td>${x.deadlineCompliance}</td><td class="mono">${U.esc(x.machine)}</td><td class="nowrap"><button class="btn" data-open-investigation="${U.esc(x.executionId)}">Investigar</button></td></tr>`).join('') || '<tr><td colspan="9" class="empty">Sem execuções para o filtro.</td></tr>';
     }
 }
 

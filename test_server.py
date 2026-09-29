@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -567,6 +568,21 @@ class TestAutomationAnywhereGatewayMock(unittest.TestCase):
         second = self.gateway.authenticate('', '', 'mesma-chave-123')['token']
         self.assertEqual(first, second)
 
+    def test_discover_includes_users_capability(self):
+        resp = self.gateway.discover('', 'qualquer-token')
+        self.assertEqual(resp['capabilities']['users'], 'AVAILABLE')
+
+    def test_generic_proxy_v1_usermanagement_users_mock(self):
+        # /v1/ só foi liberado no allowlist do proxy para este caminho —
+        # Search Users é a única capacidade real que nunca migrou para v2+.
+        resp = self.gateway.generic_proxy('', 'token', 'POST', '/v1/usermanagement/users/list', {'page': {'offset': 0, 'length': 50}})
+        self.assertTrue(resp['ok'])
+        usernames = [u['username'] for u in resp['data']['list']]
+        self.assertIn('svc_rpa_observability', usernames)
+
+    def test_generic_proxy_v1_allowed_by_prefix_allowlist(self):
+        self.assertIn('/v1/', self.gateway.PROXY_ALLOWED_PREFIXES)
+
 
 class TestAutomationAnywhereUpstreamErrorLogging(unittest.TestCase):
     """Regressão: uma resposta HTTP não-2xx vinda da Control Room real
@@ -653,6 +669,18 @@ class TestAutomationAnywhereUpstreamErrorLogging(unittest.TestCase):
         sent_body = json.loads(mocked.call_args[0][3].decode('utf-8'))
         self.assertEqual(sent_body['page'], {'offset': 100, 'length': 50})
         self.assertNotIsInstance(sent_body['page'], int)
+
+    def test_discover_sends_json_body_for_users_probe(self):
+        # 'users' é o único probe com corpo (Search Users exige POST com
+        # {page:{...}}, ao contrário dos demais, que são GET simples) —
+        # sem enviar Content-Type + corpo, a Control Room real rejeitaria
+        # com 400 antes mesmo de classificar a capacidade.
+        with unittest.mock.patch.object(self.gateway, '_forward', return_value=(200, b'{"list":[]}', None)) as mocked:
+            self.gateway.discover('https://empresa.my.automationanywhere.digital', 'tok')
+        users_call = next(c for c in mocked.call_args_list if '/v1/usermanagement/users/list' in c[0][1])
+        self.assertEqual(users_call[0][0], 'POST')
+        self.assertEqual(users_call[0][2]['Content-Type'], 'application/json')
+        self.assertEqual(json.loads(users_call[0][3].decode('utf-8')), {'page': {'offset': 0, 'length': 1}})
 
     def test_authenticate_logs_status_on_non_2xx(self):
         with unittest.mock.patch.object(self.gateway, '_forward', return_value=(500, b'Internal error', None)):
@@ -869,6 +897,134 @@ class TestDatasetWithEmptyRegistry(unittest.TestCase):
             self.assertEqual(idx['summary']['totalRpas'], 1)
 
 
+class TestDesktopNotifier(unittest.TestCase):
+    """Notificação nativa do SO (server.py, não a Web Notification API do
+    navegador — ver decisão registrada em SECURITY.md). `subprocess.run` é
+    sempre mockado aqui: rodar de verdade dispararia um toast real na
+    máquina que executa a suíte de testes."""
+
+    def setUp(self):
+        # Estado de rate-limit é de classe (compartilhado entre chamadas
+        # reais) — sem resetar, um teste anterior no mesmo processo poderia
+        # fazer este começar já "limitado".
+        server.DesktopNotifier._last_sent_at = 0.0
+
+    def test_clip_truncates_and_strips_newlines(self):
+        text = 'linha 1\nlinha 2\r\ncontinuação' + ('x' * 400)
+        clipped = server.DesktopNotifier._clip(text, 20)
+        self.assertEqual(len(clipped), 20)
+        self.assertNotIn('\n', clipped)
+        self.assertNotIn('\r', clipped)
+
+    def test_notify_rate_limits_rapid_repeated_calls(self):
+        with unittest.mock.patch.object(server.subprocess, 'run', return_value=unittest.mock.Mock(returncode=0)):
+            with unittest.mock.patch.object(server.sys, 'platform', 'linux'):
+                first = server.DesktopNotifier.notify('Título', 'Corpo')
+                second = server.DesktopNotifier.notify('Título', 'Corpo')
+        self.assertTrue(first)
+        self.assertFalse(second)  # dentro de MIN_INTERVAL_SECONDS do primeiro
+
+    def test_notify_macos_never_interpolates_untrusted_text_into_script(self):
+        # Regressão de injeção: título/corpo (podem vir de nome de log/RPA
+        # não confiável) precisam trafegar só por variável de ambiente,
+        # nunca dentro da string do AppleScript — senão um valor como
+        # `" & do shell script "rm -rf ~" & "` viraria código executável.
+        malicious = 'texto" & do shell script "touch /tmp/pwned" & "'
+        with unittest.mock.patch.object(server.subprocess, 'run', return_value=unittest.mock.Mock(returncode=0)) as mocked:
+            with unittest.mock.patch.object(server.sys, 'platform', 'darwin'):
+                server.DesktopNotifier.notify(malicious, malicious)
+        args, kwargs = mocked.call_args
+        script = args[0][2]  # ['osascript', '-e', script]
+        self.assertNotIn(malicious, script)
+        self.assertEqual(kwargs['env']['RPA_NOTIF_TITLE'], malicious)
+        self.assertEqual(kwargs['env']['RPA_NOTIF_BODY'], malicious)
+
+    def test_notify_windows_never_interpolates_untrusted_text_into_script(self):
+        malicious = "'; Remove-Item -Recurse -Force C:\\; '"
+        with unittest.mock.patch.object(server.subprocess, 'run', return_value=unittest.mock.Mock(returncode=0)) as mocked:
+            with unittest.mock.patch.object(server.sys, 'platform', 'win32'):
+                server.DesktopNotifier.notify(malicious, malicious)
+        args, kwargs = mocked.call_args
+        ps_script = args[0][-1]
+        self.assertNotIn(malicious, ps_script)
+        self.assertEqual(kwargs['env']['RPA_NOTIF_TITLE'], malicious)
+        self.assertEqual(kwargs['env']['RPA_NOTIF_BODY'], malicious)
+
+    def test_notify_linux_passes_title_and_body_as_separate_argv_never_shell(self):
+        with unittest.mock.patch.object(server.subprocess, 'run', return_value=unittest.mock.Mock(returncode=0)) as mocked:
+            with unittest.mock.patch.object(server.sys, 'platform', 'linux'):
+                server.DesktopNotifier.notify('Título seguro', 'Corpo seguro')
+        args, kwargs = mocked.call_args
+        self.assertEqual(args[0], ['notify-send', 'Título seguro', 'Corpo seguro'])
+        self.assertNotIn('shell', kwargs)
+
+    def test_notify_returns_false_on_subprocess_error_never_raises(self):
+        with unittest.mock.patch.object(server.subprocess, 'run', side_effect=OSError('comando não encontrado')):
+            with unittest.mock.patch.object(server.sys, 'platform', 'linux'):
+                result = server.DesktopNotifier.notify('Título', 'Corpo')
+        self.assertFalse(result)
+
+
+class TestResolveVmRoot(unittest.TestCase):
+    """Regressão do incidente em produção (2026-09-29): VMs pararam de
+    aparecer no ambiente corporativo porque a escolha VMS/Historico × VMS
+    era feita uma ÚNICA VEZ na importação do módulo, contra um caminho de
+    rede (UNC) — se a rede ainda não estivesse pronta naquele instante
+    exato do boot, a resposta errada ficava congelada pelo resto da vida do
+    processo, sem nenhum log explicando por quê. `_resolve_vm_root` precisa
+    ser chamável de novo a qualquer momento e refletir o estado ATUAL do
+    disco/rede, nunca uma resposta cacheada da primeira chamada."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self._orig_vm_base = server._VM_BASE
+        server._VM_BASE = self.tmp
+
+    def tearDown(self):
+        server._VM_BASE = self._orig_vm_base
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_prefers_historico_subfolder_when_it_exists(self):
+        (self.tmp / 'Historico').mkdir()
+        self.assertEqual(server._resolve_vm_root(), self.tmp / 'Historico')
+
+    def test_falls_back_to_base_when_historico_missing(self):
+        self.assertEqual(server._resolve_vm_root(), self.tmp)
+
+    def test_recomputes_dynamically_instead_of_caching_first_answer(self):
+        # Simula a rede "ainda não pronta" no boot (Historico não existe
+        # ainda), seguida de "rede pronta" segundos depois (pasta aparece) —
+        # a PRÓXIMA chamada precisa refletir a mudança, sem exigir reiniciar
+        # o processo. Este é exatamente o comportamento que faltava antes.
+        self.assertEqual(server._resolve_vm_root(), self.tmp)
+        (self.tmp / 'Historico').mkdir()
+        self.assertEqual(server._resolve_vm_root(), self.tmp / 'Historico')
+
+    def test_explicit_override_env_var_always_wins_over_autodetection(self):
+        (self.tmp / 'Historico').mkdir()
+        override_dir = tempfile.mkdtemp()
+        try:
+            with unittest.mock.patch.dict(os.environ, {'RPA_MONITOR_VM_ROOT': override_dir}):
+                self.assertEqual(server._resolve_vm_root(), Path(override_dir))
+        finally:
+            shutil.rmtree(override_dir, ignore_errors=True)
+
+    def test_build_dataset_updates_log_store_vm_root_when_resolution_changes(self):
+        # `build_dataset` (não só a função isolada) precisa propagar a nova
+        # resolução para `log_store.vm_root` — senão o SQLiteLogStore
+        # continuaria escaneando o caminho antigo mesmo depois da rede
+        # ficar pronta.
+        if not server.RPA_LOG_ROOT.exists():
+            raise unittest.SkipTest('./logs não encontrado neste checkout — pulando (precisa do pipeline real de build_dataset).')
+        original = server.log_store.vm_root
+        try:
+            server.log_store.vm_root = self.tmp / 'caminho-errado-do-boot'
+            server.build_dataset('30d')
+            self.assertEqual(server.log_store.vm_root, self.tmp)
+        finally:
+            server.log_store.vm_root = original
+
+
 class TestDatasetBuilds(unittest.TestCase):
     """Smoke test do pipeline real de dados — só roda se ./logs existir."""
 
@@ -1028,6 +1184,19 @@ class TestHttpServerRoutes(unittest.TestCase):
         data = json.loads(body)
         self.assertEqual(data['ok'], False)
         self.assertIn('rpa_metadata.json.lock', data['error'])
+
+    def test_notify_route_requires_csrf(self):
+        status, body = self._post_json('/api/notify', {'title': 'x', 'body': 'y'}, csrf=False)
+        self.assertEqual(status, 403)
+
+    def test_notify_route_calls_desktop_notifier_with_payload(self):
+        # DesktopNotifier.notify mockado: rodar de verdade dispararia um
+        # toast real na máquina que roda a suíte de testes.
+        with unittest.mock.patch.object(server.DesktopNotifier, 'notify', return_value=True) as mocked:
+            status, body = self._post_json('/api/notify', {'title': 'Erro novo', 'body': 'RPA X, RPA Y'})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)['ok'])
+        mocked.assert_called_once_with('Erro novo', 'RPA X, RPA Y')
 
     def test_csrf_token_route_returns_a_nonempty_token(self):
         status, body = self._get('/api/csrf-token')

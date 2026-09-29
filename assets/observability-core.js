@@ -1,12 +1,13 @@
 /* ============================================================================
    SHARED UI KIT — páginas avulsas do RPA Ops Monitor
    ----------------------------------------------------------------------------
-   Usado por investigacao.html, diagnostico.html e rpa-dashboard.html (as três
-   telas que abrem em nova aba a partir do dashboard principal). Cada uma
-   dessas páginas acessa este arquivo através de `window.RPAUI` — por isso o
+   Usado por investigacao.html (Investigação & Diagnóstico, fundidas em uma
+   só tela em 2026-09-29) e rpa-dashboard.html — as duas telas que abrem
+   como janela "de app" a partir do dashboard principal. Cada uma dessas
+   páginas acessa este arquivo através de `window.RPAUI` — por isso o
    objeto exportado no fim do arquivo precisa manter exatamente as mesmas
    chaves de sempre (D, IDX, $, esc, getRpa, lineSvg, etc.); mudar um nome
-   aqui quebra as três páginas ao mesmo tempo.
+   aqui quebra as duas páginas ao mesmo tempo.
 
    Fontes de dados:
    - window.OBS_DATA  → gerado por server.py a partir dos logs (90 dias por
@@ -157,9 +158,14 @@
             this.repo = repository;
         }
 
-        openInvestigation(executionId) { window.open(`investigacao.html?execution_id=${encodeURIComponent(executionId)}`, '_blank'); }
-        openDiagnostic(executionId) { window.open(`diagnostico.html?execution_id=${encodeURIComponent(executionId)}`, '_blank'); }
-        openRpa(rpaId) { window.open(`rpa-dashboard.html?rpa_id=${encodeURIComponent(rpaId)}`, '_blank'); }
+        /** Abre como janela "de app" (sem abas, sem barra de endereço) em vez
+         * de uma aba comum — mesma técnica usada por `NavigationController`
+         * em dashboard-app.js (ver `WINDOW_FEATURES` lá). `noopener` também
+         * impede a página aberta de enxergar/navegar esta janela via
+         * `window.opener` (nenhuma das 3 páginas avulsas usa isso hoje). */
+        static WINDOW_FEATURES = 'popup=yes,noopener,noreferrer,width=1440,height=900,left=60,top=40';
+        openInvestigation(executionId) { window.open(`investigacao.html?execution_id=${encodeURIComponent(executionId)}`, '_blank', RpaPageNavigator.WINDOW_FEATURES); }
+        openRpa(rpaId) { window.open(`rpa-dashboard.html?rpa_id=${encodeURIComponent(rpaId)}`, '_blank', RpaPageNavigator.WINDOW_FEATURES); }
         exportPdf() { window.print(); }
 
         /** Delegação de clique para abrir investigação/diagnóstico a partir de
@@ -178,8 +184,6 @@
             document.body.addEventListener('click', (event) => {
                 const inv = event.target.closest('[data-open-investigation]');
                 if (inv) return this.openInvestigation(inv.dataset.openInvestigation);
-                const diag = event.target.closest('[data-open-diagnostic]');
-                if (diag) return this.openDiagnostic(diag.dataset.openDiagnostic);
             });
         }
 
@@ -203,8 +207,8 @@
 
     /* =========================================================================
        Montagem — instancia as classes acima e publica window.RPAUI com as
-       MESMAS chaves de sempre, para que investigacao.html/diagnostico.html/
-       rpa-dashboard.html continuem funcionando sem nenhuma alteração.
+       MESMAS chaves de sempre, para que investigacao.html/rpa-dashboard.html
+       continuem funcionando sem nenhuma alteração.
        ========================================================================= */
     const repository = new RpaDataRepository(window.OBS_DATA, window.INDEX_DATA || null);
     const formatter = new RpaFormatter();
@@ -240,7 +244,6 @@
         paretoRank: (dim, label) => repository.paretoRank(dim, label),
 
         openInvestigation: id => navigator.openInvestigation(id),
-        openDiagnostic: id => navigator.openDiagnostic(id),
         openRpa: id => navigator.openRpa(id),
         exportPdf: () => navigator.exportPdf(),
         initToolbar: label => navigator.initToolbar(label, formatter),

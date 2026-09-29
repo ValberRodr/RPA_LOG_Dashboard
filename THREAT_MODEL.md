@@ -74,12 +74,28 @@ dentro do executável final). Instalar sempre a partir do PyPI oficial
 de um instalador de terceiros.
 
 ### 6. Roubo do token do Automation Anywhere
-Token em memória do processo Python, ou em `config/aa_config.json`, ou
-trafegando entre front-end e back-end via header customizado.
+Token em memória do processo Python (nunca guardado lá de fato — o servidor
+é stateless e reencaminha o header a cada chamada, ver `_aa_ctx_from_headers`),
+em `config/aa_config.json`, ou trafegando entre front-end e back-end via
+header customizado (`X-AA-Token`). No navegador, o token vive em
+`AASecretVault` e — desde 2026-09-29, decisão de risco aceita a pedido do
+responsável do projeto — também em `sessionStorage` (ver SECURITY.md, seção
+4 e Histórico de correções).
 **Risco:** se persistido em texto plano em disco, qualquer leitura do
-arquivo (backup, outro processo, cópia do projeto) vaza o token.
-**Status:** a confirmar na auditoria — verificar `aa_config.json` e o fluxo
-de "Desconectar".
+arquivo (backup, outro processo, cópia do projeto) vaza o token —
+`aa_config.json` nunca guarda token/API Key, só confirmado por auditoria.
+`sessionStorage` nunca toca disco, mas amplia quem consegue ler o token
+dentro do próprio navegador: um XSS na mesma origem (nenhum conhecido hoje)
+passaria a ler o token com uma chamada padrão (`sessionStorage.getItem(...)`)
+em vez de precisar conhecer a estrutura interna do módulo JS. A API Key em
+si (o segredo de vida mais longa) nunca é persistida, só o token derivado —
+quem só acessa o `sessionStorage` não consegue emitir um token novo depois
+que este expirar.
+**Status: corrigido/aceito** — `aa_config.json` auditado (só `aaBaseUrl`/
+`aaUsername`); "Desconectar" e `SESSION_EXPIRED` limpam memória e
+`sessionStorage` juntos (`AAConnectionManager.disconnect`/
+`_clearPersistedSession`). O uso de `sessionStorage` em si é um risco aceito
+(não um bug) — ver SECURITY.md para o registro completo da decisão.
 
 ### 7. XSS via mensagem de erro de uma RPA
 Uma automação gera uma mensagem de erro com conteúdo controlável (por
@@ -154,6 +170,26 @@ proxy de inspeção (fora do controle deste projeto). Escopo estritamente
 limitado ao modo com proxy: o modo direto (`_do_one_request`/
 `_PinnedHTTPSConnection`, usado sempre que `AA_PROXY` não está configurado)
 continua validando certificado normalmente, sem nenhuma mudança.
+
+### 13. Injeção de comando via notificação nativa do SO
+`DesktopNotifier.notify(title, body)` (server.py) aciona um comando do SO
+(AppleScript no macOS, PowerShell no Windows, `notify-send` no Linux) para
+mostrar um toast — e `title`/`body` chegam, em última instância, de dado de
+log ou de nome de automação da Control Room, ambos não confiáveis (ver
+cenário de XSS, seção 7, e SECURITY.md seção 2/21).
+**Risco:** se o texto fosse interpolado dentro da string do script
+(AppleScript/PowerShell), um `execution_id`/nome de RPA malicioso poderia
+fechar a string do script e executar comando arbitrário na máquina do
+usuário — categoria de vulnerabilidade mais grave que XSS (execução fora do
+navegador, com os privilégios de quem roda o server.py).
+**Status: mitigado por construção** — título/corpo NUNCA entram na string do
+script; trafegam só por variável de ambiente do subprocesso, lida de DENTRO
+do AppleScript (`system attribute`)/PowerShell (`$env:`), nunca reanalisada
+como sintaxe; no Linux, vão como argv separado do `notify-send`, sem
+`shell=True` em ponto nenhum. `POST /api/notify` exige o mesmo CSRF+Origin de
+qualquer rota que muda estado. Ver `TestDesktopNotifier` (`test_server.py`)
+para a regressão com payload adversarial real, e SECURITY.md para o registro
+completo da decisão.
 
 ## Fora de escopo (por design)
 

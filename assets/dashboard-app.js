@@ -272,6 +272,14 @@ class ChartService {
    topbar/sidebar (tema, busca, menu mobile, filtros de cada página).
    ========================================================================= */
 class NavigationController {
+    /** Abre investigação/diagnóstico/rpa-dashboard como janela "de app" (sem
+     * abas, sem barra de endereço) em vez de uma aba comum do navegador —
+     * mesma string usada por `RpaPageNavigator.WINDOW_FEATURES` em
+     * observability-core.js (arquivo à parte, sem import — duplicada aqui de
+     * propósito). `noopener` também impede a página aberta de navegar esta
+     * janela via `window.opener` (nenhuma das 3 páginas avulsas usa isso). */
+    static WINDOW_FEATURES = 'popup=yes,noopener,noreferrer,width=1440,height=900,left=60,top=40';
+
     static goToPage(pageName) {
         sessionStorage.setItem('rpaOpsActivePage', pageName);
         DomUtils.$$('.nav-link').forEach(link => link.classList.toggle('active', link.dataset.page === pageName));
@@ -315,7 +323,7 @@ class NavigationController {
             UiFeedback.showToast('Selecione uma execução antes de abrir esta visão.');
             return;
         }
-        window.open(`${page}?execution_id=${encodeURIComponent(executionId)}`, '_blank');
+        window.open(`${page}?execution_id=${encodeURIComponent(executionId)}`, '_blank', NavigationController.WINDOW_FEATURES);
     }
 
     static bindFilterListeners() {
@@ -365,6 +373,8 @@ class NavigationController {
             DomUtils.$('#themeIcon use').setAttribute('href', savedTheme === 'dark' ? '#i-sun' : '#i-moon');
         }
 
+        NotificationBridge.bindButton();
+
         DomUtils.$('#refreshButton').addEventListener('click', () => {
             const icon = DomUtils.$('#refreshButton .icon');
             icon.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }], { duration: 480 });
@@ -377,6 +387,78 @@ class NavigationController {
                 row.style.display = !query || row.dataset.searchText.includes(query) ? '' : 'none';
             });
         });
+    }
+}
+
+/* =========================================================================
+   NotificationBridge — notificações nativas do SO para alertas/incidentes
+   LOCAIS (a contraparte para a Automation Anywhere vive em aa-integration.js,
+   que consome o mesmo RpaNotificationCenter de assets/notifications.js).
+   Checa em todo `renderAll()` — cobre tanto "app acabou de abrir" (chamado
+   uma vez no boot) quanto "acabou de atualizar" (chamado de novo a cada
+   refresh incremental de 20 min ou clique manual em "Atualizar"), sem
+   precisar de dois pontos de chamada separados.
+   ========================================================================= */
+class NotificationBridge {
+    static bindButton() {
+        const btn = DomUtils.$('#notificationsButton');
+        if (!btn) return;
+        NotificationBridge._paintButton();
+        btn.addEventListener('click', () => NotificationBridge._onButtonClick());
+    }
+
+    static _onButtonClick() {
+        if (!window.RpaNotificationCenter) return;
+        RpaNotificationCenter.setEnabled(!RpaNotificationCenter.isEnabled());
+        NotificationBridge._paintButton();
+        if (RpaNotificationCenter.isEnabled()) {
+            UiFeedback.showToast('Notificações do sistema ativadas — disparando um teste agora.');
+            // Confirma na hora que o toast nativo realmente aparece, sem
+            // esperar o próximo erro/refresh de verdade para descobrir.
+            RpaNotificationCenter.push({
+                severity: 'info', title: 'RPA Ops Monitor',
+                body: 'Notificações ativadas — você será avisado de novos erros (local e Automation Anywhere).',
+                tag: 'rpa-notify-test',
+            });
+        } else {
+            UiFeedback.showToast('Notificações pausadas.');
+        }
+    }
+
+    static _paintButton() {
+        const btn = DomUtils.$('#notificationsButton');
+        if (!btn || !window.RpaNotificationCenter) return;
+        const on = RpaNotificationCenter.isEnabled();
+        btn.classList.toggle('active', on);
+        btn.title = `Notificações do sistema: ${on ? 'ativadas' : 'desativadas'}`;
+    }
+
+    /** Severidade CRÍTICO/ALTO agrupada por RPA+regra+última ocorrência —
+     * `lastSeen` na chave garante que uma nova ocorrência do MESMO alerta
+     * (RPA+regra recorrente) conta como "novo" de novo, mas recarregar sem
+     * nenhuma ocorrência nova não notifica a mesma coisa outra vez. */
+    static _checkAlerts() {
+        const items = (DATA.alerts || []).filter(a => a.severity === 'CRITICO' || a.severity === 'ALTO');
+        RpaNotificationCenter.notifyNewBatch(
+            'local-alerts', items,
+            a => `${a.rpaName || a.machine || ''}|${a.rule}|${a.lastSeen}`,
+            a => a.rpaName || a.machine || 'Infraestrutura',
+            { severity: 'critical', label: 'novo(s) alerta(s) crítico/alto', tag: 'rpa-local-alerts' },
+        );
+    }
+
+    static _checkIncidents() {
+        const items = (DATA.incidents || []).filter(i => i.status === 'OPEN');
+        RpaNotificationCenter.notifyNewBatch(
+            'local-incidents', items, i => i.executionId, i => i.rpa,
+            { severity: 'critical', label: 'nova(s) falha(s) registrada(s)', tag: 'rpa-local-incidents' },
+        );
+    }
+
+    static checkForNewItems() {
+        if (!window.RpaNotificationCenter || !RpaNotificationCenter.isEnabled()) return;
+        NotificationBridge._checkAlerts();
+        NotificationBridge._checkIncidents();
     }
 }
 
@@ -668,7 +750,7 @@ class OverviewPage {
         DomUtils.$$('.clickable-row', tbody).forEach(row => row.addEventListener('click', () => {
             const process = row.dataset.process;
             const rpa = DATA.rpas.find(x => x.process === process);
-            if (rpa) window.open(`rpa-dashboard.html?rpa_id=${encodeURIComponent(rpa.id)}`, '_blank');
+            if (rpa) window.open(`rpa-dashboard.html?rpa_id=${encodeURIComponent(rpa.id)}`, '_blank', NavigationController.WINDOW_FEATURES);
         }));
     }
 
@@ -1340,7 +1422,6 @@ class IncidentsPage {
                 <td style="white-space:nowrap">
                     <button class="audit-action js-audit" type="button">Auditar</button>
                     <button class="audit-action js-investigate" type="button">Investigar ↗</button>
-                    <button class="audit-action js-diagnose" type="button">Diagnóstico ↗</button>
                 </td>
             </tr>
         `).join('');
@@ -1349,7 +1430,6 @@ class IncidentsPage {
             row.addEventListener('click', () => openAuditExecution(row.dataset.executionId));
             row.querySelector('.js-audit')?.addEventListener('click', ev => { ev.stopPropagation(); openAuditExecution(row.dataset.executionId); });
             row.querySelector('.js-investigate')?.addEventListener('click', ev => { ev.stopPropagation(); NavigationController.openExecutionWorkspace('investigacao.html', row.dataset.executionId); });
-            row.querySelector('.js-diagnose')?.addEventListener('click', ev => { ev.stopPropagation(); NavigationController.openExecutionWorkspace('diagnostico.html', row.dataset.executionId); });
         });
     }
 }
@@ -1585,9 +1665,7 @@ class AuditPage {
         `;
 
         const investigateBtn = DomUtils.$('#auditInvestigateBtn');
-        const diagnoseBtn = DomUtils.$('#auditDiagnoseBtn');
         if (investigateBtn) investigateBtn.onclick = () => NavigationController.openExecutionWorkspace('investigacao.html', detail.executionId);
-        if (diagnoseBtn) diagnoseBtn.onclick = () => NavigationController.openExecutionWorkspace('diagnostico.html', detail.executionId);
 
         DomUtils.$('#auditEvidence').innerHTML = `
             <div class="audit-evidence-list">
@@ -1638,7 +1716,6 @@ class AuditPage {
                     <td style="white-space:nowrap">
                         <button class="audit-action js-audit" type="button">Auditar</button>
                         <button class="audit-action js-investigate" type="button">Investigar ↗</button>
-                        <button class="audit-action js-diagnose" type="button">Diagnóstico ↗</button>
                     </td>
                 </tr>
             `;
@@ -1655,18 +1732,13 @@ class AuditPage {
                 window.ACTIVE_EXECUTION_ID = row.dataset.executionId;
                 NavigationController.openExecutionWorkspace('investigacao.html', row.dataset.executionId);
             });
-            row.querySelector('.js-diagnose')?.addEventListener('click', event => {
-                event.stopPropagation();
-                window.ACTIVE_EXECUTION_ID = row.dataset.executionId;
-                NavigationController.openExecutionWorkspace('diagnostico.html', row.dataset.executionId);
-            });
         });
     }
 }
 
 /* =========================================================================
-   DiagnosticPage — drill-down técnico embutido na própria SPA (distinto de
-   diagnostico.html, que é a versão completa aberta em nova aba).
+   DiagnosticPage — drill-down técnico embutido na própria SPA (distinto da
+   análise completa de investigacao.html, aberta como janela separada).
    ========================================================================= */
 class DiagnosticPage {
     static renderDiagnostic(detail) {
@@ -1862,7 +1934,7 @@ class CatalogPage {
 
         DomUtils.$$('#catalogTable .catalog-open-btn').forEach(btn => {
             btn.addEventListener('click', () => {
-                window.open(`rpa-dashboard.html?rpa_id=${encodeURIComponent(btn.dataset.rpaId)}`, '_blank');
+                window.open(`rpa-dashboard.html?rpa_id=${encodeURIComponent(btn.dataset.rpaId)}`, '_blank', NavigationController.WINDOW_FEATURES);
             });
         });
     }
@@ -2216,6 +2288,7 @@ class RpaOpsApp {
         RegistryPage.render();
 
         NavigationController.refreshOverflowHints();
+        NotificationBridge.checkForNewItems();
     }
 
     static init() {

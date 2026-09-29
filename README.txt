@@ -68,11 +68,10 @@ assets/dashboard-app.js        todo o JavaScript de index.html, organizado em
                                 IncidentsPage, InfrastructurePage, AuditPage,
                                 DiagnosticPage, CatalogPage, RegistryPage,
                                 RpaOpsApp).
-investigacao.html              investigação forense por execution_id —
-                                lógica na classe InvestigacaoPage (um método
-                                por seção renderizada).
-diagnostico.html                diagnóstico técnico-operacional por execution_id
-                                — classe DiagnosticoPage.
+investigacao.html              investigação forense + diagnóstico técnico-
+                                operacional por execution_id, numa só tela
+                                (fundidas em 2026-09-29) — classe
+                                ExecutionDetailPage (um método por seção).
 rpa-dashboard.html             dashboard histórico individual da RPA —
                                 classe RpaDashboardPage (filtros de
                                 período/status/busca como propriedades da
@@ -93,6 +92,30 @@ assets/chart.umd.min.js        Chart.js vendorizado (sem CDN) — usado só
 assets/auto-refresh.js         badge + timer de atualização automática a
                                 cada 20 min, compartilhado por todas as
                                 páginas HTML.
+assets/notifications.js        RpaNotificationCenter — pede ao BACKEND
+                                (POST /api/notify, ver DesktopNotifier em
+                                server.py) para mostrar uma notificação
+                                nativa do sistema operacional quando o app
+                                abre ou atualiza e há erro novo (local ou
+                                Automation Anywhere), com emoji por
+                                severidade. Não usa a Web Notification API
+                                do navegador — decisão explícita (2026-09-29)
+                                depois de confirmar que o prompt de permissão
+                                do Chrome não dá pra automatizar/confirmar de
+                                fora, e o pedido era notificação "a nível de
+                                máquina", não amarrada a permissão por aba.
+                                Consumido por dashboard-app.js
+                                (NotificationBridge, alertas/incidentes
+                                locais) e aa-integration.js (falhas da
+                                Control Room) — nunca dispara sozinho, cada
+                                um decide o que é "novo" no seu domínio.
+                                Opt-in: botão de sino no topbar liga/desliga
+                                um flag local (sem permissão nenhuma para
+                                pedir) e dispara um toast de teste na hora
+                                que é ligado. Só funciona com o servidor
+                                local rodando (não é push real de fora da
+                                rede — o processo do server.py já É "a
+                                máquina" aqui).
 assets/observability-data.js   fallback estático (window.OBS_DATA) usado só
                                 se o HTML for aberto via file://; quando
                                 servido por server.py, é substituído por uma
@@ -214,14 +237,14 @@ Convenções que você precisa conhecer para mexer em dashboard-app.js:
   diretamente e continua verificado manualmente no navegador, como sempre
   foi neste projeto.
 
-FRONT-END — páginas avulsas (investigacao.html, diagnostico.html,
-rpa-dashboard.html)
+FRONT-END — páginas avulsas (investigacao.html, rpa-dashboard.html)
 Cada uma é um HTML pequeno com um `<script>` que só lê `window.RPAUI`
 (exportado por assets/observability-core.js) e monta a página. Não têm
-sidebar/roteamento — abrem numa aba nova a partir de index.html, sempre com
-um parâmetro na URL (`execution_id` ou `rpa_id`). Por segurança, nenhuma
-delas cai num "exemplo" quando o parâmetro está ausente/inválido — mostram
-uma mensagem de acesso inválido (ver seção SEGURANÇA).
+sidebar/roteamento — abrem como janela "de app" (sem abas/barra de
+endereço, ver window.open com WINDOW_FEATURES) a partir de index.html,
+sempre com um parâmetro na URL (`execution_id` ou `rpa_id`). Por segurança,
+nenhuma delas cai num "exemplo" quando o parâmetro está ausente/inválido —
+mostram uma mensagem de acesso inválido (ver seção SEGURANÇA).
 
 Cada página encapsula sua lógica numa única classe (InvestigacaoPage,
 DiagnosticoPage, RpaDashboardPage): construtor recebe `window.RPAUI`,
@@ -298,17 +321,30 @@ original depende dele.
 
 Sem conectar, a única mudança visível é o botão "Automation Anywhere ·
 Conectar" no topbar. Depois de conectar (API Key + Control Room, ou "mock"
-para simular), um grupo de navegação novo aparece com até 10 páginas —
-cada uma só fica visível se a capability correspondente estiver disponível
-(discovery de capability roda uma vez, na conexão).
+para simular), um grupo de navegação novo aparece com até 12 páginas —
+Control Room, Parque de RPAs 360°, Execuções AA, Execução 360°, Schedules,
+Runners & Devices, Workload, Usuários & Sessões, Mudanças & Audit,
+Dependências, Qualidade/Policy e Analytics — cada uma só fica visível se a
+capability correspondente estiver disponível (discovery de capability roda
+uma vez, na conexão). A sessão conectada persiste em sessionStorage durante
+a aba: recarregar a página (F5) não pede a API Key de novo — só fechar a
+aba/navegador ou clicar "Desconectar" encerra a sessão de verdade.
+
+O "Cadastro de RPAs" ganha um segundo botão, "Escanear no Automation
+Anywhere" (só aparece conectado), que varre a Activity List da Control Room
+(paginado, com barra de progresso) em busca de automações sem processo
+correspondente no cadastro local — complementa o "Escanear RPAs" original,
+que só olha os logs locais.
 
 Arquitetura do módulo (todas as classes vivem dentro do IIFE de
 aa-integration.js — ver o comentário no topo do arquivo para o mapa
-completo): AASecretVault guarda API Key/token só em memória; AAApiClient
-fala com /api/aa/* (nunca direto com a Control Room); AACorrelationEngine
-classifica Activity × log local; AAConnectionManager é a máquina de
-estados; as classes *View cuidam do DOM; AAPagesController renderiza as
-10 páginas.
+completo): AASecretVault guarda API Key/token (token também em
+sessionStorage, ver SEGURANÇA abaixo); AAApiClient fala com /api/aa/* (nunca
+direto com a Control Room); AACorrelationEngine classifica Activity × log
+local; AAConnectionManager é a máquina de estados (inclui
+`tryRestoreSession()`, chamado uma vez no boot); as classes *View cuidam do
+DOM; AAPagesController renderiza as 12 páginas; AARegistryScanExtension
+injeta o botão de scan via Automation Anywhere no Cadastro de RPAs.
 
 No backend, `AutomationAnywhereGateway` (em server.py) concentra config,
 autenticação, discovery e o proxy para a Control Room — com um modo mock
@@ -326,10 +362,14 @@ SEGURANÇA
   navegação direta sem um parâmetro válido na URL — não há fallback para
   "última execução"/"primeira RPA".
 - A integração Automation Anywhere nunca grava API Key/token em disco,
-  localStorage, sessionStorage, log ou PDF — só em variáveis de memória,
-  descartadas ao desconectar ou fechar a aba.
+  localStorage, log ou PDF. A API Key em si nunca é persistida — só existe
+  em memória durante a chamada de autenticação. O token derivado dela fica
+  em sessionStorage (decisão de risco aceita em 2026-09-29 para a sessão
+  sobreviver a um F5 — ver SECURITY.md seção 4), descartado ao desconectar,
+  a sessão expirar ou fechar a aba.
 - O proxy genérico da integração (`/api/aa/proxy`) só encaminha caminhos
-  que comecem com /v2, /v3 ou /v4 — nunca uma URL arbitrária. `_forward`
+  que comecem com /v1, /v2, /v3 ou /v4 (v1 liberado só para o módulo de
+  usuários, que nunca migrou para v2+) — nunca uma URL arbitrária. `_forward`
   também recusa qualquer destino cujo host resolva para loopback, link-local
   ou o endpoint de metadata de nuvem (169.254.169.254) — defesa contra SSRF
   a partir de um `X-AA-Base-Url` malicioso, mantendo redes privadas (10/8,
