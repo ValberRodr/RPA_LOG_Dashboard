@@ -884,6 +884,16 @@
             this.actionsController = actionsController;
             this.auditTrail = auditTrail;
             this._activityCacheRows = [];
+            // Registro de "como redesenhar cada gráfico com a paleta atual,
+            // sem nova chamada de rede" — Chart.js fixa cor na criação (ver
+            // docstring de `redrawHistoryChartsForTheme`, história anterior
+            // desta mesma limitação). Cada método `_renderXChart` que
+            // desenha um gráfico novo registra aqui como replayá-lo; uma
+            // entrada cujo canvas não existe mais (página trocada) é um
+            // no-op inofensivo, porque `ChartService.drawChart` já checa
+            // `getElementById` antes de desenhar — nunca precisa ser limpa
+            // manualmente.
+            this._chartReplays = {};
             document.addEventListener('aa:audittrail-changed', () => this.renderControlRoom());
             // Notificação nativa de novas falhas (RUN_FAILED/FAILED) da
             // Control Room — checada tanto ao conectar (cobre "app acabou de
@@ -1066,16 +1076,36 @@
                 </article>`;
         }
 
+        /** Registra como redesenhar UM gráfico com a paleta atual, sem nova
+         * chamada de rede, e já desenha com os dados de agora. Ver docstring
+         * de `this._chartReplays` no construtor. */
+        _registerChartReplay(key, fn) {
+            this._chartReplays[key] = fn;
+            fn();
+        }
+
+        /** Rótulo de gráfico (legenda/eixo) a partir de texto livre vindo da
+         * Control Room (nome de papel, pacote, automação, fila...) — sem
+         * limite, um nome longo o bastante estoura a coluna estreita da
+         * legenda de um doughnut (ou empurra o eixo de um bar horizontal)
+         * e deixa o gráfico ilegível. O nome completo continua disponível
+         * na tabela ao lado; isto é só para a label do gráfico. */
+        _chartLabel(value, max = 26) {
+            const s = String(value ?? '—');
+            return s.length > max ? s.slice(0, max - 1) + '…' : s;
+        }
+
         /** Chart.js fixa cores na criação (mesma observação já feita para os
          * gráficos do dashboard original, ver `ChartService.redrawThemedCharts`
-         * em dashboard-app.js) — redesenha com a paleta atual sem refazer a
-         * chamada de rede, usando as linhas já carregadas. Não-op se o
-         * usuário nunca visitou o Control Room nesta sessão (nada em cache). */
-        redrawHistoryChartsForTheme() {
-            if (!this._historyRows || !document.getElementById('aaExecPerDayChart')) return;
-            this._renderExecPerDayChart(this._historyRows);
-            this._renderAvgDurationChart(this._historyRows);
-            this._renderTopAutomationsChart(this._historyRows);
+         * em dashboard-app.js) — redesenha TODOS os gráficos da integração
+         * (Control Room, Activity, Devices, Workload, Users, Policy, Fleet,
+         * Schedules, Dependências, Analytics, Execução 360°) com a paleta
+         * atual, sem refazer nenhuma chamada de rede. Não-op para qualquer
+         * gráfico cuja página não foi visitada nesta sessão (nunca registrado)
+         * ou cujo canvas não está montado agora (página trocada; ver guard em
+         * `ChartService.drawChart`). */
+        redrawAllAAChartsForTheme() {
+            Object.values(this._chartReplays).forEach(fn => fn());
         }
 
         async _loadHistoryCharts(pages) {
@@ -1091,9 +1121,9 @@
             });
             progress.style.display = 'none';
             this._historyRows = rows;
-            this._renderExecPerDayChart(rows);
-            this._renderAvgDurationChart(rows);
-            this._renderTopAutomationsChart(rows);
+            this._registerChartReplay('history.execPerDay', () => this._renderExecPerDayChart(rows));
+            this._registerChartReplay('history.avgDuration', () => this._renderAvgDurationChart(rows));
+            this._registerChartReplay('history.topAutomations', () => this._renderTopAutomationsChart(rows));
             const meta = document.getElementById('aaHistoryMeta');
             if (meta) {
                 const days = new Set(rows.filter(r => r.started).map(r => r.started.slice(0, 10))).size;
@@ -1236,7 +1266,17 @@
             if (!body.dataset.mounted) {
                 body.dataset.mounted = '1';
                 body.innerHTML = `
-                    <article class="card">
+                    <div class="grid grid-2">
+                        <article class="card">
+                            <div class="card-header"><div><h2>Execuções por status</h2><p>Amostra carregada (até 300 atividades mais recentes).</p></div></div>
+                            <div class="card-body chart-canvas-wrap" style="height:220px"><canvas id="aaActivityStatusChart"></canvas></div>
+                        </article>
+                        <article class="card">
+                            <div class="card-header"><div><h2>Duração média por status</h2><p>Quanto o tempo de execução varia entre sucesso e falha.</p></div></div>
+                            <div class="card-body chart-canvas-wrap" style="height:220px"><canvas id="aaActivityDurationChart"></canvas></div>
+                        </article>
+                    </div>
+                    <article class="card" style="margin-top:14px">
                         <div class="card-header">
                             <div><h2>Activity List</h2><p>Execuções oficiais reportadas pela Control Room, com correlação aos logs locais.</p></div>
                             <div style="display:flex;gap:8px">
@@ -1261,6 +1301,65 @@
             this._activityCacheRows = resp.list || [];
             this._updateActivityErrorBadge(this._activityCacheRows);
             this._paintActivityRows();
+            this._registerChartReplay('activity.status', () => this._renderActivityStatusChart(this._activityCacheRows));
+            this._registerChartReplay('activity.duration', () => this._renderActivityDurationChart(this._activityCacheRows));
+        }
+
+        _renderActivityStatusChart(rows) {
+            const p = ChartService.chartPalette();
+            const colors = AAPagesController.STATUS_CHART_COLORS(p);
+            const counts = new Map();
+            rows.forEach(r => counts.set(r.status || 'DESCONHECIDO', (counts.get(r.status || 'DESCONHECIDO') || 0) + 1));
+            const entries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+            ChartService.drawChart('aaActivityStatusChart', {
+                type: 'doughnut',
+                data: {
+                    labels: entries.map(([s]) => s),
+                    datasets: [{
+                        data: entries.map(([, c]) => c),
+                        backgroundColor: entries.map(([s]) => colors[s] || p.textMuted),
+                        borderColor: p.panel, borderWidth: 2,
+                    }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, cutout: '62%',
+                    plugins: {
+                        legend: { display: true, position: 'right', labels: { boxWidth: 10, usePointStyle: true, color: p.textMuted, font: { size: 10.5 } } },
+                        tooltip: ChartService.tooltipBase(p),
+                    },
+                },
+            });
+        }
+
+        _renderActivityDurationChart(rows) {
+            const p = ChartService.chartPalette();
+            const colors = AAPagesController.STATUS_CHART_COLORS(p);
+            const byStatus = new Map();
+            rows.forEach(r => {
+                if (r.durationMs == null) return;
+                if (!byStatus.has(r.status)) byStatus.set(r.status, []);
+                byStatus.get(r.status).push(r.durationMs / 60000);
+            });
+            const entries = [...byStatus.entries()].sort((a, b) => b[1].length - a[1].length);
+            ChartService.drawChart('aaActivityDurationChart', {
+                type: 'bar',
+                data: {
+                    labels: entries.map(([s]) => s),
+                    datasets: [{
+                        label: 'Duração média (min)',
+                        data: entries.map(([, vals]) => Number((vals.reduce((a, v) => a + v, 0) / vals.length).toFixed(1))),
+                        backgroundColor: entries.map(([s]) => colors[s] || p.textMuted), borderRadius: 4, maxBarThickness: 36,
+                    }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: { ...ChartService.tooltipBase(p), callbacks: { label: ctx => `${ctx.parsed.y} min` } } },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { color: p.textMuted, callback: v => v + ' min' }, grid: { color: p.grid } },
+                        x: { ticks: { color: p.textMuted }, grid: { display: false } },
+                    },
+                },
+            });
         }
 
         /** Badge vermelho no item de menu "Execuções AA" (mesmo estilo de
@@ -1371,7 +1470,16 @@
                                 <div class="audit-evidence-row"><span>CPU média</span><span>${(vmCtx.reduce((a, r) => a + Number(r.cpu_percent || 0), 0) / vmCtx.length).toFixed(1)}%</span></div>
                                 <div class="audit-evidence-row"><span>RAM média</span><span>${(vmCtx.reduce((a, r) => a + Number(r.memory_percent || 0), 0) / vmCtx.length).toFixed(1)}%</span></div>
                                 <div class="audit-evidence-row"><span>RDP observado</span><span>${escapeHtml([...new Set(vmCtx.map(r => r.rdp_status))].join(', '))}</span></div>
-                            </div>` : '<div class="empty-state">Sem execução local correlacionada com telemetria disponível.</div>'}
+                            </div>
+                            ${vmCtx.length > 1 ? `
+                            <div style="margin-top:12px">
+                                <div class="cell-subtitle" style="margin-bottom:4px">CPU durante a janela</div>
+                                ${ChartService.sparkline(vmCtx.map(r => Number(r.cpu_percent || 0)), 'var(--info)')}
+                            </div>
+                            <div style="margin-top:8px">
+                                <div class="cell-subtitle" style="margin-bottom:4px">RAM durante a janela</div>
+                                ${ChartService.sparkline(vmCtx.map(r => Number(r.memory_percent || 0)), 'var(--primary)')}
+                            </div>` : ''}` : '<div class="empty-state">Sem execução local correlacionada com telemetria disponível.</div>'}
                         </div>
                     </article>
                 </div>
@@ -1381,10 +1489,14 @@
                         <div class="metric-row"><span>${String(e.order).padStart(2, '0')}. ${escapeHtml(e.step)}</span><div class="progress-track"><div class="progress-fill ${e.status === 'ERROR' ? 'danger' : e.status === 'WARNING' ? 'warning' : 'success'}" style="width:100%"></div></div><strong>${escapeHtml(e.status)}</strong></div>
                     `).join('') : '<div class="empty-state">Sem etapas locais para exibir.</div>'}</div>
                 </article>
-                ${rpa ? `<article class="card" style="margin-top:14px"><div class="card-header"><div><h2>Baseline histórico local</h2></div></div><div class="card-body">
-                    <div class="audit-evidence-row"><span>Duração esperada</span><span>${rpa.expectedDurationMin} min</span></div>
-                    <div class="audit-evidence-row"><span>Duração desta atividade</span><span>${(activity.durationMs / 60000).toFixed(1)} min</span></div>
-                </div></article>` : ''}
+                ${rpa ? `<article class="card" style="margin-top:14px">
+                    <div class="card-header"><div><h2>Baseline histórico local</h2></div></div>
+                    <div class="card-body">
+                        <div class="audit-evidence-row"><span>Duração esperada</span><span>${rpa.expectedDurationMin} min</span></div>
+                        <div class="audit-evidence-row"><span>Duração desta atividade</span><span>${(activity.durationMs / 60000).toFixed(1)} min</span></div>
+                        <div class="chart-canvas-wrap" style="height:90px;margin-top:10px"><canvas id="aa360DurationChart"></canvas></div>
+                    </div>
+                </article>` : ''}
                 ${this.connectionManager.capabilities.deploy === 'AVAILABLE' ? `
                 <article class="card" style="margin-top:14px">
                     <div class="card-header"><div><h2>Ações</h2><p>Disponível porque a capability Bot Deploy está autorizada nesta Control Room.</p></div></div>
@@ -1392,6 +1504,32 @@
                 </article>` : ''}
             `;
             document.getElementById('aa360RerunBtn')?.addEventListener('click', () => this.actionsController.runOrRerun(activity, activity.automationName));
+            if (rpa) this._registerChartReplay('exec360.duration', () => this._renderExecucao360DurationChart(activity, rpa));
+        }
+
+        _renderExecucao360DurationChart(activity, rpa) {
+            const p = ChartService.chartPalette();
+            const actualMin = Number((activity.durationMs / 60000).toFixed(1));
+            const overBaseline = actualMin > rpa.expectedDurationMin * 1.4;
+            ChartService.drawChart('aa360DurationChart', {
+                type: 'bar',
+                data: {
+                    labels: ['Duração esperada', 'Esta atividade'],
+                    datasets: [{
+                        data: [rpa.expectedDurationMin, actualMin],
+                        backgroundColor: [p.textMuted, overBaseline ? p.danger : p.success],
+                        borderRadius: 4, maxBarThickness: 22,
+                    }],
+                },
+                options: {
+                    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: { ...ChartService.tooltipBase(p), callbacks: { label: ctx => `${ctx.parsed.x} min` } } },
+                    scales: {
+                        x: { beginAtZero: true, ticks: { color: p.textMuted, callback: v => v + ' min' }, grid: { color: p.grid } },
+                        y: { ticks: { color: p.textMuted }, grid: { display: false } },
+                    },
+                },
+            });
         }
 
         /* ---- 4. Schedules ------------------------------------------------------ */
@@ -1402,7 +1540,7 @@
             if (!resp.ok) { body.innerHTML = this._errorState(resp); return; }
             const aaSchedules = resp.data?.list || [];
             const schedulerAvailable = this.connectionManager.capabilities.scheduler === 'AVAILABLE';
-            const rows = (DATA.rpas || []).map(rpa => {
+            const entries = (DATA.rpas || []).map(rpa => {
                 const aa = aaSchedules.filter(s => s.automationId === rpa.id);
                 const localTimes = rpa.schedule || [];
                 let statusLabel = 'SEM REGRA LOCAL';
@@ -1412,6 +1550,9 @@
                 } else if (!aa.length && localTimes.length) {
                     statusLabel = 'SEM SCHEDULE AA';
                 }
+                return { rpa, aa, localTimes, statusLabel };
+            });
+            const rows = entries.map(({ rpa, aa, localTimes, statusLabel }) => {
                 const cls = { ALINHADO: 'success', DIVERGENTE: 'warning', 'SEM SCHEDULE AA': 'neutral', 'SEM REGRA LOCAL': 'neutral' }[statusLabel] || 'neutral';
                 const actionCell = (schedulerAvailable && aa.length)
                     ? `<button class="aa-btn" style="padding:5px 10px;font-size:11px" data-aa-schedule-id="${escapeHtml(aa[0].id)}" data-aa-rpa-name="${escapeHtml(rpa.name)}">Habilitar/Desabilitar</button>`
@@ -1420,11 +1561,39 @@
             }).join('');
             body.innerHTML = `
                 <article class="card">
+                    <div class="card-header"><div><h2>Estado da reconciliação</h2><p>Quantas RPAs estão em cada estado de alinhamento entre AA e agenda local.</p></div></div>
+                    <div class="card-body chart-canvas-wrap" style="height:${Math.max(160, Math.min(entries.length, 10) * 8 + 120)}px"><canvas id="aaSchedulesAlignmentChart"></canvas></div>
+                </article>
+                <article class="card" style="margin-top:14px">
                     <div class="card-header"><div><h2>Reconciliação de agenda</h2><p>Schedule Control Room × agenda local do catálogo. A agenda local não é alterada por esta tela.</p></div></div>
                     <div class="table-wrap"><table><thead><tr><th>RPA</th><th>Schedule AA</th><th>Agenda local</th><th>Estado</th><th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>
                 </article>`;
             $$('[data-aa-schedule-id]', body).forEach(btn => {
                 btn.addEventListener('click', () => this.actionsController.toggleSchedule(btn.dataset.aaScheduleId, btn.dataset.aaRpaName, true, () => this.renderSchedules()));
+            });
+            if (entries.length) this._registerChartReplay('schedules.alignment', () => this._renderSchedulesAlignmentChart(entries));
+        }
+
+        _renderSchedulesAlignmentChart(entries) {
+            const p = ChartService.chartPalette();
+            const colorFor = { ALINHADO: p.success, DIVERGENTE: p.warning, 'SEM SCHEDULE AA': p.textMuted, 'SEM REGRA LOCAL': p.textMuted };
+            const counts = new Map();
+            entries.forEach(e => counts.set(e.statusLabel, (counts.get(e.statusLabel) || 0) + 1));
+            const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+            ChartService.drawChart('aaSchedulesAlignmentChart', {
+                type: 'bar',
+                data: {
+                    labels: sorted.map(([s]) => s),
+                    datasets: [{ label: 'RPAs', data: sorted.map(([, c]) => c), backgroundColor: sorted.map(([s]) => colorFor[s] || p.textMuted), borderRadius: 4, maxBarThickness: 36 }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: ChartService.tooltipBase(p) },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { color: p.textMuted, precision: 0 }, grid: { color: p.grid } },
+                        x: { ticks: { color: p.textMuted }, grid: { display: false } },
+                    },
+                },
             });
         }
 
@@ -1450,10 +1619,71 @@
                 </tr>`;
             }).join('');
             body.innerHTML = `
-                <article class="card">
+                <div class="grid grid-2">
+                    <article class="card">
+                        <div class="card-header"><div><h2>Dispositivos por status</h2><p>Quantos devices a Control Room reporta como conectados agora.</p></div></div>
+                        <div class="card-body chart-canvas-wrap" style="height:200px"><canvas id="aaDevicesStatusChart"></canvas></div>
+                    </article>
+                    <article class="card">
+                        <div class="card-header"><div><h2>Uso de recursos por device</h2><p>CPU, RAM e disco reportados pela Control Room.</p></div></div>
+                        <div class="card-body chart-canvas-wrap" style="height:220px"><canvas id="aaDevicesResourceChart"></canvas></div>
+                    </article>
+                </div>
+                <article class="card" style="margin-top:14px">
                     <div class="card-header"><div><h2>Devices × telemetria local</h2><p>Combina o inventário de devices da Control Room com CPU/RAM/disco e confiabilidade já monitorados localmente.</p></div></div>
                     <div class="table-wrap"><table><thead><tr><th>Device</th><th>Status AA</th><th>Pool</th><th>CPU</th><th>RAM</th><th>Disco</th><th>RPAs no período</th><th>Confiabilidade</th></tr></thead><tbody>${rows}</tbody></table></div>
                 </article>`;
+            this._registerChartReplay('devices.status', () => this._renderDevicesStatusChart(devices));
+            this._registerChartReplay('devices.resource', () => this._renderDevicesResourceChart(devices));
+        }
+
+        _renderDevicesStatusChart(devices) {
+            const p = ChartService.chartPalette();
+            const counts = new Map();
+            devices.forEach(d => counts.set(d.status || 'DESCONHECIDO', (counts.get(d.status || 'DESCONHECIDO') || 0) + 1));
+            const entries = [...counts.entries()];
+            const colorFor = s => s === 'CONNECTED' ? p.success : s === 'DISCONNECTED' ? p.danger : p.textMuted;
+            ChartService.drawChart('aaDevicesStatusChart', {
+                type: 'doughnut',
+                data: {
+                    labels: entries.map(([s]) => s),
+                    datasets: [{ data: entries.map(([, c]) => c), backgroundColor: entries.map(([s]) => colorFor(s)), borderColor: p.panel, borderWidth: 2 }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, cutout: '62%',
+                    plugins: {
+                        legend: { display: true, position: 'right', labels: { boxWidth: 10, usePointStyle: true, color: p.textMuted, font: { size: 10.5 } } },
+                        tooltip: ChartService.tooltipBase(p),
+                    },
+                },
+            });
+        }
+
+        _renderDevicesResourceChart(devices) {
+            const p = ChartService.chartPalette();
+            const top = devices.slice(0, 12);
+            ChartService.drawChart('aaDevicesResourceChart', {
+                type: 'bar',
+                data: {
+                    labels: top.map(d => d.hostName),
+                    datasets: [
+                        { label: 'CPU %', data: top.map(d => d.cpuPercent ?? 0), backgroundColor: p.info, borderRadius: 3, maxBarThickness: 14 },
+                        { label: 'RAM %', data: top.map(d => d.memoryPercent ?? 0), backgroundColor: p.primary, borderRadius: 3, maxBarThickness: 14 },
+                        { label: 'Disco %', data: top.map(d => d.diskPercent ?? 0), backgroundColor: p.warning, borderRadius: 3, maxBarThickness: 14 },
+                    ],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: true, position: 'top', align: 'end', labels: { boxWidth: 10, usePointStyle: true, color: p.textMuted, font: { size: 10.5 } } },
+                        tooltip: { ...ChartService.tooltipBase(p), callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y}%` } },
+                    },
+                    scales: {
+                        y: { beginAtZero: true, max: 100, ticks: { color: p.textMuted, callback: v => v + '%' }, grid: { color: p.grid } },
+                        x: { ticks: { color: p.textMuted, maxRotation: 0, font: { size: 10 } }, grid: { display: false } },
+                    },
+                },
+            });
         }
 
         /* ---- 6. Workload (WLM) ---------------------------------------------------- */
@@ -1467,11 +1697,16 @@
             $$('[data-aa-queue-id]', body).forEach(row => {
                 row.addEventListener('click', () => this._renderQueueItems(row.dataset.aaQueueId, row.dataset.aaQueueName));
             });
+            if (this._wlmQueues.length) this._registerChartReplay('workload.backlog', () => this._renderWorkloadBacklogChart(this._wlmQueues));
         }
         _wlmQueuesHtml(rows) {
             if (!rows.length) return '<article class="card"><div class="card-body"><div class="empty-state">Sem filas retornadas pelo WLM.</div></div></article>';
             return `
                 <article class="card">
+                    <div class="card-header"><div><h2>Backlog por fila</h2><p>Itens de trabalho pendentes agora, por fila.</p></div></div>
+                    <div class="card-body chart-canvas-wrap" style="height:${Math.max(160, rows.length * 32)}px"><canvas id="aaWorkloadBacklogChart"></canvas></div>
+                </article>
+                <article class="card" style="margin-top:14px">
                     <div class="card-header"><div><h2>Filas</h2><p>Clique numa fila para ver os itens de trabalho (workitems).</p></div></div>
                     <div class="card-body">${rows.map(q => `
                         <div class="metric-row aa-clickable-row" data-aa-queue-id="${escapeHtml(q.id ?? q.queueId ?? q.name)}" data-aa-queue-name="${escapeHtml(q.name)}">
@@ -1480,6 +1715,26 @@
                     </div>
                 </article>
                 <article class="card" id="aaQueueItemsPanel" style="margin-top:14px"><div class="card-body"><div class="empty-state">Selecione uma fila acima para ver os itens.</div></div></article>`;
+        }
+
+        _renderWorkloadBacklogChart(rows) {
+            const p = ChartService.chartPalette();
+            const sorted = [...rows].sort((a, b) => (b.backlog ?? 0) - (a.backlog ?? 0));
+            ChartService.drawChart('aaWorkloadBacklogChart', {
+                type: 'bar',
+                data: {
+                    labels: sorted.map(q => this._chartLabel(q.name, 30)),
+                    datasets: [{ label: 'Backlog', data: sorted.map(q => q.backlog ?? 0), backgroundColor: p.warning, borderRadius: 3, maxBarThickness: 18 }],
+                },
+                options: {
+                    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: ChartService.tooltipBase(p) },
+                    scales: {
+                        x: { beginAtZero: true, ticks: { color: p.textMuted, precision: 0 }, grid: { color: p.grid } },
+                        y: { ticks: { color: p.textMuted, font: { size: 10.5 } }, grid: { display: false } },
+                    },
+                },
+            });
         }
         /** Itens de trabalho (workitems) de uma fila específica — POST
          * /v2/wlm/queues/{id}/workitems/list é a única "List API" do WLM que
@@ -1515,8 +1770,20 @@
             const resp = await this.apiClient.proxy('GET', '/v2/audit/logs');
             if (!resp.ok) { body.innerHTML = this._errorState(resp); return; }
             const rows = resp.data?.list || [];
+            const withSignal = rows.filter(r => r.signal === 'AUMENTOU').length;
             body.innerHTML = `
-                <article class="card">
+                ${rows.length ? `
+                <div class="grid grid-2">
+                    <article class="card">
+                        <div class="card-header"><div><h2>Mudanças por tipo de ação</h2><p>O que foi alterado na Control Room, nesta amostra.</p></div></div>
+                        <div class="card-body chart-canvas-wrap" style="height:200px"><canvas id="aaAuditActionChart"></canvas></div>
+                    </article>
+                    <article class="card">
+                        <div class="card-header"><div><h2>Correlação com aumento de erro</h2><p>Quantas mudanças coincidem com piora no comportamento de erro depois.</p></div></div>
+                        <div class="card-body chart-canvas-wrap" style="height:200px"><canvas id="aaAuditSignalChart"></canvas></div>
+                    </article>
+                </div>` : ''}
+                <article class="card" style="margin-top:14px">
                     <div class="card-header"><div><h2>Linha do tempo de mudanças</h2><p>Correlaciona alteração de pacote/arquivo com o comportamento de erro observado nos logs — nunca afirma causalidade só por proximidade temporal.</p></div></div>
                     <div class="card-body">
                         ${rows.length ? rows.map(r => `
@@ -1537,6 +1804,47 @@
                         `).join('') : '<div class="empty-state">Sem mudanças registradas para correlacionar.</div>'}
                     </div>
                 </article>`;
+            if (rows.length) {
+                this._registerChartReplay('audit.action', () => this._renderAuditActionChart(rows));
+                this._registerChartReplay('audit.signal', () => this._renderAuditSignalChart(rows, withSignal));
+            }
+        }
+
+        _renderAuditActionChart(rows) {
+            const p = ChartService.chartPalette();
+            const counts = new Map();
+            rows.forEach(r => counts.set(r.action || 'DESCONHECIDA', (counts.get(r.action || 'DESCONHECIDA') || 0) + 1));
+            const entries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+            ChartService.drawChart('aaAuditActionChart', {
+                type: 'bar',
+                data: { labels: entries.map(([a]) => this._chartLabel(a, 20)), datasets: [{ label: 'Ocorrências', data: entries.map(([, c]) => c), backgroundColor: p.primary, borderRadius: 4, maxBarThickness: 32 }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: ChartService.tooltipBase(p) },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { color: p.textMuted, precision: 0 }, grid: { color: p.grid } },
+                        x: { ticks: { color: p.textMuted, maxRotation: 0, font: { size: 10 } }, grid: { display: false } },
+                    },
+                },
+            });
+        }
+
+        _renderAuditSignalChart(rows, withSignal) {
+            const p = ChartService.chartPalette();
+            ChartService.drawChart('aaAuditSignalChart', {
+                type: 'doughnut',
+                data: {
+                    labels: ['Com sinal de piora', 'Sem sinal'],
+                    datasets: [{ data: [withSignal, rows.length - withSignal], backgroundColor: [p.danger, p.success], borderColor: p.panel, borderWidth: 2 }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, cutout: '62%',
+                    plugins: {
+                        legend: { display: true, position: 'right', labels: { boxWidth: 10, usePointStyle: true, color: p.textMuted, font: { size: 10.5 } } },
+                        tooltip: ChartService.tooltipBase(p),
+                    },
+                },
+            });
         }
 
         /* ---- 8. Dependências ----------------------------------------------------- */
@@ -1549,16 +1857,48 @@
             const byPackage = {};
             rows.forEach(r => { (byPackage[r.packageName] = byPackage[r.packageName] || []).push(r); });
             const rpasById = Object.fromEntries((DATA.rpas || []).map(r => [r.id, r]));
+            const pkgEntries = Object.entries(byPackage);
             body.innerHTML = `
+                ${pkgEntries.length ? `
                 <article class="card">
+                    <div class="card-header"><div><h2>Pacotes mais usados</h2><p>Quantas RPAs dependem de cada pacote — vermelho indica ao menos uma dependente crítica.</p></div></div>
+                    <div class="card-body chart-canvas-wrap" style="height:${Math.max(180, Math.min(pkgEntries.length, 15) * 28)}px"><canvas id="aaDependenciesChart"></canvas></div>
+                </article>` : ''}
+                <article class="card" style="margin-top:14px">
                     <div class="card-header"><div><h2>Impacto de dependências</h2><p>Cada pacote/arquivo cadastrado e quantas RPAs — e quantas críticas — dependem dele.</p></div></div>
                     <div class="card-body">
-                        ${Object.entries(byPackage).map(([pkg, uses]) => {
+                        ${pkgEntries.map(([pkg, uses]) => {
                             const critical = uses.filter(u => rpasById[u.automationId]?.criticality === 'CRÍTICA').length;
                             return `<div class="metric-row"><span title="${escapeHtml(pkg)}">${escapeHtml(pkg)}</span><div class="progress-track"><div class="progress-fill ${critical ? 'danger' : 'success'}" style="width:${Math.min(100, uses.length * 20)}%"></div></div><strong>${uses.length} RPA${uses.length === 1 ? '' : 's'} · ${critical} crítica(s)</strong></div>`;
                         }).join('') || '<div class="empty-state">Sem pacotes cadastrados.</div>'}
                     </div>
                 </article>`;
+            if (pkgEntries.length) this._registerChartReplay('dependencies.packages', () => this._renderDependenciesChart(pkgEntries, rpasById));
+        }
+
+        _renderDependenciesChart(pkgEntries, rpasById) {
+            const p = ChartService.chartPalette();
+            const sorted = [...pkgEntries].sort((a, b) => b[1].length - a[1].length).slice(0, 15);
+            const hasCritical = ([, uses]) => uses.some(u => rpasById[u.automationId]?.criticality === 'CRÍTICA');
+            ChartService.drawChart('aaDependenciesChart', {
+                type: 'bar',
+                data: {
+                    labels: sorted.map(([pkg]) => this._chartLabel(pkg, 30)),
+                    datasets: [{
+                        label: 'RPAs dependentes', data: sorted.map(([, uses]) => uses.length),
+                        backgroundColor: sorted.map(entry => hasCritical(entry) ? p.danger : p.success),
+                        borderRadius: 3, maxBarThickness: 18,
+                    }],
+                },
+                options: {
+                    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: ChartService.tooltipBase(p) },
+                    scales: {
+                        x: { beginAtZero: true, ticks: { color: p.textMuted, precision: 0 }, grid: { color: p.grid } },
+                        y: { ticks: { color: p.textMuted, font: { size: 10.5 } }, grid: { display: false } },
+                    },
+                },
+            });
         }
 
         /* ---- 9. Qualidade / Policy -------------------------------------------------- */
@@ -1577,6 +1917,17 @@
                     ${this._kpiCard('Total de violações', rows.length, 'i-check', rows.length ? 'warning' : 'success')}
                     ${Object.entries(bySeverity).map(([sev, count]) => this._kpiCard(sev, count, 'i-alert', sevClass[sev] || 'neutral')).join('')}
                 </div>
+                ${rows.length ? `
+                <div class="grid grid-2" style="margin-top:14px">
+                    <article class="card">
+                        <div class="card-header"><div><h2>Violações por severidade</h2></div></div>
+                        <div class="card-body chart-canvas-wrap" style="height:200px"><canvas id="aaPolicySeverityChart"></canvas></div>
+                    </article>
+                    <article class="card">
+                        <div class="card-header"><div><h2>Automações com mais violações</h2></div></div>
+                        <div class="card-body chart-canvas-wrap" style="height:200px"><canvas id="aaPolicyAutomationChart"></canvas></div>
+                    </article>
+                </div>` : ''}
                 <article class="card" style="margin-top:14px">
                     <div class="card-header"><div><h2>Violações de Policy</h2><p>Resultado do último scan de Policy Management retornado pela Control Room.</p></div></div>
                     <div class="table-wrap"><table><thead><tr><th>Regra</th><th>Severidade</th><th>Automação</th><th>Detalhe</th></tr></thead>
@@ -1587,6 +1938,49 @@
                         <td>${escapeHtml(r.message || r.description || '—')}</td>
                     </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state">Nenhuma violação retornada.</div></td></tr>'}</tbody></table></div>
                 </article>`;
+            if (rows.length) {
+                this._registerChartReplay('policy.severity', () => this._renderPolicySeverityChart(bySeverity, sevClass));
+                this._registerChartReplay('policy.automation', () => this._renderPolicyAutomationChart(rows));
+            }
+        }
+
+        _renderPolicySeverityChart(bySeverity, sevClass) {
+            const p = ChartService.chartPalette();
+            const clsColor = { danger: p.danger, warning: p.warning, neutral: p.textMuted };
+            const entries = Object.entries(bySeverity);
+            ChartService.drawChart('aaPolicySeverityChart', {
+                type: 'doughnut',
+                data: {
+                    labels: entries.map(([sev]) => sev),
+                    datasets: [{ data: entries.map(([, c]) => c), backgroundColor: entries.map(([sev]) => clsColor[sevClass[sev] || 'neutral']), borderColor: p.panel, borderWidth: 2 }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, cutout: '62%',
+                    plugins: {
+                        legend: { display: true, position: 'right', labels: { boxWidth: 10, usePointStyle: true, color: p.textMuted, font: { size: 10.5 } } },
+                        tooltip: ChartService.tooltipBase(p),
+                    },
+                },
+            });
+        }
+
+        _renderPolicyAutomationChart(rows) {
+            const p = ChartService.chartPalette();
+            const counts = new Map();
+            rows.forEach(r => { const name = r.automationName || r.botName || '—'; counts.set(name, (counts.get(name) || 0) + 1); });
+            const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+            ChartService.drawChart('aaPolicyAutomationChart', {
+                type: 'bar',
+                data: { labels: top.map(([name]) => this._chartLabel(name, 30)), datasets: [{ label: 'Violações', data: top.map(([, c]) => c), backgroundColor: p.danger, borderRadius: 3, maxBarThickness: 18 }] },
+                options: {
+                    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: ChartService.tooltipBase(p) },
+                    scales: {
+                        x: { beginAtZero: true, ticks: { color: p.textMuted, precision: 0 }, grid: { color: p.grid } },
+                        y: { ticks: { color: p.textMuted, font: { size: 10.5 } }, grid: { display: false } },
+                    },
+                },
+            });
         }
         _jsonPreviewHtml(data) {
             return `<article class="card"><div class="card-header"><div><h2>Resposta bruta</h2><p>Formato não reconhecido pela integração — exibindo o JSON retornado pela Control Room para diagnóstico.</p></div></div><div class="card-body"><pre class="mono" style="white-space:pre-wrap">${escapeHtml(JSON.stringify(data, null, 2))}</pre></div></article>`;
@@ -1603,22 +1997,81 @@
             const listEntries = Object.entries(data).filter(([, v]) => Array.isArray(v) && v.length && typeof v[0] === 'object');
             if (!numericEntries.length && !listEntries.length) { body.innerHTML = this._jsonPreviewHtml(data); return; }
             const kpiIcons = ['i-activity', 'i-clock', 'i-box', 'i-check', 'i-alert', 'i-monitor'];
+            // Schema do Analytics varia por Control Room (ACC/BotInsight são
+            // módulos licenciados separadamente, cada um com seu próprio
+            // formato) — em vez de um gráfico fixo pensado para um schema
+            // específico, cada bloco abaixo escolhe automaticamente uma
+            // coluna "rótulo" (string) e uma "valor" (número) de cada lista
+            // retornada, e só desenha o gráfico quando as duas existem.
+            const autoCharts = listEntries.map(([label, rows], i) => {
+                const cols = Object.keys(rows[0]);
+                const labelCol = cols.find(c => typeof rows[0][c] === 'string');
+                const valueCol = cols.find(c => typeof rows[0][c] === 'number');
+                const canvasId = `aaAnalyticsChart${i}`;
+                return { label, rows, cols: cols.slice(0, 6), labelCol, valueCol, canvasId };
+            });
             body.innerHTML = `
-                ${numericEntries.length ? `<div class="grid grid-kpis" style="grid-template-columns:repeat(${Math.min(4, numericEntries.length)},minmax(0,1fr))">
+                ${numericEntries.length >= 2 ? `<article class="card">
+                    <div class="card-header"><div><h2>Indicadores</h2></div></div>
+                    <div class="card-body chart-canvas-wrap" style="height:220px"><canvas id="aaAnalyticsKpiChart"></canvas></div>
+                </article>` : ''}
+                ${numericEntries.length ? `<div class="grid grid-kpis" style="grid-template-columns:repeat(${Math.min(4, numericEntries.length)},minmax(0,1fr));margin-top:${numericEntries.length >= 2 ? '14px' : '0'}">
                     ${numericEntries.map(([label, value], i) => this._kpiCard(this._humanizeKey(label), value, kpiIcons[i % kpiIcons.length], 'info')).join('')}
                 </div>` : ''}
-                ${listEntries.map(([label, rows]) => {
-                    const cols = Object.keys(rows[0]).slice(0, 6);
-                    return `<article class="card" style="margin-top:14px">
-                        <div class="card-header"><div><h2>${escapeHtml(this._humanizeKey(label))}</h2></div></div>
-                        <div class="table-wrap"><table><thead><tr>${cols.map(c => `<th>${escapeHtml(this._humanizeKey(c))}</th>`).join('')}</tr></thead>
-                        <tbody>${rows.slice(0, 30).map(r => `<tr>${cols.map(c => `<td>${escapeHtml(String(r[c] ?? '—'))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
-                    </article>`;
-                }).join('')}
+                ${autoCharts.map(ac => `
+                    <article class="card" style="margin-top:14px">
+                        <div class="card-header"><div><h2>${escapeHtml(this._humanizeKey(ac.label))}</h2></div></div>
+                        ${ac.labelCol && ac.valueCol ? `<div class="card-body chart-canvas-wrap" style="height:${Math.max(180, Math.min(ac.rows.length, 15) * 26)}px"><canvas id="${ac.canvasId}"></canvas></div>` : ''}
+                        <div class="table-wrap"><table><thead><tr>${ac.cols.map(c => `<th>${escapeHtml(this._humanizeKey(c))}</th>`).join('')}</tr></thead>
+                        <tbody>${ac.rows.slice(0, 30).map(r => `<tr>${ac.cols.map(c => `<td>${escapeHtml(String(r[c] ?? '—'))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+                    </article>`).join('')}
             `;
+            if (numericEntries.length >= 2) this._registerChartReplay('analytics.kpis', () => this._renderAnalyticsKpiChart(numericEntries));
+            autoCharts.forEach(ac => {
+                if (ac.labelCol && ac.valueCol) this._registerChartReplay('analytics.' + ac.canvasId, () => this._renderAnalyticsListChart(ac));
+            });
         }
         _humanizeKey(key) {
             return String(key).replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]/g, ' ').replace(/^./, c => c.toUpperCase());
+        }
+
+        _renderAnalyticsKpiChart(numericEntries) {
+            const p = ChartService.chartPalette();
+            ChartService.drawChart('aaAnalyticsKpiChart', {
+                type: 'bar',
+                data: {
+                    labels: numericEntries.map(([label]) => this._humanizeKey(label)),
+                    datasets: [{ label: 'Valor', data: numericEntries.map(([, v]) => v), backgroundColor: p.info, borderRadius: 4, maxBarThickness: 36 }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: ChartService.tooltipBase(p) },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { color: p.textMuted }, grid: { color: p.grid } },
+                        x: { ticks: { color: p.textMuted, maxRotation: 0, font: { size: 10 } }, grid: { display: false } },
+                    },
+                },
+            });
+        }
+
+        _renderAnalyticsListChart(ac) {
+            const p = ChartService.chartPalette();
+            const sorted = [...ac.rows].sort((a, b) => (b[ac.valueCol] ?? 0) - (a[ac.valueCol] ?? 0)).slice(0, 15);
+            ChartService.drawChart(ac.canvasId, {
+                type: 'bar',
+                data: {
+                    labels: sorted.map(r => this._chartLabel(r[ac.labelCol], 30)),
+                    datasets: [{ label: this._humanizeKey(ac.valueCol), data: sorted.map(r => r[ac.valueCol] ?? 0), backgroundColor: p.primary, borderRadius: 3, maxBarThickness: 18 }],
+                },
+                options: {
+                    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: ChartService.tooltipBase(p) },
+                    scales: {
+                        x: { beginAtZero: true, ticks: { color: p.textMuted }, grid: { color: p.grid } },
+                        y: { ticks: { color: p.textMuted, font: { size: 10.5 } }, grid: { display: false } },
+                    },
+                },
+            });
         }
 
         /* ---- 11. Usuários & Sessões ---------------------------------------------- */
@@ -1640,6 +2093,17 @@
                     ${this._kpiCard('Usuários desabilitados', users.filter(u => u.disabled).length, 'i-x', 'neutral')}
                     ${this._kpiCard('Sessões em execução agora', runningActivities.length, 'i-activity', runningActivities.length ? 'warning' : 'success')}
                 </div>
+                ${users.length ? `
+                <div class="grid grid-2" style="margin-top:14px">
+                    <article class="card">
+                        <div class="card-header"><div><h2>Usuários por papel</h2><p>Um usuário com vários papéis conta em cada um.</p></div></div>
+                        <div class="card-body chart-canvas-wrap" style="height:200px"><canvas id="aaUsersRolesChart"></canvas></div>
+                    </article>
+                    <article class="card">
+                        <div class="card-header"><div><h2>Ativos × desabilitados</h2></div></div>
+                        <div class="card-body chart-canvas-wrap" style="height:200px"><canvas id="aaUsersStatusChart"></canvas></div>
+                    </article>
+                </div>` : ''}
                 <article class="card" style="margin-top:14px">
                     <div class="card-header"><div><h2>Sessões ativas agora</h2><p>Derivado da Activity List (status RUNNING/DEPLOYED) cruzado com o inventário de devices — a Control Room não expõe uma API dedicada de "sessão ativa" por usuário.</p></div></div>
                     <div class="table-wrap"><table><thead><tr><th>Device</th><th>Pool</th><th>Automação</th><th>Início</th></tr></thead>
@@ -1659,6 +2123,51 @@
                         <td><span class="badge ${u.disabled ? 'neutral' : 'success'}">${u.disabled ? 'DESABILITADO' : 'ATIVO'}</span></td>
                     </tr>`).join('') : '<tr><td colspan="5"><div class="empty-state">Nenhum usuário retornado.</div></td></tr>'}</tbody></table></div>
                 </article>`;
+            if (users.length) {
+                this._registerChartReplay('users.roles', () => this._renderUsersRolesChart(users));
+                this._registerChartReplay('users.status', () => this._renderUsersStatusChart(users));
+            }
+        }
+
+        _renderUsersRolesChart(users) {
+            const p = ChartService.chartPalette();
+            const counts = new Map();
+            users.forEach(u => (u.roles || ['SEM PAPEL']).forEach(role => counts.set(role, (counts.get(role) || 0) + 1)));
+            const entries = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+            const palette = [p.primary, p.info, p.success, p.warning, p.danger, p.textMuted];
+            ChartService.drawChart('aaUsersRolesChart', {
+                type: 'doughnut',
+                data: {
+                    labels: entries.map(([role]) => this._chartLabel(role, 22)),
+                    datasets: [{ data: entries.map(([, c]) => c), backgroundColor: entries.map((_, i) => palette[i % palette.length]), borderColor: p.panel, borderWidth: 2 }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, cutout: '55%',
+                    plugins: {
+                        legend: { display: true, position: 'right', labels: { boxWidth: 10, usePointStyle: true, color: p.textMuted, font: { size: 10 } } },
+                        tooltip: ChartService.tooltipBase(p),
+                    },
+                },
+            });
+        }
+
+        _renderUsersStatusChart(users) {
+            const p = ChartService.chartPalette();
+            const disabled = users.filter(u => u.disabled).length;
+            ChartService.drawChart('aaUsersStatusChart', {
+                type: 'doughnut',
+                data: {
+                    labels: ['Ativos', 'Desabilitados'],
+                    datasets: [{ data: [users.length - disabled, disabled], backgroundColor: [p.success, p.textMuted], borderColor: p.panel, borderWidth: 2 }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, cutout: '62%',
+                    plugins: {
+                        legend: { display: true, position: 'right', labels: { boxWidth: 10, usePointStyle: true, color: p.textMuted, font: { size: 10.5 } } },
+                        tooltip: ChartService.tooltipBase(p),
+                    },
+                },
+            });
         }
 
         /* ---- 12. Parque de RPAs 360° ----------------------------------------------- */
@@ -1669,6 +2178,16 @@
                 body.dataset.mounted = '1';
                 body.innerHTML = `
                     <div class="grid" id="aaFleetKpis" style="grid-template-columns:repeat(4,minmax(0,1fr))"></div>
+                    <div class="grid grid-2" style="margin-top:14px">
+                        <article class="card">
+                            <div class="card-header"><div><h2>Cobertura na Control Room</h2><p>RPAs cadastradas localmente que aparecem na Activity List da AA.</p></div></div>
+                            <div class="card-body chart-canvas-wrap" style="height:200px"><canvas id="aaFleetCoverageChart"></canvas></div>
+                        </article>
+                        <article class="card">
+                            <div class="card-header"><div><h2>Execuções: local × Control Room</h2><p>Top RPAs por volume combinado no período carregado.</p></div></div>
+                            <div class="card-body chart-canvas-wrap" style="height:220px"><canvas id="aaFleetTopChart"></canvas></div>
+                        </article>
+                    </div>
                     <div style="display:flex; gap:10px; align-items:center; margin:14px 0">
                         <input type="text" id="aaFleetSearch" placeholder="Buscar RPA…" style="flex:1; padding:8px 10px; border-radius:8px; border:1px solid var(--border); background:var(--surface); color:var(--text)">
                         <label style="display:flex; align-items:center; gap:6px; white-space:nowrap; font-size:13px; color:var(--text-2)">
@@ -1722,6 +2241,10 @@
                 ${this._kpiCard('Não vistas na Control Room', totalNotInAA, 'i-x', totalNotInAA ? 'warning' : 'success')}
                 ${this._kpiCard('Com falha recente', entries.filter(e => e.failCount > 0).length, 'i-triangle', 'neutral')}
             `;
+            if (entries.length) {
+                this._registerChartReplay('fleet.coverage', () => this._renderFleetCoverageChart(entries));
+                this._registerChartReplay('fleet.top', () => this._renderFleetTopChart(entries));
+            }
 
             const filtered = entries.filter(e => {
                 if (onlyNoLogs && !e.noLogs) return false;
@@ -1750,6 +2273,54 @@
                         </div>
                     </div>
                 </article>`).join('') : '<article class="card"><div class="card-body"><div class="empty-state">Nenhuma RPA corresponde ao filtro atual.</div></div></article>';
+        }
+
+        /** Baseado em `entries` SEM filtro (busca/"só sem logs" só afetam a
+         * grade de cards abaixo) — o gráfico de cobertura é uma visão geral
+         * do parque, não deveria mudar enquanto o usuário digita uma busca. */
+        _renderFleetCoverageChart(entries) {
+            const p = ChartService.chartPalette();
+            const found = entries.filter(e => e.foundInAA).length;
+            ChartService.drawChart('aaFleetCoverageChart', {
+                type: 'doughnut',
+                data: {
+                    labels: ['Na Control Room', 'Não vista na AA'],
+                    datasets: [{ data: [found, entries.length - found], backgroundColor: [p.success, p.warning], borderColor: p.panel, borderWidth: 2 }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, cutout: '62%',
+                    plugins: {
+                        legend: { display: true, position: 'right', labels: { boxWidth: 10, usePointStyle: true, color: p.textMuted, font: { size: 10.5 } } },
+                        tooltip: ChartService.tooltipBase(p),
+                    },
+                },
+            });
+        }
+
+        _renderFleetTopChart(entries) {
+            const p = ChartService.chartPalette();
+            const top = [...entries].sort((a, b) => (b.localCount + b.aaCount) - (a.localCount + a.aaCount)).slice(0, 8);
+            ChartService.drawChart('aaFleetTopChart', {
+                type: 'bar',
+                data: {
+                    labels: top.map(e => this._chartLabel(e.rpa.name, 18)),
+                    datasets: [
+                        { label: 'Logs locais', data: top.map(e => e.localCount), backgroundColor: p.primary, borderRadius: 3, maxBarThickness: 14 },
+                        { label: 'Control Room', data: top.map(e => e.aaCount), backgroundColor: p.info, borderRadius: 3, maxBarThickness: 14 },
+                    ],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: true, position: 'top', align: 'end', labels: { boxWidth: 10, usePointStyle: true, color: p.textMuted, font: { size: 10.5 } } },
+                        tooltip: ChartService.tooltipBase(p),
+                    },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { color: p.textMuted, precision: 0 }, grid: { color: p.grid } },
+                        x: { ticks: { color: p.textMuted, maxRotation: 0, font: { size: 9.5 } }, grid: { display: false } },
+                    },
+                },
+            });
         }
 
         /* ---- helpers de apresentação compartilhados pelas páginas ------------------- */
@@ -1957,7 +2528,7 @@
             // fixam cor na criação (Chart.js), então precisam de um redesenho
             // próprio ao trocar de tema, senão ficam com a paleta antiga até
             // a próxima visita à página.
-            document.getElementById('themeButton')?.addEventListener('click', () => this.pagesController.redrawHistoryChartsForTheme());
+            document.getElementById('themeButton')?.addEventListener('click', () => this.pagesController.redrawAllAAChartsForTheme());
         }
 
         /** goToPage() do dashboard original só alterna a classe .active nas
