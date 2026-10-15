@@ -229,10 +229,70 @@ _build_status = {
     'phase': 'idle', 'percent': 0, 'mode': '30d', 'windowStart': None, 'windowEnd': None,
     'filesFound': 0, 'filesProcessed': 0, 'filesSkippedWindow': 0, 'filesInvalid': 0,
     'executions': 0, 'events': 0, 'vmSnapshots': 0, 'startedAt': None, 'finishedAt': None, 'error': None,
+    'currentFile': None, 'currentFileStartedAt': None,
 }
 
 def _update_build_status(**kwargs):
     _build_status.update(kwargs)
+
+
+class ValidationLog:
+    """"Escuta" log a log: grava em RPA_Ops_Monitor_validacao.log (ao lado do
+    executável/script) o resultado da leitura de CADA arquivo de log lido na
+    sincronização — se foi lido corretamente, quantas linhas entraram, quais
+    foram rejeitadas e por quê (linha + campo). Arquivos com problema também
+    aparecem no console/RPA_Ops_Monitor.log com o prefixo [VALIDACAO].
+
+    Para validar todos os arquivos sem abrir o painel (útil quando ele não
+    termina de carregar): `python log_validator.py`."""
+
+    MAX_BYTES = 10 * 1024 * 1024
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self._lock = threading.Lock()
+        self._session_started = False
+
+    def _write(self, lines):
+        with self._lock:
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                if self.path.exists() and self.path.stat().st_size > self.MAX_BYTES:
+                    backup = self.path.with_suffix(self.path.suffix + '.1')
+                    try:
+                        backup.unlink()
+                    except OSError:
+                        pass
+                    self.path.rename(backup)
+                with self.path.open('a', encoding='utf-8') as fh:
+                    if not self._session_started:
+                        fh.write(f'\n===== RPA Ops Monitor iniciado em {datetime.now().isoformat(timespec="seconds")} =====\n')
+                        self._session_started = True
+                    for line in lines:
+                        fh.write(line + '\n')
+            except OSError as exc:
+                print(f'[VALIDACAO] não foi possível gravar {self.path}: {exc}')
+
+    def on_file(self, result):
+        lines = result.format_lines()
+        stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        lines[0] = f'{stamp} {lines[0]}'
+        self._write(lines)
+        if result.status != 'OK':
+            print('[VALIDACAO] ' + '\n[VALIDACAO] '.join(lines))
+
+    def on_sync(self, report):
+        counts = ', '.join(f'{k}={v}' for k, v in sorted(report.get('byStatus', {}).items())) or 'nenhum arquivo novo/alterado'
+        line = (f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} ---- sincronização concluída: '
+                f'{report.get("filesChecked", 0)} verificados, {report.get("filesRead", 0)} lidos, '
+                f'{report.get("filesUnchanged", 0)} sem alteração · {counts} · '
+                f'{report.get("rejectedLines", 0)} linha(s) rejeitada(s)')
+        self._write([line])
+        print('[VALIDACAO] ' + line)
+
+
+validation_log = ValidationLog(Path(os.environ.get(
+    'RPA_MONITOR_VALIDATION_LOG', str(ROOT / 'RPA_Ops_Monitor_validacao.log'))))
 
 
 log_store = SQLiteLogStore(
@@ -242,6 +302,8 @@ log_store = SQLiteLogStore(
     EXEC_FNAME_RE,
     VM_FNAME_RE,
     status_callback=_update_build_status,
+    file_callback=validation_log.on_file,
+    sync_report_callback=validation_log.on_sync,
 )
 
 
@@ -747,6 +809,7 @@ class DatasetBuilder:
         # A primeira chamada cria/sincroniza o SQLite. Depois desta etapa,
         # trocar 30/90/120/full consulta somente o banco e não reabre os logs.
         log_store.ensure_ready()
+        log_store.pop_read_rejections()  # descarta sobras de uma montagem anterior
         issues = []
         now = datetime.now()
         window_start, window_end = _window_bounds(mode)
@@ -935,6 +998,15 @@ class DatasetBuilder:
             # RPA_Ops_Monitor.log), sem precisar reproduzir localmente.
             print(f'[BOOT] 0 snapshots de VM em log_store.vm_root={log_store.vm_root} '
                   f'(existe: {log_store.vm_root.exists()}) para a janela {window_start}..{window_end}.')
+
+        # Problemas de formato/campos (log_validator.py): os detectados ao
+        # importar cada arquivo (persistidos no SQLite, sobrevivem a
+        # reinício) e os registros antigos do banco pulados agora na leitura.
+        issues.extend(log_store.pop_read_rejections())
+        try:
+            issues.extend(log_store.persisted_issues(limit=200))
+        except Exception as exc:
+            print(f'[VALIDACAO] não foi possível ler problemas de validação: {exc}')
 
         _build_status.update(phase='vinculando execuções e agenda', percent=84)
         vm_context = {}
@@ -1424,8 +1496,11 @@ class DataCache:
                     })
                 return _cache['obs'], _cache['index']
             except Exception as exc:
+                # Mensagem com o tipo da exceção: um `KeyError: 'version'`
+                # sozinho aparecia como só "'version'" na tela de carga.
+                message = str(exc) if isinstance(exc, RuntimeError) else f'{type(exc).__name__}: {exc}'
                 _build_status.update(
-                    phase='erro', error=str(exc),
+                    phase='erro', error=message, currentFile=None,
                     finishedAt=datetime.now().isoformat(timespec='seconds'),
                 )
                 raise
@@ -2834,6 +2909,18 @@ class Handler(SimpleHTTPRequestHandler):
             return self._send(payload,'application/json; charset=utf-8')
         if path == '/api/load-status':
             return self._send(json.dumps(_build_status,ensure_ascii=False),'application/json; charset=utf-8')
+        if path == '/api/log-validation':
+            # Relatório da "escuta" log a log: resultado da última
+            # sincronização + arquivos do banco com linhas rejeitadas. Não
+            # dispara carga nem espera _build_lock — responde mesmo com o
+            # painel travado no carregamento.
+            try:
+                summary = log_store.validation_summary()
+            except Exception as exc:
+                return self._send_json({'ok': False, 'error': 'VALIDATION_ERROR', 'message': str(exc)}, status=500)
+            return self._send_json({'ok': True, 'validationLog': str(validation_log.path),
+                                    'currentFile': _build_status.get('currentFile'),
+                                    'phase': _build_status.get('phase'), **summary})
         # ---- Cadastro de RPAs (CRUD sobre config/rpa_metadata.json) ----
         if path == '/api/registry/rpas':
             try:

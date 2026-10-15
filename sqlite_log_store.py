@@ -24,6 +24,10 @@ import sqlite3
 import threading
 import time
 
+from log_validator import (
+    ERROR, FileValidationResult, LogRecordValidator, split_lines, validate_line,
+)
+
 
 class SQLiteLogStore:
     SCHEMA_VERSION = 2
@@ -34,18 +38,31 @@ class SQLiteLogStore:
     FILE_GUARD_BYTES = 512
     READ_RETRY_TIMEOUTS = (8, 30, 90)
     READ_RETRY_BACKOFF = (1.0, 2.0)
+    # Problemas de validação gravados por arquivo a cada leitura (o detalhe
+    # completo fica no log de validação; o banco guarda o suficiente para o
+    # painel "Qualidade dos dados" sobreviver a um reinício do app).
+    MAX_PERSISTED_ISSUES_PER_FILE = 50
+    MAX_READ_REJECTIONS = 200
 
     def __init__(self, db_path: Path, log_root: Path, vm_root: Path,
-                 exec_pattern, vm_pattern, status_callback=None):
+                 exec_pattern, vm_pattern, status_callback=None, file_callback=None,
+                 sync_report_callback=None):
         self.db_path = Path(db_path)
         self.log_root = Path(log_root)
         self.vm_root = Path(vm_root)
         self.exec_pattern = exec_pattern
         self.vm_pattern = vm_pattern
         self.status_callback = status_callback
+        # "Escuta" log a log: chamada com um FileValidationResult para cada
+        # arquivo efetivamente lido na sincronização (ver sync()).
+        self.file_callback = file_callback
+        # Chamada uma vez ao fim de cada sync com o resumo (last_sync_report).
+        self.sync_report_callback = sync_report_callback
         self._process_lock = threading.RLock()
         self._ready = False
         self._last_sync_warning = None
+        self._read_rejections = []
+        self.last_sync_report = None
 
     def _status(self, **kwargs):
         if self.status_callback:
@@ -230,6 +247,20 @@ class SQLiteLogStore:
             ON raw_records(execution_id);
         CREATE INDEX IF NOT EXISTS idx_raw_machine_ts
             ON raw_records(machine_name, record_ts);
+
+        -- Aditiva (não exige migração nem muda SCHEMA_VERSION): problemas de
+        -- formato/campos encontrados na última leitura de cada arquivo.
+        CREATE TABLE IF NOT EXISTS validation_issues (
+            source_path TEXT NOT NULL,
+            row_no INTEGER,
+            severity TEXT NOT NULL,
+            field TEXT,
+            message TEXT NOT NULL,
+            detected_at TEXT NOT NULL,
+            FOREIGN KEY (source_path) REFERENCES source_files(path) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_validation_issues_path
+            ON validation_issues(source_path);
         """)
         # Migração aditiva: bancos v1 já criados em produção continuam válidos.
         columns = {row['name'] for row in conn.execute('PRAGMA table_info(source_files)').fetchall()}
@@ -471,43 +502,69 @@ class SQLiteLogStore:
         except OSError:
             return False
 
-    def _parse_lines(self, data, start_row_no, path, kind, scope, file_date, issues):
+    @staticmethod
+    def _issue_from_problem(path, problem, phase='sincronização SQLite'):
+        rejected = problem['severity'] == ERROR
+        where = f"Linha {problem['line']}: " if problem.get('line') else ''
+        return {
+            'file': path.name, 'path': str(path),
+            'type': 'VALIDATION_ERROR' if rejected else 'VALIDATION_WARNING',
+            'error': where + problem['message'],
+            'phase': phase,
+            'timestamp': datetime.now().isoformat(timespec='seconds'),
+            'action': ('Linha rejeitada (não entrou no banco); demais registros foram preservados.'
+                       if rejected else 'Linha aceita; verifique o campo indicado.'),
+        }
+
+    def _parse_lines(self, data, start_row_no, path, kind, scope, file_date, issues, result=None):
+        """Valida linha a linha (formato UTF-8, JSON e campos obrigatórios —
+        ver log_validator.py) e devolve só os registros aptos a ir para o
+        banco. Uma linha ruim nunca derruba o arquivo inteiro."""
+        if result is None:
+            result = FileValidationResult(path, kind, scope)
         if not data:
             return [], 0, 0
-        try:
-            text = data.decode('utf-8')
-        except UnicodeDecodeError as exc:
-            raise RuntimeError(f'Falha UTF-8 em {path}: {exc}') from exc
-
-        lines = text.splitlines()
+        lines = split_lines(data)
+        if lines and lines[-1] == b'':
+            # `data` sempre termina num separador (_complete_prefix), então o
+            # último elemento vazio não é uma linha física.
+            lines = lines[:-1]
         parsed = []
-        invalid = 0
-        for offset, line in enumerate(lines):
+        before = len(result.details)
+        rejected_before = result.rejected_records
+        for offset, raw in enumerate(lines):
             row_no = start_row_no + offset
-            if not line.strip():
+            record = validate_line(kind, raw, row_no, result)
+            if record is None:
                 continue
-            try:
-                row = json.loads(line)
-                ts, process, execution, machine = self._record_columns(kind, row, scope, file_date)
-                parsed.append((str(path), row_no, kind, ts, process, execution, machine,
-                               json.dumps(row, ensure_ascii=False, separators=(',', ':'))))
-            except Exception as exc:
-                invalid += 1
-                if invalid <= 3:
-                    issues.append({
-                        'file': path.name, 'path': str(path), 'type': 'JSON_ERROR',
-                        'error': f'Linha {row_no} inválida: {exc}',
-                        'phase': 'sincronização SQLite',
-                        'timestamp': datetime.now().isoformat(timespec='seconds'),
-                        'action': 'Linha ignorada; demais registros foram preservados.',
-                    })
-        return parsed, invalid, len(lines)
+            ts, process, execution, machine = self._record_columns(kind, record, scope, file_date)
+            parsed.append((str(path), row_no, kind, ts, process, execution, machine,
+                           json.dumps(record, ensure_ascii=False, separators=(',', ':'))))
+        for problem in result.details[before:before + 3]:
+            issues.append(self._issue_from_problem(path, problem))
+        return parsed, result.rejected_records - rejected_before, len(lines)
 
-    def _full_reindex(self, conn, path, kind, scope, file_date, stat, issues):
+    def _persist_issues(self, conn, path, result, replace):
+        if replace:
+            conn.execute('DELETE FROM validation_issues WHERE source_path=?', (str(path),))
+        problems = result.details[:self.MAX_PERSISTED_ISSUES_PER_FILE]
+        if not problems:
+            return
+        now = datetime.now().isoformat(timespec='seconds')
+        conn.executemany(
+            """INSERT INTO validation_issues(source_path,row_no,severity,field,message,detected_at)
+               VALUES(?,?,?,?,?,?)""",
+            [(str(path), p.get('line'), p['severity'], p.get('field'), p['message'], now) for p in problems],
+        )
+
+    def _full_reindex(self, conn, path, kind, scope, file_date, stat, issues, result=None):
+        if result is None:
+            result = FileValidationResult(path, kind, scope)
         try:
             with path.open('rb') as fh:
                 raw = fh.read(stat.st_size)
         except Exception as exc:
+            result.fail(f'não foi possível ler o arquivo: {exc}')
             issues.append({
                 'file': path.name, 'path': str(path), 'type': 'READ_ERROR',
                 'error': str(exc), 'phase': 'sincronização SQLite',
@@ -517,11 +574,17 @@ class SQLiteLogStore:
             return False, 0, 1
 
         complete, consumed = self._complete_prefix(raw)
+        if raw and not complete:
+            result.add_problem(None, {
+                'severity': 'AVISO', 'field': None,
+                'message': 'arquivo sem quebra de linha no final; a última linha aguarda o próximo sync',
+            })
         try:
             parsed, invalid, line_count = self._parse_lines(
-                complete, 1, path, kind, scope, file_date, issues
+                complete, 1, path, kind, scope, file_date, issues, result
             )
         except Exception as exc:
+            result.fail(f'erro inesperado ao interpretar o arquivo: {exc}')
             issues.append({
                 'file': path.name, 'path': str(path), 'type': 'READ_ERROR',
                 'error': str(exc), 'phase': 'sincronização SQLite',
@@ -550,9 +613,12 @@ class SQLiteLogStore:
                        VALUES(?,?,?,?,?,?,?,?)""",
                     parsed,
                 )
+            self._persist_issues(conn, path, result, replace=True)
         return True, len(parsed), invalid
 
-    def _append_incremental(self, conn, path, kind, scope, file_date, stat, existing, issues):
+    def _append_incremental(self, conn, path, kind, scope, file_date, stat, existing, issues, result=None):
+        if result is None:
+            result = FileValidationResult(path, kind, scope)
         processed = int(existing['processed_bytes'] or 0)
         try:
             expected_bytes = max(0, int(stat.st_size) - processed)
@@ -560,6 +626,7 @@ class SQLiteLogStore:
                 fh.seek(processed)
                 chunk = fh.read(expected_bytes)
         except Exception as exc:
+            result.fail(f'não foi possível ler o trecho novo do arquivo: {exc}')
             issues.append({
                 'file': path.name, 'path': str(path), 'type': 'READ_ERROR',
                 'error': str(exc), 'phase': 'sincronização SQLite',
@@ -583,17 +650,19 @@ class SQLiteLogStore:
                 fresh_stat = path.stat()
             except OSError:
                 fresh_stat = stat
+            result.mode = 'reindexado (arquivo reescrito durante a leitura)'
             return self._full_reindex(
-                conn, path, kind, scope, file_date, fresh_stat, issues
+                conn, path, kind, scope, file_date, fresh_stat, issues, result
             )
 
         complete, consumed = self._complete_prefix(chunk)
         try:
             parsed, invalid, physical_lines = self._parse_lines(
                 complete, int(existing['line_count'] or 0) + 1,
-                path, kind, scope, file_date, issues,
+                path, kind, scope, file_date, issues, result,
             )
         except Exception as exc:
+            result.fail(f'erro inesperado ao interpretar o trecho novo: {exc}')
             issues.append({
                 'file': path.name, 'path': str(path), 'type': 'READ_ERROR',
                 'error': str(exc), 'phase': 'sincronização SQLite',
@@ -625,6 +694,7 @@ class SQLiteLogStore:
                 (kind, scope, file_date.isoformat(), stat.st_mtime_ns, stat.st_size,
                  new_processed, new_line_count, guard, len(parsed), invalid, now, str(path)),
             )
+            self._persist_issues(conn, path, result, replace=False)
 
         # Mesmo sem nova linha completa, o offset/manifesto pode ter sido
         # atualizado por um fragmento ainda em escrita. Não há dataset novo
@@ -632,10 +702,14 @@ class SQLiteLogStore:
         data_changed = bool(parsed or invalid or physical_lines)
         return data_changed, len(parsed), invalid
 
-    def _import_file(self, conn, path, kind, scope, file_date, issues):
+    def _import_file(self, conn, path, kind, scope, file_date, issues, result=None):
+        if result is None:
+            result = FileValidationResult(path, kind, scope)
         try:
             stat = path.stat()
         except OSError as exc:
+            result.mode = 'inacessível'
+            result.fail(f'não foi possível acessar o arquivo: {exc}')
             issues.append({
                 'file': path.name, 'path': str(path), 'type': 'STAT_ERROR',
                 'error': str(exc), 'phase': 'sincronização SQLite',
@@ -646,18 +720,21 @@ class SQLiteLogStore:
 
         existing = self._manifest_row(conn, path)
         if existing and existing['mtime_ns'] == stat.st_mtime_ns and existing['size'] == stat.st_size:
+            result.mode = 'sem alteração'
             return False, 0, 0
 
         if (existing and stat.st_size > int(existing['size'])
                 and self._is_safe_append(path, existing, stat.st_size)):
+            result.mode = 'incremental'
             return self._append_incremental(
-                conn, path, kind, scope, file_date, stat, existing, issues
+                conn, path, kind, scope, file_date, stat, existing, issues, result
             )
 
         # Novo arquivo, truncamento, rewrite de mesmo tamanho, rewrite+grow ou
         # banco migrado do v1 sem guard_hash: reindexa inteiro para preservar
         # consistência e evitar duplicidade/corrupção silenciosa.
-        return self._full_reindex(conn, path, kind, scope, file_date, stat, issues)
+        result.mode = 'reindexado' if existing else 'novo'
+        return self._full_reindex(conn, path, kind, scope, file_date, stat, issues, result)
 
     def _bump_revision(self, conn):
         row = conn.execute("SELECT value FROM store_meta WHERE key='revision'").fetchone()
@@ -708,16 +785,32 @@ class SQLiteLogStore:
                 self._last_sync_warning = str(exc)
             self._ready = True
 
+    def _display_path(self, path):
+        for base in (self.log_root, self.vm_root):
+            try:
+                return str(Path(path).relative_to(base))
+            except ValueError:
+                continue
+        return Path(path).name
+
     def sync(self, full_scan=False):
-        """Importa somente arquivos novos/alterados; full_scan varre todo histórico."""
+        """Importa somente arquivos novos/alterados; full_scan varre todo histórico.
+
+        Cada arquivo passa pela "escuta" log a log: o status ao vivo mostra
+        qual arquivo está sendo lido agora (currentFile — se a carga travar,
+        é o primeiro lugar a olhar) e, ao terminar cada arquivo lido, o
+        resultado da validação (OK / OK_COM_AVISOS / PARCIAL / REJEITADO /
+        FALHOU) vai para `file_callback` e para `last_sync_report`."""
         with self._process_lock:
             with self._write_lock():
                 with self._connect() as conn:
                     self._ensure_schema(conn)
                     phase = 'indexando histórico no SQLite' if full_scan else 'sincronizando novos logs'
+                    started_at = datetime.now().isoformat(timespec='seconds')
                     self._status(phase=phase, percent=4, filesFound=0, filesProcessed=0,
                                  filesSkippedWindow=0, filesInvalid=0, error=None,
-                                 startedAt=datetime.now().isoformat(timespec='seconds'), finishedAt=None)
+                                 currentFile=None, currentFileStartedAt=None,
+                                 startedAt=started_at, finishedAt=None)
                     candidates = self._discover_candidates(conn, full_scan)
                     self._status(filesFound=len(candidates), phase=phase, percent=8)
 
@@ -725,11 +818,44 @@ class SQLiteLogStore:
                     imported_files = 0
                     imported_rows = 0
                     invalid = 0
+                    by_status = {}
+                    problem_files = []
+                    files_read = 0
                     total = max(1, len(candidates))
                     for idx, (path, kind, scope, file_date) in enumerate(candidates, start=1):
-                        changed, rows, bad = self._import_file(
-                            conn, path, kind, scope, file_date, issues
-                        )
+                        self._status(currentFile=self._display_path(path),
+                                     currentFileStartedAt=datetime.now().isoformat(timespec='seconds'))
+                        result = FileValidationResult(path, kind, scope)
+                        try:
+                            changed, rows, bad = self._import_file(
+                                conn, path, kind, scope, file_date, issues, result
+                            )
+                        except sqlite3.Error:
+                            # Problema do banco (não do arquivo): repete em todo
+                            # arquivo seguinte, então sobe e aparece como erro real.
+                            raise
+                        except Exception as exc:
+                            # Qualquer outra falha inesperada fica isolada neste
+                            # arquivo — os demais continuam sendo importados.
+                            result.fail(f'erro inesperado: {type(exc).__name__}: {exc}')
+                            issues.append({
+                                'file': path.name, 'path': str(path), 'type': 'READ_ERROR',
+                                'error': result.fatal_error, 'phase': 'sincronização SQLite',
+                                'timestamp': datetime.now().isoformat(timespec='seconds'),
+                                'action': 'Arquivo ignorado nesta sincronização; os demais seguiram.',
+                            })
+                            changed, rows, bad = False, 0, 1
+                        result.finish()
+                        if result.mode != 'sem alteração':
+                            files_read += 1
+                            by_status[result.status] = by_status.get(result.status, 0) + 1
+                            if result.status != 'OK':
+                                problem_files.append(result.to_dict())
+                            if self.file_callback:
+                                try:
+                                    self.file_callback(result)
+                                except Exception:
+                                    pass  # a escuta nunca pode derrubar a importação
                         imported_files += int(changed)
                         imported_rows += rows
                         invalid += bad
@@ -737,6 +863,7 @@ class SQLiteLogStore:
                         self._status(phase=phase, percent=min(52, pct),
                                      filesProcessed=idx, filesInvalid=invalid)
 
+                    self._status(currentFile=None, currentFileStartedAt=None)
                     if imported_files:
                         revision = self._bump_revision(conn)
                     else:
@@ -748,6 +875,22 @@ class SQLiteLogStore:
                         )
                         conn.commit()
                     self._last_sync_warning = None
+                    self.last_sync_report = {
+                        'startedAt': started_at,
+                        'finishedAt': datetime.now().isoformat(timespec='seconds'),
+                        'fullScan': bool(full_scan),
+                        'filesChecked': len(candidates),
+                        'filesRead': files_read,
+                        'filesUnchanged': len(candidates) - files_read,
+                        'byStatus': by_status,
+                        'rejectedLines': invalid,
+                        'problemFiles': problem_files[:500],
+                    }
+                    if self.sync_report_callback:
+                        try:
+                            self.sync_report_callback(self.last_sync_report)
+                        except Exception:
+                            pass
                     return {
                         'revision': revision,
                         'fullScan': bool(full_scan),
@@ -756,6 +899,7 @@ class SQLiteLogStore:
                         'importedRows': imported_rows,
                         'invalidLines': invalid,
                         'issues': issues[:200],
+                        'validation': self.last_sync_report,
                     }
 
     def revision(self, conn=None):
@@ -784,6 +928,10 @@ class SQLiteLogStore:
         )
 
     def read_rows(self, kind, window_start, window_end):
+        """Lê registros do banco já revalidando cada um: linhas gravadas por
+        versões anteriores (antes da validação existir) que não têm os campos
+        necessários são puladas aqui em vez de derrubar a montagem do
+        dataset. As rejeitadas ficam em `pop_read_rejections()`."""
         self.ensure_ready()
         params = [kind]
         where = ['kind=?']
@@ -793,19 +941,124 @@ class SQLiteLogStore:
         if window_end is not None:
             where.append('record_ts<?')
             params.append(f'{(window_end + timedelta(days=1)).isoformat()}T00:00:00')
-        sql = 'SELECT payload_json FROM raw_records WHERE ' + ' AND '.join(where) + ' ORDER BY record_ts'
+        sql = ('SELECT source_path,row_no,payload_json FROM raw_records WHERE '
+               + ' AND '.join(where) + ' ORDER BY record_ts')
 
         rows = self._read_with_retry(
             f'lendo registros de {kind}',
             lambda conn: conn.execute(sql, params).fetchall(),
         )
         result = []
+        validate = LogRecordValidator.validate
         for row in rows:
             try:
-                result.append(json.loads(row['payload_json']))
-            except Exception:
+                payload = json.loads(row['payload_json'])
+            except Exception as exc:
+                self._reject_on_read(row, kind, [{'severity': ERROR, 'field': None,
+                                                  'message': f'registro corrompido no banco: {exc}'}])
                 continue
+            problems = validate(kind, payload)
+            if problems and LogRecordValidator.has_errors(problems):
+                self._reject_on_read(row, kind, problems)
+                continue
+            result.append(payload)
         return result
+
+    def _reject_on_read(self, row, kind, problems):
+        if len(self._read_rejections) >= self.MAX_READ_REJECTIONS:
+            return
+        errors = [p['message'] for p in problems if p['severity'] == ERROR]
+        path = Path(row['source_path'])
+        self._read_rejections.append({
+            'file': path.name, 'path': str(path), 'type': 'VALIDATION_ERROR',
+            'error': f"Linha {row['row_no']}: " + '; '.join(errors[:3]),
+            'phase': 'leitura do banco',
+            'timestamp': datetime.now().isoformat(timespec='seconds'),
+            'action': 'Registro antigo ignorado na montagem do painel (corrija o arquivo e recarregue).',
+        })
+
+    def pop_read_rejections(self):
+        items, self._read_rejections = self._read_rejections, []
+        return items
+
+    def _query_persisted_issues(self, conn, limit):
+        try:
+            rows = conn.execute(
+                """SELECT source_path,row_no,severity,message,detected_at
+                     FROM validation_issues
+                    ORDER BY CASE severity WHEN 'ERRO' THEN 0 ELSE 1 END,
+                             detected_at DESC, source_path, row_no
+                    LIMIT ?""",
+                (int(limit),),
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if 'no such table' in str(exc).lower():
+                return []
+            raise
+        result = []
+        for row in rows:
+            issue = self._issue_from_problem(
+                Path(row['source_path']),
+                {'line': row['row_no'], 'severity': row['severity'], 'message': row['message']},
+                phase='validação dos logs',
+            )
+            issue['timestamp'] = row['detected_at']
+            result.append(issue)
+        return result
+
+    def persisted_issues(self, limit=200):
+        """Problemas de validação gravados no banco (sobrevivem a reinício),
+        no mesmo formato de `loadIssues` usado pelo painel."""
+        if not self.db_path.exists():
+            return []
+        return self._read_with_retry(
+            'lendo problemas de validação',
+            lambda conn: self._query_persisted_issues(conn, limit),
+        )
+
+    def validation_summary(self):
+        """Visão consolidada para /api/log-validation: relatório da última
+        sincronização + arquivos do banco com linhas rejeitadas.
+
+        Usa uma conexão curta própria (sem _read_with_retry) de propósito:
+        este endpoint é consultado justamente enquanto uma carga pode estar
+        rodando, e não deve sobrescrever a fase exibida na tela de carga."""
+        summary = {'lastSync': self.last_sync_report, 'totals': None,
+                   'filesWithRejectedLines': [], 'issues': []}
+        if not self.db_path.exists():
+            return summary
+        try:
+            conn = self._connect(timeout_seconds=5)
+        except Exception as exc:
+            summary['dbError'] = str(exc)
+            return summary
+        try:
+            totals = conn.execute(
+                """SELECT COUNT(*) AS files, COALESCE(SUM(row_count),0) AS records,
+                          COALESCE(SUM(invalid_lines),0) AS rejected,
+                          COALESCE(SUM(CASE WHEN invalid_lines>0 THEN 1 ELSE 0 END),0) AS bad_files
+                     FROM source_files"""
+            ).fetchone()
+            bad = conn.execute(
+                """SELECT path,kind,scope,row_count,invalid_lines,imported_at
+                     FROM source_files WHERE invalid_lines>0
+                    ORDER BY imported_at DESC LIMIT 500"""
+            ).fetchall()
+            summary['issues'] = self._query_persisted_issues(conn, 500)
+        except sqlite3.Error as exc:
+            summary['dbError'] = str(exc)
+            return summary
+        finally:
+            conn.close()
+        summary['totals'] = {
+            'files': totals['files'], 'records': totals['records'],
+            'rejectedLines': totals['rejected'], 'filesWithRejectedLines': totals['bad_files'],
+        }
+        summary['filesWithRejectedLines'] = [{
+            'path': r['path'], 'file': Path(r['path']).name, 'kind': r['kind'], 'scope': r['scope'],
+            'validRecords': r['row_count'], 'rejectedLines': r['invalid_lines'], 'importedAt': r['imported_at'],
+        } for r in bad]
+        return summary
 
     def latest_per_rpa(self):
         self.ensure_ready()
@@ -846,6 +1099,8 @@ class SQLiteLogStore:
             try:
                 payload = json.loads(row['payload_json'])
             except Exception:
+                continue
+            if not isinstance(payload, dict):
                 continue
             process = payload.get('process_name')
             if process and process not in seen:

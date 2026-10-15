@@ -19,3 +19,7 @@ __pycache__/
 *.sqlite3-shm
 *.sqlite3-wal
 *.sync.lock
+
+# Logs gerados em runtime (console e validação arquivo a arquivo).
+RPA_Ops_Monitor.log
+RPA_Ops_Monitor_validacao.log*

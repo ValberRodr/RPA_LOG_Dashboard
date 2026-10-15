@@ -577,6 +577,7 @@ class RpaDataStore {
         } else {
             label.textContent = `Atualizando dados — ${phaseText}… ${status.percent || 0}% · ${status.filesProcessed || 0}/${status.filesFound || 0} arquivos`;
         }
+        if (status.currentFile) label.textContent += ` · lendo ${status.currentFile}`;
     }
 
     static hideLoadProgress() {

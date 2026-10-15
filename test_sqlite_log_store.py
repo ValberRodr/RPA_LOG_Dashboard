@@ -37,6 +37,11 @@ class TestSQLiteLogStore(unittest.TestCase):
             'duration_seconds': 300,
             'status': 'SUCCESS',
             'machine_name': 'VM01',
+            # Campos exigidos pelo pipeline do painel (log_validator.py):
+            # sem eles a linha agora é rejeitada na importação.
+            'total_items': 1, 'processed_items': 1, 'success_items': 1,
+            'warning_items': 0, 'error_items': 0, 'retry_count': 0,
+            'version': '1.0', 'robot_name': 'BOT', 'orchestrator': 'ORQ', 'environment': 'PRD',
         }
         if extra:
             row.update(extra)
@@ -61,7 +66,9 @@ class TestSQLiteLogStore(unittest.TestCase):
         folder = self.vms / f'{day.year:04d}' / f'{day.month:02d}' / 'VM01'
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f'VM_{day.isoformat()}.jsonl'
-        row = {'machine_name': 'VM01', 'data': f'{day.isoformat()}T08:00:00', 'cpu_percent': 10}
+        row = {'machine_name': 'VM01', 'data': f'{day.isoformat()}T08:00:00', 'cpu_percent': 10,
+               'memory_percent': 20, 'disk_percent': 30, 'rdp_status': 'CONNECTED',
+               'disk_free_gb': 100, 'memory_available_gb': 8, 'uptime_hours': 1}
         path.write_text(json.dumps(row) + '\n', encoding='utf-8')
         return path
 
@@ -120,6 +127,11 @@ class TestSQLiteLogStore(unittest.TestCase):
             'duration_seconds': 120,
             'status': 'SUCCESS',
             'machine_name': 'VM01',
+            # Campos exigidos pelo pipeline do painel (log_validator.py):
+            # sem eles a linha agora é rejeitada na importação.
+            'total_items': 1, 'processed_items': 1, 'success_items': 1,
+            'warning_items': 0, 'error_items': 0, 'retry_count': 0,
+            'version': '1.0', 'robot_name': 'BOT', 'orchestrator': 'ORQ', 'environment': 'PRD',
         }
         path.write_text(json.dumps(replacement) + '\n', encoding='utf-8')
         self.store.sync(full_scan=False)
@@ -140,6 +152,11 @@ class TestSQLiteLogStore(unittest.TestCase):
             'duration_seconds': 240,
             'status': 'SUCCESS',
             'machine_name': 'VM01',
+            # Campos exigidos pelo pipeline do painel (log_validator.py):
+            # sem eles a linha agora é rejeitada na importação.
+            'total_items': 1, 'processed_items': 1, 'success_items': 1,
+            'warning_items': 0, 'error_items': 0, 'retry_count': 0,
+            'version': '1.0', 'robot_name': 'BOT', 'orchestrator': 'ORQ', 'environment': 'PRD',
         }
         payload = json.dumps(row)
         cut = len(payload) // 2

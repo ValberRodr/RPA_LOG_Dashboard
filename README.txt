@@ -17,7 +17,7 @@ INÍCIO RÁPIDO
   ".localhost" para 127.0.0.1 nativamente). Sem Chrome/Edge instalado, cai
   para o navegador padrão numa aba normal. Para mudar o nome ou a porta, use
   as variáveis de ambiente RPA_MONITOR_HOSTNAME e RPA_MONITOR_PORT.
-- Testes locais: `python -m unittest -v test_server.py test_sqlite_log_store.py`
+- Testes locais: `python -m unittest -v test_server.py test_sqlite_log_store.py test_log_validator.py`
   e `node test_dashboard.js`. Não há workflow automático de testes.
 - Executável sem precisar de Python instalado: `packaging/build_macos.sh`
   (macOS) ou `packaging/build_windows.bat` (Windows) geram uma pasta com o
@@ -33,6 +33,24 @@ INÍCIO RÁPIDO
   quando há muito mais arquivos que no dataset sintético local (ex.: log
   numa pasta de rede corporativa). Se a montagem falhar, o overlay mostra a
   mensagem real e não desaparece sozinho.
+
+- Validação log a log (2026-10-15): cada linha de log é validada (UTF-8,
+  JSON e campos obrigatórios/tipos — regras em log_validator.py) ANTES de
+  entrar no SQLite. Linha com ERRO é rejeitada sem derrubar o arquivo nem
+  o painel; linha com AVISO entra normalmente. O resultado de CADA arquivo
+  lido vai para `RPA_Ops_Monitor_validacao.log` (ao lado do executável;
+  caminho alterável por RPA_MONITOR_VALIDATION_LOG), arquivos com problema
+  também saem no console com o prefixo [VALIDACAO], e os problemas aparecem
+  no card "Qualidade dos dados" do painel. Durante a carga, a tela mostra o
+  arquivo sendo lido agora ("lendo …") — se a carga parar, é ele.
+  GET /api/log-validation devolve o relatório em JSON (responde mesmo com a
+  carga em andamento). Para validar tudo SEM abrir o painel:
+      python log_validator.py                 (pasta padrão de logs)
+      python log_validator.py <raiz>          (pasta com Logs/ e VMS/)
+      python log_validator.py --arquivo <arquivo.log>
+  Antes disso, uma única linha sem um campo usado pelo painel (ex.:
+  "version") era gravada no banco e fazia toda montagem falhar com
+  `KeyError: 'version'` — o painel nunca terminava de carregar.
 
 POR QUE EXISTE UM SERVIDOR LOCAL?
 Navegadores bloqueiam a leitura automática de arquivos .log locais quando um
@@ -55,7 +73,10 @@ sqlite_log_store.py             cache persistente incremental dos logs; controla
                                 DependencyAnalyzer, DatasetBuilder,
                                 IndexBuilder, DataCache) — ver ARQUITETURA
                                 abaixo.
+log_validator.py               validação de formato/campos de cada linha de log
+                                (execução, evento, VM) + CLI de varredura.
 test_server.py                 suíte de testes local do back-end (unittest, sem deps).
+test_log_validator.py          testes da validação log a log.
 test_dashboard.js              suíte de testes local das partes puras do
                                 front-end (node --test, sem deps).
 index.html                     cockpit operacional — SPA de página única; o

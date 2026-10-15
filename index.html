@@ -2195,7 +2195,8 @@
                 var percent = status.percent || 0;
                 fill.style.width = percent + '%';
                 if (status.phase === 'erro') {
-                    label.textContent = 'Falha ao carregar dados: ' + (status.error || 'erro desconhecido') + ' — veja RPA_Ops_Monitor.log.';
+                    label.textContent = 'Falha ao carregar dados: ' + (status.error || 'erro desconhecido') +
+                        ' — veja RPA_Ops_Monitor_validacao.log (resultado de cada arquivo de log) e RPA_Ops_Monitor.log.';
                     return; // não agenda mais sondagem; o boot normal decide o que fazer a seguir
                 }
                 var phaseText = phaseLabels[status.phase] || status.phase || 'Carregando';
@@ -2203,6 +2204,14 @@
                     label.textContent = status.dbRetryMessage + ' · ' + percent + '%';
                 } else {
                     label.textContent = phaseText + '… ' + percent + '% · ' + (status.filesProcessed || 0) + '/' + (status.filesFound || 0) + ' arquivos';
+                }
+                // "Escuta" log a log: mostra o arquivo sendo lido agora. Se a
+                // carga parar de avançar, este é o arquivo a investigar.
+                if (status.currentFile) {
+                    label.textContent += ' · lendo ' + status.currentFile;
+                }
+                if (status.filesInvalid) {
+                    label.textContent += ' · ' + status.filesInvalid + ' problema(s) de leitura';
                 }
                 timer = setTimeout(poll, 300);
             }).catch(function () {
