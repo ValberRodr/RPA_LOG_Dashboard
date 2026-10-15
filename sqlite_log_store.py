@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -63,6 +64,12 @@ class SQLiteLogStore:
         self._last_sync_warning = None
         self._read_rejections = []
         self.last_sync_report = None
+        self._discovery_results = []
+        self._logger = logging.getLogger('rpa_ops.sqlite')
+
+    def _diag(self, message, *args, level=logging.INFO):
+        """Log estruturado sem incluir conteúdo dos registros (pode ser sensível)."""
+        self._logger.log(level, '[SQLITE] ' + message, *args)
 
     def _status(self, **kwargs):
         if self.status_callback:
@@ -75,30 +82,42 @@ class SQLiteLogStore:
         lock_path = Path(str(self.db_path) + '.sync.lock')
         deadline = time.monotonic() + self.LOCK_TIMEOUT_SECONDS
         fd = None
+        waits = 0
         while fd is None:
             try:
                 fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 os.write(fd, f'{os.getpid()} {datetime.now().isoformat()}'.encode('utf-8'))
             except FileExistsError:
+                waits += 1
+                if waits == 1 or waits % 40 == 0:
+                    self._diag('Lock de gravação ocupado; aguardando %s (%.1fs decorridos)',
+                               lock_path.name, self.LOCK_TIMEOUT_SECONDS - max(0, deadline - time.monotonic()),
+                               level=logging.WARNING)
                 try:
                     age = time.time() - lock_path.stat().st_mtime
                 except OSError:
                     age = 0
                 if age > self.LOCK_STALE_SECONDS:
+                    self._diag('Lock antigo detectado (%.0fs); tentando recuperar', age,
+                               level=logging.WARNING)
                     try:
                         lock_path.unlink()
                     except OSError:
                         pass
                     continue
                 if time.monotonic() >= deadline:
+                    self._diag('Timeout do lock de gravação após %.0fs', self.LOCK_TIMEOUT_SECONDS,
+                               level=logging.ERROR)
                     raise RuntimeError(
                         'O banco de monitoramento está sendo atualizado por outra máquina. '
                         'Tente novamente em alguns segundos.'
                     )
                 time.sleep(self.LOCK_POLL_SECONDS)
+        self._diag('Lock de gravação adquirido%s', ' após espera' if waits else '')
         try:
             yield
         finally:
+            self._diag('Liberando lock de gravação')
             try:
                 os.close(fd)
             finally:
@@ -136,62 +155,59 @@ class SQLiteLogStore:
         last_exc = None
         total_attempts = len(self.READ_RETRY_TIMEOUTS)
         for idx, timeout_seconds in enumerate(self.READ_RETRY_TIMEOUTS, start=1):
+            started = time.monotonic()
+            # Nunca altera `phase` aqui: o status global do build pode estar em
+            # "concluido". Uma consulta de status/telemetria NÃO deve ressuscitar
+            # o overlay de carregamento depois que o dataset já terminou.
             self._status(
-                phase='aguardando leitura do SQLite',
-                dbRetryActive=True,
-                dbRetryAttempt=idx,
-                dbRetryTotal=total_attempts,
-                dbRetryTimeout=timeout_seconds,
+                dbRetryActive=True, dbRetryAttempt=idx,
+                dbRetryTotal=total_attempts, dbRetryTimeout=timeout_seconds,
                 dbRetryLabel=label,
-                dbRetryMessage=(
-                    f'Aguardando acesso ao banco SQLite — tentativa {idx}/{total_attempts}, '
-                    f'até {timeout_seconds}s'
-                ),
+                dbRetryMessage=f'Consultando SQLite ({label}) — tentativa {idx}/{total_attempts}',
             )
+            self._diag('Consulta iniciada: %s; tentativa=%d/%d; timeout=%ss',
+                       label, idx, total_attempts, timeout_seconds)
             try:
                 conn = self._connect(timeout_seconds=timeout_seconds)
                 try:
                     result = reader(conn)
-                    self._status(
-                        dbRetryActive=False,
-                        dbRetryAttempt=0,
-                        dbRetryTotal=total_attempts,
-                        dbRetryTimeout=0,
-                        dbRetryLabel=None,
-                        dbRetryMessage=None,
-                    )
+                    self._diag('Consulta concluída: %s; tentativa=%d; duração=%.3fs',
+                               label, idx, time.monotonic() - started)
                     return result
                 finally:
                     conn.close()
             except sqlite3.OperationalError as exc:
                 if not self._is_busy_error(exc):
-                    self._status(dbRetryActive=False, dbRetryMessage=None)
+                    self._diag('Erro não recuperável em %s: %s', label, exc, level=logging.ERROR)
                     raise
                 last_exc = exc
+                self._diag('SQLite ocupado em %s; tentativa=%d/%d; duração=%.2fs; erro=%s',
+                           label, idx, total_attempts, time.monotonic() - started, exc,
+                           level=logging.WARNING)
                 if idx >= total_attempts:
                     break
                 wait_seconds = self.READ_RETRY_BACKOFF[min(idx - 1, len(self.READ_RETRY_BACKOFF) - 1)]
                 next_timeout = self.READ_RETRY_TIMEOUTS[idx]
                 self._status(
-                    phase='SQLite ocupado — aguardando nova tentativa',
-                    dbRetryActive=True,
-                    dbRetryAttempt=idx,
-                    dbRetryTotal=total_attempts,
-                    dbRetryTimeout=next_timeout,
+                    dbRetryActive=True, dbRetryAttempt=idx + 1,
+                    dbRetryTotal=total_attempts, dbRetryTimeout=next_timeout,
                     dbRetryLabel=label,
                     dbRetryMessage=(
-                        f'Banco SQLite ocupado por outra sessão. Nova tentativa em '
-                        f'{wait_seconds:g}s, com espera de até {next_timeout}s.'
+                        f'Banco SQLite ocupado. Nova tentativa em {wait_seconds:g}s '
+                        f'(espera máxima de {next_timeout}s).'
                     ),
                 )
                 time.sleep(wait_seconds)
+            finally:
+                # O estado de retry é transitório. A `phase` do dataset é
+                # controlada exclusivamente por quem constrói a carga.
+                self._status(dbRetryActive=False, dbRetryAttempt=0,
+                             dbRetryLabel=None, dbRetryMessage=None,
+                             dbRetryTimeout=0)
 
-        self._status(
-            phase='erro',
-            dbRetryActive=False,
-            dbRetryMessage=None,
-            error='Banco SQLite permaneceu ocupado após 3 tentativas.',
-        )
+        self._diag('SQLite indisponível: consulta=%s, %d tentativas esgotadas',
+                   label, total_attempts, level=logging.ERROR)
+        self._status(error='Banco SQLite permaneceu ocupado após 3 tentativas.')
         raise RuntimeError(
             'O banco SQLite permaneceu ocupado após tentativas de 8s, 30s e 90s. '
             'Outra sessão pode estar atualizando os dados; aguarde e tente novamente.'
@@ -374,6 +390,13 @@ class SQLiteLogStore:
         latest_process = self._latest_by(conn, 'execution', 'process_name')
         latest_machine = self._latest_by(conn, 'vm', 'machine_name')
         candidates = {}
+        self._discovery_results = []
+
+        def reject_path(path, reason):
+            result = FileValidationResult(path, 'desconhecido', path.parent.name, mode='descoberta')
+            result.fail(reason)
+            if len(self._discovery_results) < 1000:
+                self._discovery_results.append(result.finish())
 
         def add_candidate(path, kind, scope, file_date):
             candidates[str(path)] = (path, kind, scope, file_date)
@@ -393,9 +416,17 @@ class SQLiteLogStore:
                     continue
                 for path in files:
                     match = self.exec_pattern.match(path.name)
-                    if not match or not path.is_file():
+                    if not match:
+                        if path.suffix.lower() == '.log' and path.is_file():
+                            reject_path(path, 'nome de log fora do padrão RPA_AAAA-MM-DD[_execucao].log')
                         continue
-                    file_date = date.fromisoformat(match.group(1))
+                    if not path.is_file():
+                        continue
+                    try:
+                        file_date = date.fromisoformat(match.group(1))
+                    except ValueError:
+                        reject_path(path, 'data impossível no nome do arquivo de execução')
+                        continue
                     if file_date > today or (start is not None and file_date < start):
                         continue
                     if cutoff is not None and file_date < cutoff:
@@ -418,9 +449,17 @@ class SQLiteLogStore:
                     continue
                 for path in files:
                     match = self.vm_pattern.match(path.name)
-                    if not match or not path.is_file():
+                    if not match:
+                        if path.suffix.lower() == '.jsonl' and path.is_file():
+                            reject_path(path, 'nome de telemetria fora do padrão VM_AAAA-MM-DD.jsonl')
                         continue
-                    file_date = date.fromisoformat(match.group(1))
+                    if not path.is_file():
+                        continue
+                    try:
+                        file_date = date.fromisoformat(match.group(1))
+                    except ValueError:
+                        reject_path(path, 'data impossível no nome do arquivo de telemetria')
+                        continue
                     if file_date > today or (start is not None and file_date < start):
                         continue
                     if cutoff is not None and file_date < cutoff:
@@ -811,7 +850,11 @@ class SQLiteLogStore:
                                  filesSkippedWindow=0, filesInvalid=0, error=None,
                                  currentFile=None, currentFileStartedAt=None,
                                  startedAt=started_at, finishedAt=None)
+                    self._diag('Sincronização iniciada; modo=%s; raiz_logs=%s; raiz_vms=%s',
+                               'completo' if full_scan else 'incremental', self.log_root, self.vm_root)
                     candidates = self._discover_candidates(conn, full_scan)
+                    self._diag('Descoberta concluída; candidatos=%d; nomes inválidos=%d',
+                               len(candidates), len(self._discovery_results))
                     self._status(filesFound=len(candidates), phase=phase, percent=8)
 
                     issues = []
@@ -822,10 +865,30 @@ class SQLiteLogStore:
                     problem_files = []
                     files_read = 0
                     total = max(1, len(candidates))
+                    for invalid_result in self._discovery_results:
+                        self._diag('Arquivo ignorado na descoberta: %s; motivo=%s',
+                                   invalid_result.path, invalid_result.fatal_error, level=logging.WARNING)
+                        by_status['FALHOU'] = by_status.get('FALHOU', 0) + 1
+                        problem_files.append(invalid_result.to_dict())
+                        issues.append({
+                            'file': invalid_result.file, 'path': invalid_result.path,
+                            'type': 'INVALID_FILENAME', 'error': invalid_result.fatal_error,
+                            'phase': 'descoberta de arquivos',
+                            'timestamp': datetime.now().isoformat(timespec='seconds'),
+                            'action': 'Arquivo ignorado, os demais continuam sendo processados.',
+                        })
+                        if self.file_callback:
+                            try:
+                                self.file_callback(invalid_result)
+                            except Exception:
+                                self._diag('Falha ao registrar validação de %s', invalid_result.file,
+                                           level=logging.WARNING)
                     for idx, (path, kind, scope, file_date) in enumerate(candidates, start=1):
                         self._status(currentFile=self._display_path(path),
                                      currentFileStartedAt=datetime.now().isoformat(timespec='seconds'))
                         result = FileValidationResult(path, kind, scope)
+                        file_started = time.monotonic()
+                        self._diag('Lendo arquivo %d/%d: %s; tipo=%s', idx, len(candidates), path, kind)
                         try:
                             changed, rows, bad = self._import_file(
                                 conn, path, kind, scope, file_date, issues, result
@@ -846,6 +909,11 @@ class SQLiteLogStore:
                             })
                             changed, rows, bad = False, 0, 1
                         result.finish()
+                        self._diag('Arquivo %d/%d concluído; estado=%s; modo=%s; linhas_ok=%d; rejeitadas=%d; avisos=%d; duração=%.3fs',
+                                   idx, len(candidates), result.status, result.mode,
+                                   result.valid_records, result.rejected_records,
+                                   result.warning_records, time.monotonic() - file_started,
+                                   level=logging.WARNING if result.status not in ('OK',) else logging.INFO)
                         if result.mode != 'sem alteração':
                             files_read += 1
                             by_status[result.status] = by_status.get(result.status, 0) + 1
@@ -879,13 +947,17 @@ class SQLiteLogStore:
                         'startedAt': started_at,
                         'finishedAt': datetime.now().isoformat(timespec='seconds'),
                         'fullScan': bool(full_scan),
-                        'filesChecked': len(candidates),
+                        'filesChecked': len(candidates) + len(self._discovery_results),
                         'filesRead': files_read,
                         'filesUnchanged': len(candidates) - files_read,
                         'byStatus': by_status,
                         'rejectedLines': invalid,
                         'problemFiles': problem_files[:500],
+                        'discoveryIssues': issues[:200],
                     }
+                    self._diag('Sincronização concluída; candidatos=%d; arquivos_lidos=%d; linhas_importadas=%d; rejeitadas=%d; nomes_invalidos=%d; revisão=%s',
+                               len(candidates), files_read, imported_rows, invalid,
+                               len(self._discovery_results), revision)
                     if self.sync_report_callback:
                         try:
                             self.sync_report_callback(self.last_sync_report)

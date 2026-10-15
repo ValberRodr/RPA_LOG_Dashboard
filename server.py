@@ -30,6 +30,7 @@ import hmac
 import http.client
 import ipaddress
 import json
+import logging
 import math
 import mimetypes
 import os
@@ -78,9 +79,28 @@ else:
 # None) garante o mesmo comportamento diagnosticável nos dois SOs. Em modo
 # script (dev), nada disso roda — prints continuam aparecendo no terminal.
 if getattr(sys, 'frozen', False):
-    _log_file = open(ROOT / 'RPA_Ops_Monitor.log', 'a', encoding='utf-8', buffering=1)
+    # Evita crescimento indefinido em máquinas que ficam semanas abertas.
+    # Guarda uma cópia do log anterior (até ~16 MB) antes de iniciar novo boot.
+    _primary_log = ROOT / 'RPA_Ops_Monitor.log'
+    try:
+        if _primary_log.exists() and _primary_log.stat().st_size > 16 * 1024 * 1024:
+            _primary_log.replace(ROOT / 'RPA_Ops_Monitor.log.1')
+    except OSError:
+        pass  # outra instância pode manter o arquivo aberto no Windows
+    _log_file = open(_primary_log, 'a', encoding='utf-8', buffering=1)
     sys.stdout = _log_file
     sys.stderr = _log_file
+
+# Diagnóstico do cache e do parser: mesmo com console=False, sai no arquivo
+# RPA_Ops_Monitor.log ao lado do .exe. O conteúdo dos registros não é logado.
+_sqlite_logger = logging.getLogger('rpa_ops.sqlite')
+if not _sqlite_logger.handlers:
+    _sqlite_handler = logging.StreamHandler(sys.stdout)
+    _sqlite_handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(levelname)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+    _sqlite_logger.addHandler(_sqlite_handler)
+_sqlite_logger.setLevel(logging.INFO)
+_sqlite_logger.propagate = False
 
 # Fonte oficial de dados corporativos. O app/executável pode ficar em qualquer
 # pasta local: os logs são lidos diretamente deste compartilhamento UNC. Só
@@ -233,7 +253,14 @@ _build_status = {
 }
 
 def _update_build_status(**kwargs):
+    previous_phase = _build_status.get('phase')
     _build_status.update(kwargs)
+    current_phase = _build_status.get('phase')
+    if current_phase != previous_phase:
+        print(f'[CARGA] Fase: {previous_phase} -> {current_phase}; '
+              f"progresso={_build_status.get('percent')}%; "
+              f"arquivos={_build_status.get('filesProcessed')}/{_build_status.get('filesFound')}",
+              flush=True)
 
 
 class ValidationLog:
@@ -808,6 +835,7 @@ class DatasetBuilder:
             log_store.vm_root = resolved_vm_root
         # A primeira chamada cria/sincroniza o SQLite. Depois desta etapa,
         # trocar 30/90/120/full consulta somente o banco e não reabre os logs.
+        print(f'[CARGA] Iniciando construção do dataset: período={mode}', flush=True)
         log_store.ensure_ready()
         log_store.pop_read_rejections()  # descarta sobras de uma montagem anterior
         issues = []
@@ -1005,6 +1033,8 @@ class DatasetBuilder:
         issues.extend(log_store.pop_read_rejections())
         try:
             issues.extend(log_store.persisted_issues(limit=200))
+            if log_store.last_sync_report:
+                issues.extend(log_store.last_sync_report.get('discoveryIssues', []))
         except Exception as exc:
             print(f'[VALIDACAO] não foi possível ler problemas de validação: {exc}')
 
@@ -1128,7 +1158,9 @@ class DatasetBuilder:
             },
         }
         index = build_index(obs, vm_history, expected_runs, exec_by_id)
-        _build_status.update(phase='concluido', percent=100, finishedAt=datetime.now().isoformat(timespec='seconds'))
+        _update_build_status(phase='concluido', percent=100, finishedAt=datetime.now().isoformat(timespec='seconds'))
+        print(f'[CARGA] Dataset concluído: execuções={len(executions)}; eventos={_build_status.get("events")}; '
+              f'VMs={_build_status.get("vmSnapshots")}; ocorrências={len(issues)}', flush=True)
         return obs, index
 
 
@@ -1472,9 +1504,11 @@ class DataCache:
     @staticmethod
     def get_data(mode=None, force_sync=False):
         with _build_lock:
+            t0 = time.monotonic()
             requested = mode or _cache['mode'] or '30d'
             effective_mode = requested if requested in DataCache.VALID_MODES else '30d'
             try:
+                print(f'[CARGA] Requisição de dados: modo={effective_mode}; sync_forçada={force_sync}', flush=True)
                 log_store.ensure_ready()
                 if force_sync:
                     log_store.sync(full_scan=(effective_mode == 'full'))
@@ -1494,11 +1528,24 @@ class DataCache:
                         'fingerprint': fp, 'mode': effective_mode,
                         'obs': obs, 'index': index,
                     })
+                else:
+                    # Sem alterações, não há build_dataset() que marque a
+                    # requisição como concluída; evita refresh preso em
+                    # "aguardando atualização" com cache válido.
+                    _update_build_status(phase='concluido', percent=100,
+                                         error=None, dbRetryActive=False,
+                                         dbRetryMessage=None,
+                                         finishedAt=datetime.now().isoformat(timespec='seconds'))
+                    print('[CARGA] Cache reutilizado; sem mudanças nas fontes', flush=True)
+                print(f'[CARGA] Dados entregues; duração={time.monotonic() - t0:.2f}s; '
+                      f'revisão={revision}; modo={effective_mode}', flush=True)
                 return _cache['obs'], _cache['index']
             except Exception as exc:
                 # Mensagem com o tipo da exceção: um `KeyError: 'version'`
                 # sozinho aparecia como só "'version'" na tela de carga.
                 message = str(exc) if isinstance(exc, RuntimeError) else f'{type(exc).__name__}: {exc}'
+                print(f'[CARGA] ERRO após {time.monotonic() - t0:.2f}s: {message}', flush=True)
+                traceback.print_exc()
                 _build_status.update(
                     phase='erro', error=message, currentFile=None,
                     finishedAt=datetime.now().isoformat(timespec='seconds'),
@@ -2887,18 +2934,24 @@ class Handler(SimpleHTTPRequestHandler):
         # preservando o modo que o usuário escolheu explicitamente na sessão.
         requested_mode = parse_qs(parsed.query).get('mode', [None])[0]
         if path == '/assets/observability-data.js':
+            t0 = time.monotonic()
+            print('[HTTP][DADOS] Solicitação observability-data.js recebida', flush=True)
             try:
                 obs,_=get_data(requested_mode)
             except Exception as exc:
                 return self._send_data_error(exc, 'window.OBS_DATA = null;')
             payload='/* Gerado em tempo real a partir dos arquivos .log. */\nwindow.OBS_DATA = '+json.dumps(obs,ensure_ascii=False,separators=(',',':'))+';\n'
+            print(f'[HTTP][DADOS] observability-data.js preparado em {time.monotonic() - t0:.2f}s ({len(payload)} caracteres)', flush=True)
             return self._send(payload,'application/javascript; charset=utf-8')
         if path == '/assets/index-data.js':
+            t0 = time.monotonic()
+            print('[HTTP][DADOS] Solicitação index-data.js recebida', flush=True)
             try:
                 _,idx=get_data(requested_mode)
             except Exception as exc:
                 return self._send_data_error(exc, 'window.INDEX_DATA = null;')
             payload='/* Gerado em tempo real a partir dos arquivos .log. */\nwindow.INDEX_DATA = '+json.dumps(idx,ensure_ascii=False,separators=(',',':'))+';\n'
+            print(f'[HTTP][DADOS] index-data.js preparado em {time.monotonic() - t0:.2f}s ({len(payload)} caracteres)', flush=True)
             return self._send(payload,'application/javascript; charset=utf-8')
         if path == '/api/status':
             try:
@@ -3002,6 +3055,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self._send_json({'ok': True, 'mode': mode, 'sync': force_sync})
         if path.startswith('/api/registry/rpas'):
             return self._handle_registry_post(path, payload)
+        if path == '/api/client-diagnostic':
+            # Só recebe dados de diagnóstico sanitizados; jamais conteúdo de
+            # log, credenciais, cookies ou URL completa do ambiente do usuário.
+            message = str(payload.get('message') or '')[:400].replace('\n', ' ')
+            kind = str(payload.get('kind') or 'frontend')[:35]
+            print(f'[FRONTEND][{kind}] {message}', flush=True)
+            return self._send_json({'ok': True})
         if path == '/api/notify':
             ok = DesktopNotifier.notify(payload.get('title') or '', payload.get('body') or '')
             return self._send_json({'ok': ok})
@@ -3097,8 +3157,10 @@ class Handler(SimpleHTTPRequestHandler):
         traceback.print_exc()
         return self._send_json({'ok': False, 'error': str(exc)}, status=500)
 
-    def log_message(self,fmt,*args):
-        if '/api/' in self.path: print('[HTTP]',fmt%args)
+    def log_message(self, fmt, *args):
+        if ('/api/' in self.path or '/assets/' in self.path or '/index.html' in self.path):
+            print('[HTTP]', fmt % args, flush=True)
+
 
 
 def _chrome_like_candidates() -> list[str]:
@@ -3197,6 +3259,9 @@ def main():
     print(f'[BOOT] LOG_BASE={LOG_BASE} (existe: {LOG_BASE.exists()})')
     print(f'[BOOT] RPA_LOG_ROOT={RPA_LOG_ROOT} (existe: {RPA_LOG_ROOT.exists()})')
     print(f'[BOOT] VM_ROOT={VM_ROOT} (existe: {VM_ROOT.exists()})')
+    print(f'[BOOT] DB_FILE={DB_FILE} (existe: {DB_FILE.exists()})')
+    print(f'[BOOT] VALIDATION_LOG={validation_log.path}')
+    print(f'[BOOT] PID={os.getpid()} · Python={sys.version.split()[0]} · frozen={getattr(sys, "frozen", False)}')
     if HOST not in ('127.0.0.1', 'localhost', '::1'):
         # RPA_MONITOR_HOST foi definido explicitamente para algo além de
         # loopback — não é o padrão de fábrica. Aviso alto de propósito: esta

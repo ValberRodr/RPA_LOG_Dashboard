@@ -2172,6 +2172,64 @@
         var fill = document.getElementById('initialLoadFill');
         var label = document.getElementById('initialLoadLabel');
         var timer = null;
+        var initialStarted = Date.now();
+        var lastSnapshot = '';
+        var lastMovement = Date.now();
+        var completedSince = null;
+        var failureShown = false;
+        var reportedError = false;
+        var failures = 0;
+        function reportClientFailure(kind, message) {
+            if (reportedError) return;
+            reportedError = true;
+            fetch('/api/csrf-token', { cache: 'no-store' })
+                .then(function (r) { if (!r.ok) throw Error('Token indisponível'); return r.json(); })
+                .then(function (data) {
+                    return fetch('/api/client-diagnostic', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json',
+                            'X-CSRF-Token': data.token },
+                        body: JSON.stringify({ kind: kind, message: String(message).slice(0, 400) })
+                    });
+                }).catch(function () { /* O log de rede/console ainda está disponível. */ });
+        }
+        function showFailure(message, kind) {
+            if (failureShown || !overlay || !overlay.isConnected) return;
+            failureShown = true;
+            clearTimeout(timer);
+            label.textContent = message + ' Consulte RPA_Ops_Monitor.log e RPA_Ops_Monitor_validacao.log.';
+            label.style.whiteSpace = 'normal';
+            label.style.maxWidth = '630px';
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = 'Tentar novamente';
+            button.style.cssText = 'margin-top:16px;padding:10px 18px;border:1px solid #9aa8ff;' +
+                'border-radius:8px;background:#263f95;color:white;cursor:pointer';
+            button.addEventListener('click', function () { window.location.reload(); });
+            label.parentNode.appendChild(button);
+            reportClientFailure(kind || 'carregamento', message);
+        }
+        window.__initialLoadFailure = showFailure;
+        window.addEventListener('error', function (event) {
+            if (!overlay || !overlay.isConnected) return;
+            // Ignora falhas de imagens/CSS opcionais: apenas scripts e erros
+            // de execução JS impedem a montagem inicial do dashboard.
+            if (event.target && event.target !== window && event.target.tagName !== 'SCRIPT') return;
+            var source = event.filename ? event.filename.split('/').pop().split('?')[0] : '';
+            showFailure('Falha de inicialização do painel' + (source ? ' (' + source + ')' : '') +
+                ': ' + (event.message || 'arquivo ou script indisponível'), 'javascript');
+        }, true);
+        window.addEventListener('unhandledrejection', function (event) {
+            if (!overlay || !overlay.isConnected) return;
+            var reason = event.reason && event.reason.message || 'falha assíncrona';
+            showFailure('Erro inesperado no carregamento: ' + String(reason).slice(0, 200), 'promise');
+        });
+        window.addEventListener('load', function () {
+            setTimeout(function () {
+                if (overlay && overlay.isConnected && (!window.INDEX_DATA || !window.OBS_DATA)) {
+                    showFailure('O servidor não conseguiu entregar os dados do dashboard.', 'dados');
+                }
+            }, 2000);
+        });
         var phaseLabels = {
             'localizando arquivos': 'Localizando arquivos',
             'filtrando período': 'Filtrando período',
@@ -2190,14 +2248,35 @@
             'concluido': 'Concluído',
         };
         function poll() {
-            fetch('/api/load-status', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (status) {
+            if (failureShown || !overlay || !overlay.isConnected) return;
+            fetch('/api/load-status', { cache: 'no-store' }).then(function (r) {
+                if (!r.ok) throw Error('HTTP ' + r.status);
+                return r.json();
+            }).then(function (status) {
                 if (!overlay || !status) return;
                 var percent = status.percent || 0;
                 fill.style.width = percent + '%';
+                failures = 0;
                 if (status.phase === 'erro') {
-                    label.textContent = 'Falha ao carregar dados: ' + (status.error || 'erro desconhecido') +
-                        ' — veja RPA_Ops_Monitor_validacao.log (resultado de cada arquivo de log) e RPA_Ops_Monitor.log.';
-                    return; // não agenda mais sondagem; o boot normal decide o que fazer a seguir
+                    showFailure('Falha ao carregar dados: ' + (status.error || 'erro desconhecido'), 'backend');
+                    return;
+                }
+                var snapshot = [status.phase, status.percent, status.filesProcessed,
+                    status.currentFile, status.dbRetryAttempt].join('|');
+                if (snapshot !== lastSnapshot) {
+                    lastSnapshot = snapshot;
+                    lastMovement = Date.now();
+                }
+                if (status.phase === 'concluido') {
+                    if (completedSince === null) completedSince = Date.now();
+                    if (Date.now() - completedSince > 60000) {
+                        showFailure('Dados concluídos, mas a interface não terminou de inicializar.', 'interface');
+                        return;
+                    }
+                } else completedSince = null;
+                if (Date.now() - lastMovement > 180000 || Date.now() - initialStarted > 600000) {
+                    showFailure('Tempo limite de inicialização excedido; verifique o servidor e o SQLite.', 'timeout');
+                    return;
                 }
                 var phaseText = phaseLabels[status.phase] || status.phase || 'Carregando';
                 if (status.dbRetryActive && status.dbRetryMessage) {
@@ -2214,14 +2293,20 @@
                     label.textContent += ' · ' + status.filesInvalid + ' problema(s) de leitura';
                 }
                 timer = setTimeout(poll, 300);
-            }).catch(function () {
-                // Aberto via file:// ou servidor ainda subindo — sem sondagem
-                // útil possível; o próprio carregamento bloqueante decide.
+            }).catch(function (err) {
+                failures += 1;
+                if (failures >= 10) {
+                    showFailure('Falha de comunicação com o servidor local: ' + err.message, 'rede');
+                } else if (!failureShown && overlay && overlay.isConnected) {
+                    label.textContent = 'Aguardando resposta do servidor local (' + failures + '/10)…';
+                    timer = setTimeout(poll, 1500);
+                }
             });
         }
         window.__hideInitialLoadOverlay = function () {
             clearTimeout(timer);
             if (overlay) overlay.remove();
+            console.info('[RPA Ops Monitor] Interface inicializada; tela de carregamento encerrada.');
         };
         poll();
     })();

@@ -72,6 +72,28 @@ class TestSQLiteLogStore(unittest.TestCase):
         path.write_text(json.dumps(row) + '\n', encoding='utf-8')
         return path
 
+    def test_invalid_filenames_and_impossible_dates_are_isolated(self):
+        today = date.today()
+        self._write_exec(today, execution='GOOD')
+        directory = self.logs / f'{today.year:04d}' / f'{today.month:02d}' / 'PROC_A'
+        (directory / 'RPA_2026-02-30.log').write_text('{}\n', encoding='utf-8')
+        (directory / 'dados-sem-padrao.log').write_text('{}\n', encoding='utf-8')
+        report = self.store.sync(full_scan=True)
+        self.assertEqual(report['importedRows'], 1)
+        self.assertEqual(len(self.store.read_rows('execution', today, today)), 1)
+        self.assertEqual(sum(x['type'] == 'INVALID_FILENAME' for x in report['issues']), 2)
+        self.assertEqual(report['validation']['byStatus']['FALHOU'], 2)
+
+    def test_sqlite_read_never_overwrites_completed_phase(self):
+        state = {'phase': 'concluido', 'percent': 100}
+        self.store.status_callback = lambda **values: state.update(values)
+        self.store.ensure_ready()
+        state.update(phase='concluido', percent=100)
+        self.assertEqual(self.store.read_rows('execution', date.today(), date.today()), [])
+        self.assertEqual(state['phase'], 'concluido')
+        self.assertEqual(state['percent'], 100)
+        self.assertFalse(state['dbRetryActive'])
+
     def test_initial_import_persists_and_second_sync_does_not_reparse_unchanged_files(self):
         today = date.today()
         self._write_exec(today)

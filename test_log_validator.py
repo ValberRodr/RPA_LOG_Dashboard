@@ -67,6 +67,20 @@ class TestLogRecordValidator(unittest.TestCase):
         problems = LogRecordValidator.validate('execution', exec_record(self.day, total_items='10'))
         self.assertTrue(any(p['field'] == 'total_items' for p in errors_of(problems)))
 
+    def test_nan_infinity_and_fractional_step_order_are_rejected(self):
+        for value in (float('nan'), float('inf'), float('-inf')):
+            self.assertTrue(errors_of(LogRecordValidator.validate(
+                'execution', exec_record(self.day, duration_seconds=value))))
+        self.assertTrue(errors_of(LogRecordValidator.validate(
+            'event', {'execution_id': 'E1', 'timestamp': '2026-09-01T08:01:00',
+                      'step_order': 1.5})))
+
+    def test_invalid_date_in_filename_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'RPA_2026-02-30.log'
+            path.write_text('{}\n', encoding='utf-8')
+            self.assertEqual(validate_file(path).status, 'FALHOU')
+
     def test_numeric_text_duration_is_only_a_warning(self):
         problems = LogRecordValidator.validate('execution', exec_record(self.day, duration_seconds='300'))
         self.assertEqual(errors_of(problems), [])

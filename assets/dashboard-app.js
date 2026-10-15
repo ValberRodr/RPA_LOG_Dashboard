@@ -2448,6 +2448,10 @@ const init = RpaOpsApp.init;
 let DATA;
 const chartRegistry = ChartService.registry;
 
+if (typeof window !== 'undefined' && typeof document !== 'undefined' &&
+        (!window.INDEX_DATA || !window.OBS_DATA)) {
+    window.__initialLoadFailure?.('Dados de inicialização ausentes ou inválidos.', 'dados');
+}
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && window.INDEX_DATA && window.OBS_DATA) {
     // Sem os dois (ex.: Handler._send_data_error devolveu
     // window.OBS_DATA/INDEX_DATA = null porque o Cadastro/logs estavam

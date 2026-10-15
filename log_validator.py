@@ -26,9 +26,10 @@ Só biblioteca padrão — mesma regra do resto do projeto.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 import json
+import math
 import re
 import sys
 import time
@@ -44,15 +45,15 @@ _TZ_SUFFIX_RE = re.compile(r'[+-]\d{2}:?\d{2}$')
 
 
 def _is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value))
 
 
 def _is_numeric_text(value):
     if not isinstance(value, str):
         return False
     try:
-        float(value.strip())
-        return True
+        return math.isfinite(float(value.strip()))
     except ValueError:
         return False
 
@@ -178,8 +179,8 @@ class LogRecordValidator:
             else:
                 add(ERROR, f"campo '{field}' deve ser numérico, veio {type(value).__name__} ({value!r})")
         elif rule == 'int_or_null':
-            if not _is_number(value):
-                add(ERROR, f"campo '{field}' deve ser numérico ou null, veio {type(value).__name__} ({value!r})")
+            if not _is_number(value) or int(value) != value:
+                add(ERROR, f"campo '{field}' deve ser um inteiro ou null, veio {type(value).__name__} ({value!r})")
 
     @classmethod
     def validate(cls, kind, record):
@@ -332,10 +333,9 @@ def validate_line(kind, raw_line: bytes, line_no: int, result: FileValidationRes
         record = json.loads(text)
     except json.JSONDecodeError as exc:
         result.rejected_records += 1
-        snippet = text.strip()[:80]
         result.add_problem(line_no, {
             'severity': ERROR, 'field': None,
-            'message': f'JSON inválido: {exc.msg} (coluna {exc.colno}) — início da linha: {snippet!r}',
+            'message': f'JSON inválido: {exc.msg} (coluna {exc.colno}; {len(text)} caracteres na linha)',
         })
         return None
     problems = LogRecordValidator.validate(kind, record)
@@ -359,8 +359,17 @@ def classify_path(path: Path):
     """Descobre o tipo do log pelo nome do arquivo: (kind, scope) ou (None, None)."""
     m = EXEC_FNAME_RE.match(path.name)
     if m:
+        try:
+            date.fromisoformat(m.group(1))
+        except ValueError:
+            return None, None
         return ('event' if m.group(2) else 'execution'), path.parent.name
-    if VM_FNAME_RE.match(path.name):
+    m = VM_FNAME_RE.match(path.name)
+    if m:
+        try:
+            date.fromisoformat(m.group(1))
+        except ValueError:
+            return None, None
         return 'vm', path.parent.name
     return None, None
 

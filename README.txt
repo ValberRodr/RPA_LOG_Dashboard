@@ -491,3 +491,23 @@ NAVEGAÇÃO
 DADOS FICTÍCIOS
 --------------------------------------------------------------------------------
 Período original: 25/06/2026 a 24/09/2026. 10 RPAs e 11 VMs.
+
+
+DIAGNÓSTICO DETALHADO (OUT/2026)
+===============================
+A aplicação não deve permanecer indefinidamente em "Carregando...": após
+falhas ou timeouts, exibe mensagem de erro e botão para tentar novamente.
+
+Arquivos de diagnóstico ao lado do executável:
+- RPA_Ops_Monitor.log: etapas de inicialização e construção do dataset,
+  requisições dos arquivos JS, tempos de consultas SQLite, acesso/espera
+  pelo lock, arquivo atual e contagens de registros válidos/rejeitados.
+- RPA_Ops_Monitor_validacao.log: resultado por arquivo, nome, tipo, linha,
+  motivo das rejeições e quantidade de avisos.
+
+Arquivos com nomes ou datas inválidos são reportados e ignorados; as demais
+RPAs continuam sendo importadas. Registros malformados são rejeitados
+individualmente antes da gravação no banco e novamente na leitura.
+O painel disponibiliza /api/log-validation e /api/load-status para inspeção.
+As linhas rejeitadas não são gravadas no SQLite nem enviadas ao dashboard.
+Nenhum conteúdo integral de registro é escrito no log de diagnóstico SQLite.
